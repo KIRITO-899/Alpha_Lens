@@ -161,8 +161,11 @@
                     renderMainView(liveNewsData[0]);
                 } else if (liveNewsData.length > 0 && liveNewsData[0].error) {
                     document.getElementById('news-list-container').innerHTML = `<div class="text-red-400 text-sm">Error: ${liveNewsData[0].error}</div>`;
+                    document.getElementById('main-headline-text').innerText = "Process Stopped: Quota Limit Hit";
+                    document.getElementById('aam-janta-text').innerText = liveNewsData[0].error;
                 } else if (liveNewsData.length === 0) {
                     document.getElementById('news-list-container').innerHTML = `<div class="text-red-400 text-sm">Error: No data retrieved.</div>`;
+                    document.getElementById('main-headline-text').innerText = "Process Stopped: No Data";
                 }
             } catch (error) {
                 console.error("Failed to fetch news:", error);

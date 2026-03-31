@@ -7,7 +7,7 @@ app = Flask(__name__, template_folder='.')
 
 # --- API CONFIGURATION ---
 NEWS_API_KEY = "86e94c83a01c4953bc6b9cccb33f1154"
-GEMINI_API_KEY = "AIzaSyBvP8naGuO9R4FTJ0WPuodWoBs-dFF7XM0"
+GEMINI_API_KEY = "AIzaSyABS1FGUxLRNcekIfquMcIKcGVjKd-bGq4"
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
