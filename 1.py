@@ -3,13 +3,14 @@ import requests
 import google.generativeai as genai
 import json
 import yfinance as yf
-from datetime import datetime
+from datetime import datetime, timedelta
+import os
 
 app = Flask(__name__, template_folder='.')
 
 # --- CONFIGURATION ---
 NEWS_API_KEY = "86e94c83a01c4953bc6b9cccb33f1154"
-GEMINI_API_KEY = "AIzaSyABS1FGUxLRNcekIfquMcIKcGVjKd-bGq4"
+GEMINI_API_KEY = "AIzaSyBlvMiHYl3dCIboqzLz-i3LnrSmwzLHxEc"
 
 genai.configure(api_key=GEMINI_API_KEY)
 model = genai.GenerativeModel('gemini-2.5-flash')
@@ -34,6 +35,44 @@ def get_live_price(ticker):
         return current_price, pct_change
     except:
         return 0.0, 0.0
+
+def save_daily_log(news_data):
+    """Saves the news and its live stock tracing to a local file for output verification."""
+    log_file = "verification_log.json"
+    logs = []
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r") as f:
+                logs = json.load(f)
+        except:
+            pass
+            
+    # Check if this headline is already logged, update its live prices
+    headline_exists = False
+    for log in logs:
+        if log.get("headline") == news_data.get("headline"):
+            log["affected_stocks"] = news_data.get("affected_stocks", [])
+            log["last_updated"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+            headline_exists = True
+            break
+            
+    if not headline_exists:
+        news_data["logged_at"] = datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
+        logs.append(news_data)
+        
+    # Prune logs older than 1 day
+    recent_logs = []
+    for log in logs:
+        try:
+            log_time_str = log.get("logged_at") or log.get("last_updated")
+            log_time = datetime.strptime(log_time_str, "%Y-%m-%d %I:%M:%S %p")
+            if datetime.now() - log_time <= timedelta(days=1):
+                recent_logs.append(log)
+        except:
+            recent_logs.append(log) # keep if parse fails
+            
+    with open(log_file, "w") as f:
+        json.dump(recent_logs, f, indent=4)
 
 @app.route('/')
 def home():
@@ -64,8 +103,9 @@ def get_news():
         articles = response.json().get('articles', [])
         
         if not articles:
-            # Fallback if no breaking top-headlines exist currently
-            fallback_url = f"https://newsapi.org/v2/everything?q=(India AND (business OR NSE OR BSE))&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
+            # Fallback to high-quality Indian financial domains to avoid random forum posts
+            reputable_domains = "moneycontrol.com,economictimes.indiatimes.com,livemint.com,cnbctv18.com,ndtv.com"
+            fallback_url = f"https://newsapi.org/v2/everything?q=(India AND (business OR NSE OR BSE))&domains={reputable_domains}&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
             response = requests.get(fallback_url, headers=headers)
             articles = response.json().get('articles', [])
             
@@ -96,6 +136,9 @@ def get_news():
         ai_resp = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
         analysis = json.loads(ai_resp.text)
         
+        # Add the news original publish time
+        analysis["published_at"] = article.get("publishedAt", "Unknown Time")
+        
         # Add live baseline prices AT THE EXACT TIME OF NEWS
         current_time = datetime.now().strftime("%I:%M %p")
         for stock in analysis.get('affected_stocks', []):
@@ -104,8 +147,15 @@ def get_news():
             stock['price_at_news'] = live_price
             stock['current_price'] = live_price
             
-        system_state["latest_news"] = analysis
-        return jsonify(analysis)
+            
+        save_daily_log(analysis)
+        
+        # Read the updated DB to pass to frontend as array
+        log_file = "verification_log.json"
+        with open(log_file, "r") as f:
+            all_logs = json.load(f)
+            
+        return jsonify(all_logs[::-1])
         
     except Exception as e:
         return jsonify({"error": str(e)})
@@ -113,23 +163,33 @@ def get_news():
 # --- ROUTE 3: 10-SECOND LLM RE-EVALUATION LOOP ---
 @app.route('/api/market_update')
 def market_update():
-    if not system_state["latest_news"]:
+    log_file = "verification_log.json"
+    if not os.path.exists(log_file):
         return jsonify({"status": "waiting"})
         
-    news = system_state["latest_news"]
-    
-    # 1. Update current prices
-    for stock in news['affected_stocks']:
-        live_price, _ = get_live_price(stock['ticker'])
-        stock['current_price'] = live_price
+    try:
+        with open(log_file, "r") as f:
+            logs = json.load(f)
+    except:
+        return jsonify({"status": "waiting"})
         
-    # 2. Ask Gemini to re-evaluate the view based on price movement
-    # We bundle all stocks into ONE prompt to save your API rate limits!
+    if not logs:
+        return jsonify({"status": "waiting"})
+        
+    # 1. Update current prices for ALL stored logs to track live progression history
+    for news_item in logs:
+        for stock in news_item.get('affected_stocks', []):
+            live_price, _ = get_live_price(stock['ticker'])
+            stock['current_price'] = live_price
+            
+    # 2. Only re-evaluate the most recent arrival to save your Gemini Quota Limits!
+    latest_news = logs[-1]
+    
     eval_prompt = f"""
     You are a quantitative trading system. Review these stocks. 
     If a stock was predicted 'bullish' and its Current Price is significantly higher than its Price At News (or vice versa for bearish), change its 'view' to 'Already Reacted'. Otherwise keep it as 'short-term now'.
     
-    Data: {json.dumps(news['affected_stocks'])}
+    Data: {json.dumps(latest_news['affected_stocks'])}
     
     Output STRICTLY as a JSON array of objects containing ONLY the ticker and the updated view:
     [{{ "ticker": "RELIANCE.NS", "view": "Already Reacted" }}]
@@ -139,16 +199,18 @@ def market_update():
         ai_resp = model.generate_content(eval_prompt, generation_config={"response_mime_type": "application/json"})
         updated_views = json.loads(ai_resp.text)
         
-        # Merge updated views back into our global state
         for updated_stock in updated_views:
-            for active_stock in news['affected_stocks']:
+            for active_stock in latest_news['affected_stocks']:
                 if active_stock['ticker'] == updated_stock['ticker']:
                     active_stock['view'] = updated_stock['view']
-                    
     except Exception as e:
         print("Re-eval Error:", e)
 
-    return jsonify(news)
+    # Dump mutated logs back to file so past prices are persisted securely
+    with open(log_file, "w") as f:
+        json.dump(logs, f, indent=4)
+
+    return jsonify(logs[::-1])
 
 if __name__ == '__main__':
     print("🚀 Starting IN-SIGHT LIVE QUANT SERVER on http://127.0.0.1:5000")

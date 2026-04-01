@@ -1,0 +1,67 @@
+[
+    {
+        "headline": "Oracle cuts 12,000 jobs in India, further layoffs expected",
+        "aam_janta_translation": "Thousands of tech jobs at Oracle India are gone, raising concerns about job security and the overall health of the Indian IT sector.",
+        "affected_stocks": [
+            {
+                "ticker": "INFY.NS",
+                "impact": "bearish",
+                "view": "short-term now",
+                "estimated_change_percent": 0.8,
+                "reason": "Large-scale layoffs by a global tech giant like Oracle can create negative sentiment in the broader IT sector, signaling potential global slowdowns or cost pressures that might indirectly affect Indian IT service providers like Infosys.",
+                "news_time": "01:46 AM",
+                "price_at_news": 1275.7,
+                "current_price": 1275.7
+            }
+        ],
+        "published_at": "2026-03-31T18:13:34Z",
+        "logged_at": "2026-04-02 01:46:38 AM",
+        "last_updated": "2026-04-02 01:54:20 AM"
+    },
+    {
+        "headline": "Oracle Slashes 12,000 Jobs in India Amidst Global Restructuring",
+        "aam_janta_translation": "Thousands of Indian employees at Oracle are losing their jobs, signaling potential turbulence and job insecurity within the tech industry across the country.",
+        "affected_stocks": [
+            {
+                "ticker": "INFY.NS",
+                "impact": "bearish",
+                "view": "short-term now",
+                "estimated_change_percent": -1.8,
+                "reason": "Large-scale layoffs by a major global tech company like Oracle in India could signal a broader slowdown in global IT spending or increased cost-cutting pressures, potentially impacting sentiment and client spending for Indian IT service exporters like Infosys.",
+                "news_time": "02:00 AM",
+                "price_at_news": 1275.7,
+                "current_price": 1275.7
+            }
+        ],
+        "published_at": "2026-03-31T18:13:34Z",
+        "logged_at": "2026-04-02 02:00:52 AM"
+    },
+    {
+        "headline": "Oracle India Cuts 12,000 Jobs; Further Layoffs Possible",
+        "aam_janta_translation": "Thousands of tech professionals in India are losing their jobs at Oracle, potentially signaling a tougher period for employment in the IT sector.",
+        "affected_stocks": [
+            {
+                "ticker": "TCS.NS",
+                "impact": "bearish",
+                "view": "short-term now",
+                "estimated_change_percent": -0.75,
+                "reason": "Large-scale layoffs by a global tech firm in India can dampen overall sentiment for the IT services sector, signaling potential challenges in global tech spending or increased automation trends.",
+                "news_time": "02:04 AM",
+                "price_at_news": 2408.2,
+                "current_price": 2408.2
+            },
+            {
+                "ticker": "TEAMLEASE.NS",
+                "impact": "bearish",
+                "view": "short-term now",
+                "estimated_change_percent": -1.75,
+                "reason": "Significant job cuts reflect a weakening job market, which directly impacts the business outlook for staffing and recruitment service providers.",
+                "news_time": "02:04 AM",
+                "price_at_news": 1150.2,
+                "current_price": 1150.2
+            }
+        ],
+        "published_at": "2026-03-31T18:13:34Z",
+        "logged_at": "2026-04-02 02:04:58 AM"
+    }
+]

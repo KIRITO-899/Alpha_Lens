@@ -54,9 +54,11 @@
                         <span class="text-xs font-display font-bold text-red-400">LIVE BREAKING NEWS</span>
                     </div>
                     
-                    <h1 id="main-headline-text" class="text-3xl md:text-4xl font-display font-black mb-6 leading-[1.2] tracking-tight text-white drop-shadow-lg relative z-10">
+                    <h1 id="main-headline-text" class="text-3xl md:text-4xl font-display font-black mb-2 leading-[1.2] tracking-tight text-white drop-shadow-lg relative z-10">
                         Initializing AI Engine...
                     </h1>
+                    
+                    <div id="main-headline-time" class="text-[11px] font-mono text-cyan-400/80 mb-6 uppercase tracking-widest relative z-10"></div>
                 </div>
 
                 <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden">
@@ -106,7 +108,11 @@
             try {
                 const response = await fetch('/api/news');
                 const data = await response.json();
-                if(!data.error) updateDashboard(data);
+                if (!data.error) {
+                    updateDashboard(data);
+                } else {
+                    document.getElementById('main-headline-text').innerHTML = `<span class="text-red-400 font-mono text-xl">ERROR: ${data.error}</span>`;
+                }
             } catch (e) { console.error("News fetch failed"); }
         }
 
@@ -115,61 +121,150 @@
             try {
                 const response = await fetch('/api/market_update');
                 const data = await response.json();
-                if(data.headline) updateDashboard(data);
+                if (!data.error && data.headline) {
+                    updateDashboard(data);
+                } else if (data.error && data.error !== "No news found.") {
+                     // Optionally show errors in console, but don't overwrite the UI if we are just "waiting"
+                     console.error("Market Update Error:", data.error);
+                }
             } catch (e) { console.error("Update failed"); }
         }
 
         // --- RENDER ENGINE ---
-        function updateDashboard(data) {
-            document.getElementById('main-headline-text').innerText = data.headline;
+        function updateDashboard(dataPayload) {
+            // If the backend sent an error dict instead of an array
+            if (dataPayload && dataPayload.error) {
+                document.getElementById('main-headline-text').innerHTML = `<span class="text-red-400 font-mono text-xl">ERROR: ${dataPayload.error}</span>`;
+                return;
+            }
             
-            const tableBody = document.getElementById('dynamic-stock-table-body');
-            tableBody.innerHTML = ''; 
+            // Expected to be an array of news from history
+            const dataArray = Array.isArray(dataPayload) ? dataPayload : [dataPayload];
+            if (dataArray.length === 0) return;
 
-            if(!data.affected_stocks || data.affected_stocks.length === 0) return;
+            // We will inject the entire layout into the main container
+            // First we need to clear the static structure there and make it dynamic
+            const mainContainer = document.querySelector('main > div');
+            if(!mainContainer) return;
 
-            data.affected_stocks.forEach(stock => {
-                let colorClasses = "";
-                let viewClass = "";
-                let impactStr = (stock.impact || "").toLowerCase();
-                let viewStr = (stock.view || "").toLowerCase();
-                
-                // Color mapping for prediction
-                if (impactStr === "bullish") colorClasses = "bg-green-800/60 text-green-300 border-green-500/80";
-                else if (impactStr === "slightly bullish") colorClasses = "bg-green-900/30 text-green-400 border-green-500/30";
-                else if (impactStr === "bearish") colorClasses = "bg-red-800/60 text-red-300 border-red-500/80";
-                else colorClasses = "bg-red-900/30 text-red-400 border-red-500/30";
+            let htmlString = "";
 
-                // Highlight "Already Reacted" in yellow to show the AI updated it
-                if (viewStr === "already reacted") {
-                    viewClass = "bg-yellow-500/20 text-yellow-400 border-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.2)]";
-                } else {
-                    viewClass = "bg-black/40 text-slate-400 border-white/5";
+            dataArray.forEach((data, index) => {
+                // format date
+                let timeStr = "";
+                // check for both published_at and logged_at to be safe
+                const rawTime = data.published_at || data.logged_at;
+                if (rawTime && rawTime !== "Unknown Time") {
+                    const dateObj = new Date(rawTime);
+                    timeStr = 'Time: ' + dateObj.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
                 }
 
-                // Math to show exact movement since news broke
-                const diff = (stock.current_price - stock.price_at_news).toFixed(2);
-                const diffColor = diff >= 0 ? "text-green-400" : "text-red-400";
-                const diffSign = diff >= 0 ? "+" : "";
+                // build table rows
+                let rowsHtml = "";
+                if(data.affected_stocks && data.affected_stocks.length > 0) {
+                    data.affected_stocks.forEach(stock => {
+                        let colorClasses = "";
+                        let viewClass = "";
+                        let impactStr = (stock.impact || "").toLowerCase();
+                        let viewStr = (stock.view || "").toLowerCase();
+                        
+                        if (impactStr === "bullish") colorClasses = "bg-green-800/60 text-green-300 border-green-500/80";
+                        else if (impactStr === "slightly bullish") colorClasses = "bg-green-900/30 text-green-400 border-green-500/30";
+                        else if (impactStr === "bearish") colorClasses = "bg-red-800/60 text-red-300 border-red-500/80";
+                        else colorClasses = "bg-red-900/30 text-red-400 border-red-500/30";
 
-                const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td class="py-4">
-                        <div class="font-bold text-white text-base tracking-wide">${stock.ticker}</div>
-                        <div class="text-[9px] text-slate-500 uppercase tracking-widest mt-1">News hit at: ${stock.news_time}</div>
-                    </td>
-                    <td class="py-4 text-slate-300 font-mono">₹${stock.price_at_news}</td>
-                    <td class="py-4">
-                        <div class="text-white font-bold font-mono text-sm">₹${stock.current_price}</div>
-                        <div class="text-[10px] ${diffColor} font-mono mt-0.5">${diffSign}₹${Math.abs(diff)} since news</div>
-                    </td>
-                    <td class="py-4 text-right">
-                        <span class="border px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-widest ${colorClasses} mb-2 block w-max ml-auto">${stock.impact}</span>
-                        <span class="border px-2 py-1 rounded text-[9px] uppercase tracking-widest ${viewClass} transition-colors duration-500">${stock.view}</span>
-                    </td>
+                        if (viewStr === "already reacted") {
+                            viewClass = "bg-yellow-500/20 text-yellow-400 border-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.2)]";
+                        } else {
+                            viewClass = "bg-black/40 text-slate-400 border-white/5";
+                        }
+
+                        const diff = (stock.current_price - stock.price_at_news).toFixed(2);
+                        const diffColor = diff >= 0 ? "text-green-400" : "text-red-400";
+                        const diffSign = diff >= 0 ? "+" : "";
+
+                        rowsHtml += `
+                            <tr>
+                                <td class="py-4">
+                                    <div class="font-bold text-white text-base tracking-wide">${stock.ticker}</div>
+                                    <div class="text-[9px] text-slate-500 uppercase tracking-widest mt-1">Logged: ${stock.news_time || data.logged_at || 'N/A'}</div>
+                                </td>
+                                <td class="py-4 text-slate-300 font-mono">₹${stock.price_at_news}</td>
+                                <td class="py-4">
+                                    <div class="text-white font-bold font-mono text-sm">₹${stock.current_price}</div>
+                                    <div class="text-[10px] ${diffColor} font-mono mt-0.5">${diffSign}₹${Math.abs(diff)} since news</div>
+                                </td>
+                                <td class="py-4 text-right">
+                                    <span class="border px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-widest ${colorClasses} mb-2 block w-max ml-auto">${stock.impact}</span>
+                                    <span class="border px-2 py-1 rounded text-[9px] uppercase tracking-widest ${viewClass} transition-colors duration-500">${stock.view}</span>
+                                </td>
+                            </tr>
+                        `;
+                    });
+                } else {
+                    rowsHtml = `<tr><td colspan="4" class="py-4 text-center text-slate-500">Awaiting Stocks Data...</td></tr>`;
+                }
+
+                // Determine toggle properties based on whether it's the latest news or history
+                const isLatest = index === 0;
+                const bodyHiddenClass = isLatest ? "" : "hidden";
+                const pointerClass = isLatest ? "" : "cursor-pointer hover:bg-white/5 transition-colors";
+                const clickHandler = isLatest ? "" : `onclick="document.getElementById('history-body-${index}').classList.toggle('hidden'); const icon = document.getElementById('toggle-icon-${index}'); icon.classList.toggle('rotate-180');"`;
+                
+                const chevronIcon = isLatest ? "" : `
+                <div class="absolute right-8 top-1/2 -translate-y-1/2 text-slate-500 transition-transform duration-300" id="toggle-icon-${index}">
+                    <svg width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"></path></svg>
+                </div>
                 `;
-                tableBody.appendChild(tr);
+
+                // Add card
+                htmlString += `
+                    <div class="space-y-4 mb-12">
+                        <div class="glass-panel p-8 md:p-10 rounded-3xl relative overflow-hidden ${pointerClass}" ${clickHandler}>
+                            <div class="absolute -right-20 -top-20 w-96 h-96 bg-blue-600/10 rounded-full blur-[100px]"></div>
+                            ${isLatest ? `
+                            <div class="flex items-center gap-2 bg-black/40 px-3 py-1.5 rounded-full border border-red-500/30 w-max mb-6">
+                                <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                                <span class="text-xs font-display font-bold text-red-400">LATEST NEWS</span>
+                            </div>` : `
+                            <div class="flex items-center gap-2 bg-black/40 px-3 py-1.5 rounded-full border border-slate-500/30 w-max mb-6">
+                                <span class="text-xs font-display font-bold text-slate-400">HISTORY / CLICK TO VIEW</span>
+                            </div>
+                            `}
+                            
+                            <h1 class="text-3xl md:text-3xl font-display font-black mb-2 leading-[1.2] tracking-tight text-white drop-shadow-lg relative z-10 pr-12">
+                                ${data.headline || "Processing..."}
+                            </h1>
+                            <div class="text-[11px] font-mono text-cyan-400/80 mt-4 uppercase tracking-widest relative z-10">${timeStr}</div>
+                            ${chevronIcon}
+                        </div>
+
+                        <div id="history-body-${index}" class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden ${bodyHiddenClass}">
+                            <div class="flex justify-between items-end mb-6">
+                                <h2 class="text-xl font-display font-bold">Live Stock Tracking</h2>
+                                <span class="text-xs font-mono mb-1 text-slate-500">Synced to market</span>
+                            </div>
+                            <div class="overflow-x-auto">
+                                <table class="w-full text-left text-sm whitespace-nowrap">
+                                    <thead class="text-[10px] uppercase tracking-widest text-slate-400 border-b border-white/10">
+                                        <tr>
+                                            <th class="pb-3 font-semibold">Asset / Log Time</th>
+                                            <th class="pb-3 font-semibold">Price @ News</th>
+                                            <th class="pb-3 font-semibold">Current Price</th>
+                                            <th class="pb-3 font-semibold text-right">Live AI View</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-white/5 font-display">
+                                        ${rowsHtml}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                `;
             });
+            
+            mainContainer.innerHTML = htmlString;
         }
 
         // --- STARTUP LOGIC ---
