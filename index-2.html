@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IN-SIGHT | Live Macro Terminal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@500;700;900&display=swap" rel="stylesheet">
+    
+    <style>
+        :root { --neon-cyan: #06b6d4; --glass-bg: rgba(10, 15, 25, 0.45); --glass-border: rgba(255, 255, 255, 0.08); }
+        body { margin: 0; background-color: #030712; color: #f8fafc; font-family: 'Inter', sans-serif; overflow-x: hidden; }
+        .font-display { font-family: 'Space Grotesk', sans-serif; }
+        #canvas-container { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; pointer-events: none; }
+        .glass-panel { background: var(--glass-bg); backdrop-filter: blur(20px); border: 1px solid var(--glass-border); box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3); }
+        
+        /* Scrolling Ticker Animation */
+        @keyframes ticker { 0% { transform: translateX(100vw); } 100% { transform: translateX(-100%); } }
+        .animate-ticker { animation: ticker 25s linear infinite; display: inline-block; white-space: nowrap; padding-left: 100%; }
+        .animate-ticker:hover { animation-play-state: paused; }
+    </style>
+</head>
+<body class="antialiased selection:bg-cyan-500/30">
+
+    <div id="canvas-container"></div>
+
+    <div class="w-full bg-black/90 border-b border-white/10 text-xs font-mono py-1.5 overflow-hidden flex z-50 fixed top-0">
+        <div id="market-ticker" class="animate-ticker text-slate-300 font-bold tracking-widest">
+            Fetching Live NSE Data...
+        </div>
+    </div>
+
+    <div class="relative z-10 flex flex-col min-h-screen pt-10">
+        
+        <nav class="glass-panel sticky top-4 z-40 px-6 py-4 flex flex-col lg:flex-row justify-between items-center gap-4 rounded-2xl mx-6 mt-4">
+            <div class="flex items-center gap-2">
+                <div class="w-3 h-3 rounded-full bg-cyan-400 animate-pulse shadow-[0_0_10px_#06b6d4]"></div>
+                <div class="text-2xl font-display font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-cyan-300">
+                    IN-SIGHT<span class="text-white">.AI</span>
+                </div>
+            </div>
+            <div class="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Live Quant Engine Active</div>
+        </nav>
+
+        <main class="container mx-auto p-6 grid grid-cols-1 xl:grid-cols-12 gap-8 flex-grow">
+            
+            <div class="col-span-1 xl:col-span-12 space-y-8">
+                
+                <div class="glass-panel p-8 md:p-10 rounded-3xl relative overflow-hidden">
+                    <div class="absolute -right-20 -top-20 w-96 h-96 bg-blue-600/10 rounded-full blur-[100px]"></div>
+                    <div class="flex items-center gap-2 bg-black/40 px-3 py-1.5 rounded-full border border-red-500/30 w-max mb-6">
+                        <span class="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                        <span class="text-xs font-display font-bold text-red-400">LIVE BREAKING NEWS</span>
+                    </div>
+                    
+                    <h1 id="main-headline-text" class="text-3xl md:text-4xl font-display font-black mb-6 leading-[1.2] tracking-tight text-white drop-shadow-lg relative z-10">
+                        Initializing AI Engine...
+                    </h1>
+                </div>
+
+                <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden">
+                    <div class="flex justify-between items-end mb-6">
+                        <h2 class="text-xl font-display font-bold">Live Stock Tracking</h2>
+                        <span class="text-xs font-mono text-cyan-400 animate-pulse">Auto-updating every 10s</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left text-sm whitespace-nowrap">
+                            <thead class="text-[10px] uppercase tracking-widest text-slate-400 border-b border-white/10">
+                                <tr>
+                                    <th class="pb-3 font-semibold">Asset / News Time</th>
+                                    <th class="pb-3 font-semibold">Price @ News</th>
+                                    <th class="pb-3 font-semibold">Current Price</th>
+                                    <th class="pb-3 font-semibold text-right">Live AI View</th>
+                                </tr>
+                            </thead>
+                            <tbody id="dynamic-stock-table-body" class="divide-y divide-white/5 font-display">
+                                <tr><td colspan="4" class="py-4 text-center text-slate-500">Awaiting Data...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        // --- 1. LIVE INDICES TICKER ---
+        async function fetchIndices() {
+            try {
+                const response = await fetch('/api/indices');
+                const data = await response.json();
+                
+                let tickerHtml = "";
+                data.forEach(idx => {
+                    const color = idx.change >= 0 ? "text-green-400" : "text-red-400";
+                    const sign = idx.change >= 0 ? "+" : "";
+                    tickerHtml += `<span class="mr-12">${idx.name}: <span class="text-white">${idx.price}</span> <span class="${color}">(${sign}${idx.change}%)</span></span>`;
+                });
+                document.getElementById('market-ticker').innerHTML = tickerHtml;
+            } catch (e) { console.error("Ticker failed"); }
+        }
+
+        // --- 2. INITIAL NEWS FETCH ---
+        async function fetchInitialNews() {
+            try {
+                const response = await fetch('/api/news');
+                const data = await response.json();
+                if(!data.error) updateDashboard(data);
+            } catch (e) { console.error("News fetch failed"); }
+        }
+
+        // --- 3. 10-SECOND RE-EVALUATION LOOP ---
+        async function pollMarketUpdates() {
+            try {
+                const response = await fetch('/api/market_update');
+                const data = await response.json();
+                if(data.headline) updateDashboard(data);
+            } catch (e) { console.error("Update failed"); }
+        }
+
+        // --- RENDER ENGINE ---
+        function updateDashboard(data) {
+            document.getElementById('main-headline-text').innerText = data.headline;
+            
+            const tableBody = document.getElementById('dynamic-stock-table-body');
+            tableBody.innerHTML = ''; 
+
+            if(!data.affected_stocks || data.affected_stocks.length === 0) return;
+
+            data.affected_stocks.forEach(stock => {
+                let colorClasses = "";
+                let viewClass = "";
+                let impactStr = (stock.impact || "").toLowerCase();
+                let viewStr = (stock.view || "").toLowerCase();
+                
+                // Color mapping for prediction
+                if (impactStr === "bullish") colorClasses = "bg-green-800/60 text-green-300 border-green-500/80";
+                else if (impactStr === "slightly bullish") colorClasses = "bg-green-900/30 text-green-400 border-green-500/30";
+                else if (impactStr === "bearish") colorClasses = "bg-red-800/60 text-red-300 border-red-500/80";
+                else colorClasses = "bg-red-900/30 text-red-400 border-red-500/30";
+
+                // Highlight "Already Reacted" in yellow to show the AI updated it
+                if (viewStr === "already reacted") {
+                    viewClass = "bg-yellow-500/20 text-yellow-400 border-yellow-500/50 shadow-[0_0_10px_rgba(234,179,8,0.2)]";
+                } else {
+                    viewClass = "bg-black/40 text-slate-400 border-white/5";
+                }
+
+                // Math to show exact movement since news broke
+                const diff = (stock.current_price - stock.price_at_news).toFixed(2);
+                const diffColor = diff >= 0 ? "text-green-400" : "text-red-400";
+                const diffSign = diff >= 0 ? "+" : "";
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td class="py-4">
+                        <div class="font-bold text-white text-base tracking-wide">${stock.ticker}</div>
+                        <div class="text-[9px] text-slate-500 uppercase tracking-widest mt-1">News hit at: ${stock.news_time}</div>
+                    </td>
+                    <td class="py-4 text-slate-300 font-mono">₹${stock.price_at_news}</td>
+                    <td class="py-4">
+                        <div class="text-white font-bold font-mono text-sm">₹${stock.current_price}</div>
+                        <div class="text-[10px] ${diffColor} font-mono mt-0.5">${diffSign}₹${Math.abs(diff)} since news</div>
+                    </td>
+                    <td class="py-4 text-right">
+                        <span class="border px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-widest ${colorClasses} mb-2 block w-max ml-auto">${stock.impact}</span>
+                        <span class="border px-2 py-1 rounded text-[9px] uppercase tracking-widest ${viewClass} transition-colors duration-500">${stock.view}</span>
+                    </td>
+                `;
+                tableBody.appendChild(tr);
+            });
+        }
+
+        // --- STARTUP LOGIC ---
+        window.onload = () => {
+            fetchIndices();      // Load Ticker immediately
+            fetchInitialNews();  // Load News & Baseline Prices immediately
+            
+            // Set 10-second repeating loops
+            setInterval(fetchIndices, 10000); 
+            setInterval(pollMarketUpdates, 10000); 
+        };
+
+        // 3D Background
+        const scene = new THREE.Scene(); scene.fog = new THREE.FogExp2(0x030712, 0.003);
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000); camera.position.z = 120; camera.position.y = 20;
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+        const geometry = new THREE.BufferGeometry(); const positions = new Float32Array(600 * 3);
+        for (let i = 0; i < 600; i++) { positions[i*3] = (Math.random() - 0.5) * 400; positions[i*3+1] = (Math.random() - 0.5) * 100 - 20; positions[i*3+2] = (Math.random() - 0.5) * 400; }
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const material = new THREE.PointsMaterial({ size: 1.5, color: 0x06b6d4, transparent: true, opacity: 0.4 });
+        const particles = new THREE.Points(geometry, material); scene.add(particles);
+        function animate() { requestAnimationFrame(animate); particles.rotation.y += 0.0005; renderer.render(scene, camera); } animate();
+    </script>
+</body>
+</html>
