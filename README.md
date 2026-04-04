@@ -163,7 +163,4 @@ Pull requests are welcome. For major changes, please open an issue first to disc
 
 ---
 
-## Contributors
 
-- [KIRITO-899](https://github.com/KIRITO-899) — H Y Yeshwanth Kumar
-- [Sumant-varanasi](https://github.com/Sumant-varanasi)
