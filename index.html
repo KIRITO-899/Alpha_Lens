@@ -28,6 +28,29 @@
         ::-webkit-scrollbar-track { background: #030712; }
         ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
 
+        /* ── INDEX CARDS ── */
+        .index-card {
+            position: relative; overflow: hidden;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        .index-card:hover { transform: translateY(-3px); }
+        .index-card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0;
+            height: 2px; background: var(--card-accent, #06b6d4);
+            box-shadow: 0 0 12px 2px var(--card-accent, #06b6d4);
+        }
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50%       { opacity: 0.4; transform: scale(0.7); }
+        }
+        .live-dot { animation: pulse-dot 1.8s ease-in-out infinite; }
+
+        /* ── LEGACY TICKER (removed) ── */
+        #index-ticker { overflow: hidden; white-space: nowrap; }
+        .ticker-track { display: inline-flex; animation: ticker-scroll 28s linear infinite; }
+        .ticker-track:hover { animation-play-state: paused; }
+        @keyframes ticker-scroll { 0% { transform:translateX(0); } 100% { transform:translateX(-50%); } }
+        .ticker-item { display:inline-flex; align-items:center; gap:10px; padding:0 36px; cursor:default; }
 
     </style>
 </head>
@@ -139,9 +162,9 @@
             <div class="hidden xl:flex space-x-6 items-center text-[11px] font-bold tracking-widest uppercase">
                 <a href="#" id="nav-top-news" onclick="switchTab('top-news'); return false;" class="text-cyan-400 border-b-2 border-cyan-400 pb-1 transition">Top News</a>
                 <a href="#" id="nav-all-news" onclick="switchTab('all-news'); return false;" class="nav-link text-slate-300 hover:text-white transition">All News</a>
-                <a href="#" id="nav-portfolio" onclick="switchTab('portfolio'); return false;" class="nav-link text-slate-300 hover:text-white transition">News Affecting Portfolio</a>
+                <a href="#" id="nav-portfolio" onclick="switchTab('portfolio'); return false;" class="nav-link text-slate-300 hover:text-white transition stock-mode-element">News Affecting Portfolio</a>
                 <a href="#" id="nav-flow" onclick="switchTab('flow'); return false;" class="nav-link text-slate-300 hover:text-white transition">News Flow</a>
-                <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;" class="nav-link text-slate-300 hover:text-white transition">Major Stocks Affected</a>
+                <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;" class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Major Stocks Affected</a>
             </div>
 
             <!-- Non-Stock Mode and Access Terminal / Logout re-ordered -->
@@ -158,6 +181,33 @@
                 </div>
             </div>
         </nav>
+
+        <!-- ============================================== -->
+        <!-- INDEX CARDS STRIP (hidden in non-stock mode)  -->
+        <!-- ============================================== -->
+        <div id="index-ticker" class="mx-6 mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 stock-mode-element">
+            <!-- Cards injected by JS -->
+            <div class="index-card glass-panel rounded-2xl p-4 animate-pulse">
+                <div class="h-2 bg-slate-700 rounded w-1/2 mb-3"></div>
+                <div class="h-5 bg-slate-700 rounded w-3/4 mb-2"></div>
+                <div class="h-3 bg-slate-700 rounded w-1/3"></div>
+            </div>
+            <div class="index-card glass-panel rounded-2xl p-4 animate-pulse">
+                <div class="h-2 bg-slate-700 rounded w-1/2 mb-3"></div>
+                <div class="h-5 bg-slate-700 rounded w-3/4 mb-2"></div>
+                <div class="h-3 bg-slate-700 rounded w-1/3"></div>
+            </div>
+            <div class="index-card glass-panel rounded-2xl p-4 animate-pulse">
+                <div class="h-2 bg-slate-700 rounded w-1/2 mb-3"></div>
+                <div class="h-5 bg-slate-700 rounded w-3/4 mb-2"></div>
+                <div class="h-3 bg-slate-700 rounded w-1/3"></div>
+            </div>
+            <div class="index-card glass-panel rounded-2xl p-4 animate-pulse">
+                <div class="h-2 bg-slate-700 rounded w-1/2 mb-3"></div>
+                <div class="h-5 bg-slate-700 rounded w-3/4 mb-2"></div>
+                <div class="h-3 bg-slate-700 rounded w-1/3"></div>
+            </div>
+        </div>
 
         <main class="container mx-auto p-6 flex-grow">
             
@@ -243,7 +293,7 @@
                 </div>
 
                 <!-- SYNC PORTFOLIO — sticky top right -->
-                <div class="col-span-1 xl:col-span-4 space-y-8 xl:sticky xl:top-24">
+                <div id="sync-portfolio-panel" class="col-span-1 xl:col-span-4 space-y-8 xl:sticky xl:top-24 stock-mode-element">
                     <div class="glass-panel tilt-card p-8 rounded-3xl relative overflow-hidden border border-blue-500/20 shadow-[0_0_30px_rgba(59,130,246,0.05)] text-center">
                         <div class="w-14 h-14 bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-5 border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
                             <svg class="w-7 h-7 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
@@ -259,13 +309,46 @@
             <!-- VIEW 2: ALL NEWS ARCHIVE                      -->
             <!-- ============================================== -->
             <div id="view-all-news" class="hidden max-w-5xl mx-auto w-full">
-                <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-8 mt-4">
+                <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-4 mt-4">
                     <h1 class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">Live News Archive</h1>
                     <p class="text-sm text-cyan-400 font-mono uppercase tracking-widest relative z-10 flex justify-between items-center">
-                        <span>Showing Data for the last 4 Days</span>
+                        <span>Last 4 Days</span>
                         <span id="news-count" class="text-slate-300 bg-black/40 px-3 py-1 rounded-full border border-white/10">Loading...</span>
                     </p>
                 </div>
+                <!-- Filter Bar -->
+                <div id="archive-filters" class="flex flex-wrap gap-2 mb-4 px-1">
+                    <button onclick="setArchiveFilter('all')" id="filter-all"
+                        class="archive-filter-btn active-filter px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border transition-all">All News</button>
+                    
+                    <div id="stock-filters" class="flex flex-wrap gap-2 stock-mode-element transition-all">
+                        <button onclick="setArchiveFilter('bullish')" id="filter-bullish"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-green-500/30 text-green-400 bg-green-900/10 hover:bg-green-900/30 transition-all">🟢 Bullish</button>
+                        <button onclick="setArchiveFilter('slightly bullish')" id="filter-slightly bullish"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-emerald-500/30 text-emerald-400 bg-emerald-900/10 hover:bg-emerald-900/30 transition-all">📈 Slightly Bullish</button>
+                        <button onclick="setArchiveFilter('bearish')" id="filter-bearish"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-red-500/30 text-red-400 bg-red-900/10 hover:bg-red-900/30 transition-all">🔴 Bearish</button>
+                        <button onclick="setArchiveFilter('slightly bearish')" id="filter-slightly bearish"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-orange-500/30 text-orange-400 bg-orange-900/10 hover:bg-orange-900/30 transition-all">📉 Slightly Bearish</button>
+                        <button onclick="setArchiveFilter('none')" id="filter-none"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-500/30 text-slate-400 bg-slate-900/10 hover:bg-slate-900/30 transition-all">⬜ No Stock Impact</button>
+                    </div>
+
+                    <div id="general-filters" class="flex flex-wrap gap-2 transition-all" style="display:none;">
+                        <button onclick="setArchiveFilter('cat:business')" id="filter-cat:business"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-cyan-500/30 text-cyan-400 bg-cyan-900/10 hover:bg-cyan-900/30 transition-all">💼 Business</button>
+                        <button onclick="setArchiveFilter('cat:technology')" id="filter-cat:technology"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-purple-500/30 text-purple-400 bg-purple-900/10 hover:bg-purple-900/30 transition-all">💻 Technology</button>
+                        <button onclick="setArchiveFilter('cat:politics')" id="filter-cat:politics"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-rose-500/30 text-rose-400 bg-rose-900/10 hover:bg-rose-900/30 transition-all">🏛️ Politics</button>
+                        <button onclick="setArchiveFilter('cat:general')" id="filter-cat:general"
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-500/30 text-slate-400 bg-slate-900/10 hover:bg-slate-900/30 transition-all">📰 General</button>
+                    </div>
+                </div>
+                <style>
+                    .active-filter { background:rgba(6,182,212,0.15) !important; border-color:rgba(6,182,212,0.6) !important; color:#06b6d4 !important; box-shadow:0 0 10px rgba(6,182,212,0.2) !important; }
+                    .archive-filter-btn { cursor:pointer; }
+                </style>
                 <div id="archive-news-list" class="space-y-4 relative z-10">
                     <div class="text-center py-20 text-slate-400 animate-pulse glass-panel rounded-2xl">Loading Archive...</div>
                 </div>
@@ -274,15 +357,15 @@
             <!-- ============================================== -->
             <!-- VIEW 3: NEWS AFFECTING PORTFOLIO              -->
             <!-- ============================================== -->
-            <div id="view-portfolio" class="hidden max-w-5xl mx-auto w-full">
-                <div class="glass-panel p-6 md:p-10 rounded-3xl relative overflow-hidden text-center mt-4">
-                    <div class="w-20 h-20 bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-6 border border-blue-500/30">
-                        <svg class="w-10 h-10 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                    </div>
-                    <h1 class="text-3xl font-display font-black text-white tracking-tight mb-4">Broker Integration Required</h1>
-                    <p class="text-slate-400 max-w-xl mx-auto mb-8 leading-relaxed">To view highly personalized macro threats and opportunities tailored to your specific holdings, you must sync your broker account. Our AI will continuously scan the news against your portfolio in real-time.</p>
-                    <button class="btn-glow px-8 py-3 rounded-full text-sm font-display font-bold text-white tracking-wide shadow-lg hover:scale-105 transition-transform">CONNECT ZERODHA / UPSTOX</button>
+            <div id="view-portfolio" class="hidden max-w-6xl mx-auto w-full stock-mode-element">
+                <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-8 mt-4">
+                    <h1 class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">News Affecting Stocks</h1>
+                    <p class="text-sm text-cyan-400 font-mono uppercase tracking-widest relative z-10 flex justify-between items-center">
+                        <span>All news with direct stock impact — last 4 days</span>
+                        <span id="portfolio-count" class="text-slate-300 bg-black/40 px-3 py-1 rounded-full border border-white/10">Loading...</span>
+                    </p>
                 </div>
+                <div id="portfolio-news-list" class="space-y-4"></div>
             </div>
 
             <!-- ============================================== -->
@@ -306,7 +389,7 @@
             <!-- ============================================== -->
             <!-- VIEW 5: MAJOR STOCKS AFFECTED                 -->
             <!-- ============================================== -->
-            <div id="view-stocks" class="hidden max-w-6xl mx-auto w-full">
+            <div id="view-stocks" class="hidden max-w-6xl mx-auto w-full stock-mode-element">
                 <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-8 mt-4">
                     <h1 class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">Market Action Heatmap</h1>
                     <p class="text-sm text-cyan-400 font-mono uppercase tracking-widest flex justify-between items-center">
@@ -329,7 +412,16 @@
         let globalNewsData = [];
         let isNonStockMode = false;
         let currentUser = null;
+        let currentArchiveFilter = 'all';
         const tabs = ['top-news', 'all-news', 'portfolio', 'flow', 'stocks'];
+
+        function setArchiveFilter(filter) {
+            currentArchiveFilter = filter;
+            document.querySelectorAll('.archive-filter-btn').forEach(btn => btn.classList.remove('active-filter'));
+            const activeBtn = document.getElementById('filter-' + filter);
+            if (activeBtn) activeBtn.classList.add('active-filter');
+            renderArchiveView();
+        }
 
         // Failsafe Date Parser — handles all browsers (returns epoch ms)
         function parseCustomDate(dtStr) {
@@ -585,7 +677,9 @@
             isNonStockMode = !isNonStockMode;
             const knob = document.getElementById('toggleKnob');
             const bg = document.getElementById('toggleBg');
-            const stockElements = document.querySelectorAll('.stock-table-container');
+            const ticker = document.getElementById('index-ticker');
+            // Collect stock elements EXCLUDING the ticker (handled separately)
+            const stockElements = document.querySelectorAll('.stock-table-container, .stock-mode-element:not(#index-ticker)');
             const stockBadges = document.querySelectorAll('.stock-badge-container');
             if (isNonStockMode) {
                 knob.style.transform = 'translateX(16px)';
@@ -593,29 +687,63 @@
                 bg.classList.replace('bg-slate-800', 'bg-blue-500');
                 stockElements.forEach(el => el.style.display = 'none');
                 stockBadges.forEach(el => el.style.display = 'none');
+                if (ticker) ticker.style.display = 'none'; // always hide ticker in non-stock
+                // If user is on a hidden tab, redirect to top-news
+                const hiddenTabs = ['portfolio', 'stocks'];
+                const activeView = hiddenTabs.find(t => !document.getElementById(`view-${t}`).classList.contains('hidden'));
+                if (activeView) switchTab('top-news');
+                
+                // Show general filters instead of stock filters
+                const genFilters = document.getElementById('general-filters');
+                if(genFilters) genFilters.style.display = 'flex';
+                
+                // Reset filter to 'all' when switching mode to avoid weird states
+                setArchiveFilter('all');
             } else {
                 knob.style.transform = 'translateX(0)';
                 knob.classList.replace('bg-white', 'bg-slate-400');
                 bg.classList.replace('bg-blue-500', 'bg-slate-800');
-                stockElements.forEach(el => el.style.display = 'block');
+                stockElements.forEach(el => el.style.display = '');
                 stockBadges.forEach(el => el.style.display = 'flex');
+                // Restore ticker ONLY if currently on top-news tab
+                const currentTab = tabs.find(t => {
+                    const v = document.getElementById(`view-${t}`);
+                    return v && !v.classList.contains('hidden');
+                });
+                if (ticker) ticker.style.display = (currentTab === 'top-news') ? '' : 'none';
+                
+                // Hide general filters
+                const genFilters = document.getElementById('general-filters');
+                if(genFilters) genFilters.style.display = 'none';
+
+                setArchiveFilter('all');
             }
         }
+
+        // Nav links that must stay hidden in non-stock mode
+        const STOCK_NAV_IDS = ['nav-portfolio', 'nav-stocks'];
 
         function switchTab(targetTabId) {
             tabs.forEach(id => {
                 const view = document.getElementById(`view-${id}`);
                 const nav = document.getElementById(`nav-${id}`);
                 if(view && nav) {
+                    const isStockNav = STOCK_NAV_IDS.includes(`nav-${id}`);
+                    const stockCls = isStockNav ? ' stock-mode-element' : '';
                     if (id === targetTabId) {
                         view.classList.remove('hidden');
-                        nav.className = "text-cyan-400 border-b-2 border-cyan-400 pb-1 transition";
+                        nav.className = `text-cyan-400 border-b-2 border-cyan-400 pb-1 transition${stockCls}`;
                     } else {
                         view.classList.add('hidden');
-                        nav.className = "nav-link text-slate-300 hover:text-white transition";
+                        nav.className = `nav-link text-slate-300 hover:text-white transition${stockCls}`;
                     }
                 }
             });
+            // Index cards only belong on the Top News page
+            const ticker = document.getElementById('index-ticker');
+            if (ticker) {
+                ticker.style.display = (targetTabId === 'top-news' && !isNonStockMode) ? '' : 'none';
+            }
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
@@ -630,8 +758,15 @@
 
         // Priority 1: Published Time from RSS (news_time), Priority 2: Database Storage Time (created_at)
         function getNewsDate(newsItem) {
+            if (!newsItem) return new Date(0);
             if (newsItem.news_time && newsItem.news_time !== "Just Now" && newsItem.news_time !== "System Processing") {
-                const d = new Date(newsItem.news_time);
+                // Try standard parsing first
+                let d = new Date(newsItem.news_time);
+                if (!isNaN(d.getTime())) return d;
+                
+                // Try stripping leading day name if any (e.g., "Sun, ")
+                const cleaned = newsItem.news_time.includes(',') ? newsItem.news_time.split(',')[1].trim() : newsItem.news_time;
+                d = new Date(cleaned);
                 if (!isNaN(d.getTime())) return d;
             }
             return parseSQLiteDate(newsItem.created_at);
@@ -672,14 +807,19 @@
                 renderDashboardView();
                 renderArchiveView();
                 renderMajorStocksView();
+                renderPortfolioView();
             } catch (error) { console.error("Failed to fetch news:", error); }
         }
 
         function renderDashboardView() {
             const container = document.getElementById('dashboard-news-list');
             container.innerHTML = '';
-            // Already sorted latest-first; slice top 3 → left card = latest
+            // Show top 3 news — in non-stock mode still show all news headlines, badges hidden by CSS
             const topNews = globalNewsData.slice(0, 3);
+            if (topNews.length === 0) {
+                container.innerHTML = '<div class="text-slate-400 text-sm py-4 col-span-3">AI Engine is processing live feeds. Check back shortly.</div>';
+                return;
+            }
             topNews.forEach((newsItem) => {
                 const div = document.createElement('div');
                 div.className = "p-4 border border-white/10 rounded-xl bg-black/40 hover:bg-white/10 cursor-pointer transition-all shadow-sm flex flex-col gap-1";
@@ -767,8 +907,30 @@
             if(!container) return;
             container.innerHTML = '';
             const fourDaysAgo = Date.now() - (96 * 60 * 60 * 1000);
-            // Filter using actual published date, already sorted latest-first
-            const recentNews = globalNewsData.filter(news => getNewsDate(news).getTime() >= fourDaysAgo);
+            // Show ALL news — stock badges are hidden by CSS when in non-stock mode
+            let recentNews = globalNewsData.filter(news => getNewsDate(news).getTime() >= fourDaysAgo);
+            
+            // Apply filtering logic
+            if (currentArchiveFilter !== 'all') {
+                if (currentArchiveFilter.startsWith('cat:')) {
+                    const targetCat = currentArchiveFilter.split(':')[1].toLowerCase();
+                    recentNews = recentNews.filter(news => {
+                        const cat = (news.category || 'general').toLowerCase();
+                        return cat === targetCat;
+                    });
+                } else {
+                    recentNews = recentNews.filter(news => {
+                        const hasStocks = news.affected_stocks && news.affected_stocks.length > 0;
+                        if (currentArchiveFilter === 'none') {
+                            return !hasStocks;
+                        }
+                        if (hasStocks) {
+                            return news.affected_stocks.some(stock => (stock.impact || '').toLowerCase() === currentArchiveFilter);
+                        }
+                        return false;
+                    });
+                }
+            }
             const countEl = document.getElementById('news-count');
             if(countEl) countEl.innerText = `${recentNews.length} Articles`;
             if(recentNews.length === 0) {
@@ -779,14 +941,16 @@
                 const item = document.createElement('div');
                 item.className = "glass-panel p-6 rounded-2xl hover:border-cyan-500/30 transition-colors duration-300 cursor-pointer";
                 item.onclick = () => { loadArticleIntoMainViewer(news); switchTab('top-news'); };
-                // Use actual published time for display
                 const dt = getNewsDate(news);
                 const dateStr = !isNaN(dt) ? dt.toLocaleDateString('en-IN', {day:'2-digit', month:'short', year:'numeric'}) : '—';
                 const timeStr = !isNaN(dt) ? dt.toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—';
                 let impactedStocksHtml = '';
                 if (news.affected_stocks && news.affected_stocks.length > 0) {
                     news.affected_stocks.forEach(stock => {
-                        let color = stock.impact.toLowerCase().includes('bull') ? 'text-green-400 border-green-500/30 bg-green-900/20' : 'text-red-400 border-red-500/30 bg-red-900/20';
+                        const impact = (stock.impact || '').toLowerCase();
+                        let color = impact.includes('bullish') ? 'text-green-400 border-green-500/30 bg-green-900/20' :
+                                    impact.includes('slightly bearish') ? 'text-orange-400 border-orange-500/30 bg-orange-900/20' :
+                                    'text-red-400 border-red-500/30 bg-red-900/20';
                         impactedStocksHtml += `<span class="text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}">${stock.ticker}</span>`;
                     });
                 } else {
@@ -800,12 +964,73 @@
                     <div class="flex items-start justify-between gap-4 mb-3">
                         <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${news.headline}</h3>
                     </div>
-                    <div class="stock-badge-container flex items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300">
+                    <div class="stock-badge-container items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300"
+                         style="display: ${isNonStockMode ? 'none' : 'flex'}">
                         <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
                         <div class="flex flex-wrap gap-2">${impactedStocksHtml}</div>
                     </div>
                 `;
                 container.appendChild(item);
+            });
+        }
+
+        function renderPortfolioView() {
+            const container = document.getElementById('portfolio-news-list');
+            if (!container) return;
+            container.innerHTML = '';
+            const fourDaysAgo = Date.now() - (96 * 60 * 60 * 1000);
+            // Only show news that HAS stock impacts
+            const stockNews = globalNewsData.filter(n =>
+                getNewsDate(n).getTime() >= fourDaysAgo &&
+                n.affected_stocks && n.affected_stocks.length > 0
+            );
+            const countEl = document.getElementById('portfolio-count');
+            if (countEl) countEl.innerText = `${stockNews.length} News Items`;
+            if (stockNews.length === 0) {
+                container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">No stock-impacting news found yet. Check back shortly.</div>';
+                return;
+            }
+            stockNews.forEach(news => {
+                const dt = getNewsDate(news);
+                const dateStr = !isNaN(dt) ? dt.toLocaleDateString('en-IN', {day:'2-digit', month:'short', year:'numeric'}) : '—';
+                const timeStr = !isNaN(dt) ? dt.toLocaleTimeString('en-IN', {hour:'2-digit', minute:'2-digit', hour12:true}) : '—';
+                const card = document.createElement('div');
+                card.className = 'glass-panel p-6 rounded-2xl mb-4';
+                let stockRowsHtml = news.affected_stocks.map(stock => {
+                    const impact = (stock.impact || '').toLowerCase();
+                    const bp = parseFloat(stock.base_price);
+                    const cp = parseFloat(stock.current_price);
+                    const hasP = !isNaN(bp) && bp > 0;
+                    const hasC = !isNaN(cp) && cp > 0;
+                    const diff = hasP && hasC ? ((cp - bp) / bp * 100) : null;
+                    const diffStr = diff !== null ? (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%' : '—';
+                    const diffCls = diff === null ? 'text-slate-400' : diff >= 0 ? 'text-green-400' : 'text-red-400';
+                    const statusBadge = getStatusBadge(stock.status);
+                    let tCol = impact === 'bullish' ? 'text-green-400' :
+                               impact === 'slightly bullish' ? 'text-emerald-400' :
+                               impact === 'slightly bearish' ? 'text-orange-400' : 'text-red-400';
+                    return `
+                        <div class="flex items-center justify-between py-2 border-b border-white/5 last:border-0">
+                            <div>
+                                <span class="font-bold font-display text-white text-sm tracking-widest">${stock.ticker}</span>
+                                <span class="ml-2 text-[9px] font-bold uppercase ${tCol}">${stock.impact}</span>
+                                <div class="text-[9px] ${statusBadge.cls} mt-0.5">${statusBadge.text}</div>
+                            </div>
+                            <div class="text-right font-mono text-xs">
+                                <div class="text-slate-400">${hasP ? '₹' + bp.toFixed(2) : '—'} → <span class="text-white font-bold">${hasC ? '₹' + cp.toFixed(2) : '—'}</span></div>
+                                <div class="font-bold ${diffCls}">${diffStr}</div>
+                            </div>
+                        </div>`;
+                }).join('');
+                card.innerHTML = `
+                    <div class="flex items-center gap-2 text-[9px] text-cyan-400 font-mono mb-3">
+                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        ${dateStr} · ${timeStr}
+                    </div>
+                    <h3 class="text-base font-bold text-slate-100 leading-snug mb-4">${news.headline}</h3>
+                    <div class="bg-black/30 rounded-xl px-4 py-1">${stockRowsHtml}</div>
+                `;
+                container.appendChild(card);
             });
         }
 
@@ -910,12 +1135,67 @@
               .to(".glass-panel", { y: 0, opacity: 1, duration: 1.2, stagger: 0.1, ease: "power3.out" }, "-=1.2");
         }
 
+        async function fetchIndices() {
+            try {
+                const res = await fetch('/api/indices');
+                const data = await res.json();
+                const container = document.getElementById('index-ticker');
+                if (!container || !data.length) return;
+
+                // Accent colors per index (up direction)
+                const accents = ['#06b6d4', '#8b5cf6', '#f59e0b', '#10b981'];
+                const isLive = data[0]?.is_live ?? true;
+                const marketStatus = data[0]?.market_status ?? 'Market Open';
+
+                container.innerHTML = data.map((idx, i) => {
+                    const up = idx.change_pct >= 0;
+                    const accentColor = accents[i];
+                    const bgGrad = `linear-gradient(135deg, ${accentColor}08 0%, transparent 60%)`;
+                    // If not live, change_pct is 0.00
+                    const changeVal = !isLive ? 0.0 : idx.change_pct;
+                    const pctText = (changeVal > 0 ? '+' : '') + changeVal.toFixed(2) + '%';
+                    const pctBg = isLive && changeVal > 0
+                        ? 'background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.3)'
+                        : isLive && changeVal <= 0
+                        ? 'background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.3)'
+                        : 'background:rgba(251,191,36,0.12);color:#fbbf24;border:1px solid rgba(251,191,36,0.3)';
+                        
+                    const priceFmt = idx.price !== null
+                        ? idx.price.toLocaleString('en-IN', {minimumFractionDigits:2, maximumFractionDigits:2})
+                        : '—';
+
+                    // Live dot vs closed label
+                    const statusBadge = isLive
+                        ? `<span class="live-dot w-1.5 h-1.5 rounded-full inline-block" style="background:${accentColor}"></span>`
+                        : `<span class="text-[8px] font-bold tracking-wider px-1.5 py-0.5 rounded" style="background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid rgba(251,191,36,0.3)">PREV CLOSE</span>`;
+
+                    return `
+                        <div class="index-card glass-panel rounded-2xl p-4 cursor-default"
+                             style="--card-accent:${accentColor};background:${bgGrad};">
+                            <div class="flex items-center justify-between mb-2">
+                                <span class="text-[9px] font-bold tracking-[0.15em] text-slate-400 uppercase">${idx.name}</span>
+                                ${statusBadge}
+                            </div>
+                            <div class="text-xl font-display font-black text-white tracking-tight mb-2">${priceFmt}</div>
+                            <div class="flex items-center justify-between">
+                                <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold" style="${pctBg}">
+                                    ${changeVal > 0 ? '&#9650;' : changeVal < 0 ? '&#9660;' : '&mdash;'} ${pctText}
+                                </div>
+                                <div class="text-[8px] font-mono text-slate-500 uppercase">${!isLive ? marketStatus : ''}</div>
+                            </div>
+                        </div>`;
+                }).join('');
+            } catch(e) { console.error('Indices fetch failed', e); }
+        }
+
         window.onload = () => {
             playInitialWelcome();
             checkAuthStatus();
             fetchLiveNews();
+            fetchIndices();
             // Refresh live prices & status every 60 seconds
             setInterval(fetchLiveNews, 60000);
+            setInterval(fetchIndices, 60000);
         };
 
         // Three.js particle background

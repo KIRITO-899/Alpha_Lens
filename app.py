@@ -57,6 +57,10 @@ def init_news_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    try:
+        c.execute("ALTER TABLE news ADD COLUMN category TEXT DEFAULT 'General'")
+    except sqlite3.OperationalError:
+        pass
     c.execute('''
         CREATE TABLE IF NOT EXISTS stock_impact (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -118,50 +122,55 @@ def ai_news_worker():
             try:
                 feed = feedparser.parse(url)
                 # Get top 3 latest news from each source
-                for entry in feed.entries[:3]:
+                for entry in feed.entries[:15]:  # Deeper scrape to avoid missing updates
                     raw_articles.append({
                         "headline": entry.title,
                         "time": entry.published if hasattr(entry, 'published') else "Just Now"
                     })
             except Exception as e:
                 print(f"RSS Error on {url}: {e}")
-
+        
+        if raw_articles:
+            print(f"📡 Scraped {len(raw_articles)} headlines. Analyzing with Gemini...")
+        
         analyzed_news = []
         for article in raw_articles:
             headline = article['headline']
             prompt = f"""
-            You are a Tier-1 Quantitative Macro Analyst at a top hedge fund. Your job is to find HIGH-CONFIDENCE trading signals from live Indian market news.
+            Identify high-impact news and categorize it accurately.
 
-            Analyze this headline: '{headline}'
+            Headline: '{headline}'
 
-            STRICT RULES:
-            1. If this is a generic, repetitive, or non-impactful news story, return EXACTLY: {{"ignore": true}}
-            2. ALL analysis MUST STRICTLY be focused on the INDIAN economy and Indian stock market. If it does not directly affect India, return {{"ignore": true}}.
-            3. Only analyze MAJOR events: RBI/SEBI policy changes, budget announcements, FII/DII activity, sector-specific disruptions, major corporate earnings surprises, geopolitical events hitting Indian markets, or global macro events with direct India impact.
-            4. ALWAYS append '.NS' (NSE) or '.BO' (BSE) to all stock tickers. Use only real, well-known NSE/BSE listed companies.
-            5. 'estimated_change_percent' MUST be a realistic number: use 0.5-1.5 for slight moves, 2-4 for major moves. DO NOT use fantasy numbers.
-            6. 'impact' MUST be one of exactly these four values: "BULLISH", "SLIGHTLY BULLISH", "BEARISH", or "SLIGHTLY BEARISH". Choose the MOST PRECISE one:
-               - BULLISH: Clear positive catalyst, stock likely to rally 2%+
-               - SLIGHTLY BULLISH: Mild positive sentiment, expected move 0.5%-1.5%
-               - BEARISH: Clear negative catalyst, stock likely to fall 2%+
-               - SLIGHTLY BEARISH: Mild negative sentiment, expected move -0.5% to -1.5%
-            7. 'view' MUST reflect conviction: use "High Conviction" for BULLISH/BEARISH, and "Moderate Conviction" for SLIGHTLY BULLISH/SLIGHTLY BEARISH.
-            8. Identify 1-4 most directly impacted stocks. Do NOT add stocks with tenuous connections.
-            9. 'reason' must be a specific, single-sentence explanation of WHY this stock moves due to this exact news event.
+            STRICT CATEGORIZATION RULES (Choose ONE):
+            - "Finance": Stock market trends, RBI policy, banking, macroeconomics, Sensex/Nifty, currency.
+            - "Business": Company specific news (mergers, earnings, IPOs, management), startup news, industries.
+            - "Technology": Tech launches, AI, gadgets, software.
+            - "Politics": Government decisions, elections, policy shifts (not purely economic).
+            - "World": Global events, international politics, wars.
+            - "General": Miscellaneous news ONLY if none of the above fit. DO NOT use this for market/corporate news.
 
-            Output STRICTLY as valid JSON:
+            OTHER RULES:
+            1. If garbage/ad, set "ignore" to true.
+            2. If it directly impacts the Indian stock market, identify 1-4 NSE/BSE tickers (ticker.NS or ticker.BO). 
+            3. If no specific stock impact, leave "affected_stocks" as [].
+            4. Realistic 'estimated_change_percent' only (0.5 for small move, 2-4 for major).
+            5. 'impact': BULLISH | SLIGHTLY BULLISH | BEARISH | SLIGHTLY BEARISH.
+            6. 'view': High Conviction | Moderate Conviction.
+
+            Output STRICT valid JSON:
             {{
               "ignore": false,
+              "category": "Finance",
               "headline": "{headline}",
-              "aam_janta_translation": "In 2 simple sentences, explain what this news means for a retail investor's daily life and portfolio in India.",
-              "macro_pathway": ["Exact Trigger Event", "Direct Market Impact", "Second-Order Ripple Effect", "Final Macro Outcome for India"],
+              "aam_janta_translation": "Summary in 2 simple sentences.",
+              "macro_pathway": ["Trigger", "Direct Impact", "Ripple", "Result"],
               "affected_stocks": [
                 {{
                     "ticker": "TICKER.NS",
                     "impact": "BULLISH | SLIGHTLY BULLISH | BEARISH | SLIGHTLY BEARISH",
                     "estimated_change_percent": 2.5,
                     "view": "High Conviction | Moderate Conviction",
-                    "reason": "One specific sentence on why this stock is directly impacted."
+                    "reason": "Why?"
                 }}
               ]
             }}
@@ -184,9 +193,9 @@ def ai_news_worker():
                         c.execute("SELECT id FROM news WHERE headline = ?", (headline,))
                         if not c.fetchone():
                             c.execute('''
-                                INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway)
-                                VALUES (?, ?, ?, ?)
-                            ''', (headline, analysis['news_time'], analysis.get('aam_janta_translation', ''), json.dumps(analysis.get('macro_pathway', []))))
+                                INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
+                                VALUES (?, ?, ?, ?, ?)
+                            ''', (headline, analysis['news_time'], analysis.get('aam_janta_translation', ''), json.dumps(analysis.get('macro_pathway', [])), analysis.get('category', 'General')))
                             
                             news_id = c.lastrowid
                             
@@ -298,6 +307,64 @@ yf_thread.start()
 @app.route('/')
 def home():
     return render_template('index.html')
+
+@app.route('/api/indices', methods=['GET'])
+def get_indices():
+    from datetime import timezone, timedelta as td
+    ist = timezone(td(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    weekday = now_ist.weekday()  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+    hour, minute = now_ist.hour, now_ist.minute
+
+    market_open = (
+        weekday < 5 and
+        ((hour == 9 and minute >= 15) or (10 <= hour <= 14) or
+         (hour == 15 and minute <= 30))
+    )
+
+    if market_open:
+        price_label = "Live"
+        market_status = "Market Open"
+    else:
+        price_label = "Prev. Close"
+        if weekday >= 5:
+            market_status = "Market Closed · Opens Mon 9:15 AM IST"
+        elif hour < 9 or (hour == 9 and minute < 15):
+            market_status = "Market Closed · Opens at 9:15 AM IST"
+        else:
+            market_status = "Market Closed · Closed at 3:30 PM IST"
+
+    indices = [
+        {"symbol": "^NSEI",    "name": "NIFTY 50"},
+        {"symbol": "^BSESN",   "name": "SENSEX"},
+        {"symbol": "^NSEBANK", "name": "BANK NIFTY"},
+        {"symbol": "^NSMIDCP", "name": "MIDCAP NIFTY"},
+    ]
+    result = []
+    for idx in indices:
+        try:
+            t = yf.Ticker(idx["symbol"])
+            info = t.fast_info
+            price = info.last_price
+            prev_close = info.previous_close
+            # When market is closed show 0% change — price shown is last recorded price
+            if market_open and prev_close and prev_close > 0:
+                change_pct = ((price - prev_close) / prev_close) * 100
+            else:
+                change_pct = 0.0
+            result.append({
+                "name": idx["name"],
+                "price": round(price, 2),
+                "change_pct": round(change_pct, 2),
+                "is_live": market_open,
+                "price_label": price_label,
+                "market_status": market_status
+            })
+        except Exception as e:
+            result.append({"name": idx["name"], "price": None, "change_pct": 0.0,
+                           "is_live": market_open, "price_label": price_label,
+                           "market_status": market_status})
+    return jsonify(result)
 
 @app.route('/api/news/top', methods=['GET'])
 def get_top_news():
