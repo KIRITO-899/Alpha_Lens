@@ -130,27 +130,38 @@ def ai_news_worker():
         for article in raw_articles:
             headline = article['headline']
             prompt = f"""
-            You are a Tier-1 Quantitative Macro Analyst. Analyze this live news headline: '{headline}'
-            
-            RULES:
-            1. If it is a generic/boring news story, return EXACTLY: {{"ignore": true}}
-            2. ALL analysis MUST STRICTLY be focused on the INDIAN economy and Indian stocks. If it does not affect India, ignore it.
-            3. If it is a MAJOR systemic event, policy change, or highly impactful corporate action affecting India, analyze it.
-            4. Append '.NS' or '.BO' to stock tickers to represent NSE or BSE.
-            
-            Output strictly as JSON:
+            You are a Tier-1 Quantitative Macro Analyst at a top hedge fund. Your job is to find HIGH-CONFIDENCE trading signals from live Indian market news.
+
+            Analyze this headline: '{headline}'
+
+            STRICT RULES:
+            1. If this is a generic, repetitive, or non-impactful news story, return EXACTLY: {{"ignore": true}}
+            2. ALL analysis MUST STRICTLY be focused on the INDIAN economy and Indian stock market. If it does not directly affect India, return {{"ignore": true}}.
+            3. Only analyze MAJOR events: RBI/SEBI policy changes, budget announcements, FII/DII activity, sector-specific disruptions, major corporate earnings surprises, geopolitical events hitting Indian markets, or global macro events with direct India impact.
+            4. ALWAYS append '.NS' (NSE) or '.BO' (BSE) to all stock tickers. Use only real, well-known NSE/BSE listed companies.
+            5. 'estimated_change_percent' MUST be a realistic number: use 0.5-1.5 for slight moves, 2-4 for major moves. DO NOT use fantasy numbers.
+            6. 'impact' MUST be one of exactly these four values: "BULLISH", "SLIGHTLY BULLISH", "BEARISH", or "SLIGHTLY BEARISH". Choose the MOST PRECISE one:
+               - BULLISH: Clear positive catalyst, stock likely to rally 2%+
+               - SLIGHTLY BULLISH: Mild positive sentiment, expected move 0.5%-1.5%
+               - BEARISH: Clear negative catalyst, stock likely to fall 2%+
+               - SLIGHTLY BEARISH: Mild negative sentiment, expected move -0.5% to -1.5%
+            7. 'view' MUST reflect conviction: use "High Conviction" for BULLISH/BEARISH, and "Moderate Conviction" for SLIGHTLY BULLISH/SLIGHTLY BEARISH.
+            8. Identify 1-4 most directly impacted stocks. Do NOT add stocks with tenuous connections.
+            9. 'reason' must be a specific, single-sentence explanation of WHY this stock moves due to this exact news event.
+
+            Output STRICTLY as valid JSON:
             {{
               "ignore": false,
               "headline": "{headline}",
-              "aam_janta_translation": "Explain the macro impact simply for a retail trader in 2 sentences.",
-              "macro_pathway": ["Trigger Event", "Primary Hit", "Ripple Effect", "Macro Outcome"],
+              "aam_janta_translation": "In 2 simple sentences, explain what this news means for a retail investor's daily life and portfolio in India.",
+              "macro_pathway": ["Exact Trigger Event", "Direct Market Impact", "Second-Order Ripple Effect", "Final Macro Outcome for India"],
               "affected_stocks": [
                 {{
                     "ticker": "TICKER.NS",
-                    "impact": "BULLISH or BEARISH",
+                    "impact": "BULLISH | SLIGHTLY BULLISH | BEARISH | SLIGHTLY BEARISH",
                     "estimated_change_percent": 2.5,
-                    "view": "High Conviction",
-                    "reason": "Why this specific stock moves."
+                    "view": "High Conviction | Moderate Conviction",
+                    "reason": "One specific sentence on why this stock is directly impacted."
                 }}
               ]
             }}
@@ -245,18 +256,23 @@ def yfinance_worker():
                     diff_percent = ((current_price - base_price) / base_price) * 100
                     
                     new_status = 'Active View'
-                    is_bullish = 'bullish' in impact.lower()
+                    impact_lower = impact.lower()
+                    is_bullish = 'bullish' in impact_lower
+                    is_slightly = 'slightly' in impact_lower
+                    
+                    # For slightly bullish/bearish, use 1% target/loss thresholds
+                    target_pct = 1.0 if is_slightly else 2.0
                     
                     if is_bullish:
-                        if diff_percent >= 2.0:
-                            new_status = 'Profit Target 2% Hit'
-                        elif diff_percent <= -2.0:
-                            new_status = 'Stop Loss 2% Hit'
+                        if diff_percent >= target_pct:
+                            new_status = 'Predicted Target Hit'
+                        elif diff_percent <= -target_pct:
+                            new_status = 'Reacted Against Prediction'
                     else: # bearish
-                        if diff_percent <= -2.0: # stock dropped 2%, meaning bearish call gained 2%
-                            new_status = 'Profit Target 2% Hit'
-                        elif diff_percent >= 2.0:
-                            new_status = 'Stop Loss 2% Hit'
+                        if diff_percent <= -target_pct: # stock dropped, bearish call correct
+                            new_status = 'Predicted Target Hit'
+                        elif diff_percent >= target_pct:
+                            new_status = 'Reacted Against Prediction'
                             
                     c.execute("UPDATE stock_impact SET current_price = ?, status = ? WHERE id = ?", (current_price, new_status, stock_id))
                 except Exception as e:
@@ -267,7 +283,7 @@ def yfinance_worker():
         except Exception as e:
             print("YFinance Worker Error:", e)
             
-        time.sleep(120) # Update prices every 2 minutes
+        time.sleep(60) # Update prices every 1 minute
 
 # Start background threads
 engine_thread = threading.Thread(target=ai_news_worker, daemon=True)

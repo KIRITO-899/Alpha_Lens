@@ -53,7 +53,7 @@
             </div>
         </div>
         <div id="welcome-subtitle" class="mt-8 overflow-hidden opacity-0">
-            <p class="text-slate-400 font-mono tracking-[0.5em] text-xs uppercase">Initializing Quantum AI...</p>
+            <p class="text-slate-400 font-mono tracking-[0.5em] text-xs uppercase">Initializing ALPHA LENS...</p>
         </div>
     </div>
 
@@ -223,15 +223,15 @@
                     <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden stock-table-container transition-opacity duration-300">
                         <div class="flex justify-between items-end mb-6">
                             <h2 class="text-xl font-display font-bold">Stocks Affected by this News</h2>
-                            <span class="text-xs font-mono text-slate-400">Sorted by AI</span>
                         </div>
                         <div class="overflow-x-auto">
                             <table class="w-full text-left text-sm whitespace-nowrap">
                                 <thead class="text-[10px] uppercase tracking-widest text-slate-400 border-b border-white/10">
                                     <tr>
                                         <th class="pb-3 font-semibold">Asset / AI View</th>
-                                        <th class="pb-3 font-semibold text-right">Proj. Est. Price</th>
-                                        <th class="pb-3 font-semibold text-right">Trend / AI Impact</th>
+                                        <th class="pb-3 font-semibold text-right">At News Time</th>
+                                        <th class="pb-3 font-semibold text-right">Live Price / Δ%</th>
+                                        <th class="pb-3 font-semibold text-right">ALPHA LENS Signal</th>
                                     </tr>
                                 </thead>
                                 <tbody id="dynamic-stock-table-body" class="divide-y divide-white/5 font-display">
@@ -699,6 +699,21 @@
             if (globalNewsData.length > 0) loadArticleIntoMainViewer(globalNewsData[0]);
         }
 
+        function getImpactColorClasses(impact) {
+            const i = (impact || '').toLowerCase();
+            if (i === 'bullish') return "bg-green-800/60 text-green-300 border-green-500/80 shadow-[0_0_15px_rgba(34,197,94,0.3)]";
+            if (i === 'slightly bullish') return "bg-emerald-900/50 text-emerald-300 border-emerald-500/60 shadow-[0_0_10px_rgba(52,211,153,0.2)]";
+            if (i === 'bearish') return "bg-red-800/60 text-red-300 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.3)]";
+            if (i === 'slightly bearish') return "bg-orange-900/50 text-orange-300 border-orange-500/60 shadow-[0_0_10px_rgba(251,146,60,0.2)]";
+            return "bg-slate-800/60 text-slate-300 border-white/10";
+        }
+
+        function getStatusBadge(status) {
+            if (status === 'Predicted Target Hit') return { text: '🎯 Predicted Target Hit', cls: 'text-green-400' };
+            if (status === 'Reacted Against Prediction') return { text: '⚠️ Reacted Against Prediction', cls: 'text-red-400' };
+            return { text: '● Active View', cls: 'text-cyan-400' };
+        }
+
         function loadArticleIntoMainViewer(newsItem) {
             document.getElementById('main-headline-text').innerText = newsItem.headline;
             document.getElementById('aam-janta-text').innerText = newsItem.aam_janta_translation || "Analyzing impact...";
@@ -711,26 +726,33 @@
             const tableBody = document.getElementById('dynamic-stock-table-body');
             tableBody.innerHTML = ''; 
             if(!newsItem.affected_stocks || newsItem.affected_stocks.length === 0) {
-                tableBody.innerHTML = '<tr><td colspan="3" class="py-4 text-center text-slate-500">No specific stocks identified for this news.</td></tr>';
+                tableBody.innerHTML = '<tr><td colspan="4" class="py-4 text-center text-slate-500">No specific stocks identified for this news.</td></tr>';
                 return;
             }
             newsItem.affected_stocks.forEach(stock => {
-                let colorClasses = stock.impact.toLowerCase().includes("bullish") ? "bg-green-800/60 text-green-300 border-green-500/80 shadow-[0_0_15px_rgba(34,197,94,0.3)]" : 
-                                   stock.impact.toLowerCase().includes("bearish") ? "bg-red-800/60 text-red-300 border-red-500/80 shadow-[0_0_15px_rgba(239,68,68,0.3)]" : 
-                                   "bg-slate-800/60 text-slate-300 border-white/10";
-                const basePrice = Math.floor(Math.random() * 2000) + 500;
-                let estChange = stock.estimated_change_percent || 0;
-                let finalPrice = stock.impact.toLowerCase().includes("bullish") ? basePrice + (basePrice * estChange / 100) : basePrice - (basePrice * estChange / 100);
+                const colorClasses = getImpactColorClasses(stock.impact);
+                const basePrice = parseFloat(stock.base_price);
+                const currentPrice = parseFloat(stock.current_price);
+                const hasPrice = !isNaN(basePrice) && basePrice > 0;
+                const hasCurrent = !isNaN(currentPrice) && currentPrice > 0;
+                const diffPct = hasPrice && hasCurrent ? ((currentPrice - basePrice) / basePrice * 100) : null;
+                const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
+                const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
+                const statusBadge = getStatusBadge(stock.status);
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-white/[0.04] transition group";
                 tr.innerHTML = `
                     <td class="py-4">
                         <div class="font-bold text-white text-base tracking-wide">${stock.ticker}</div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-widest mt-1 bg-black/40 inline-block px-2 py-0.5 rounded border border-white/5">${stock.view || 'Pending'}</div>
+                        <div class="text-[9px] font-bold mt-1 ${statusBadge.cls}">${statusBadge.text}</div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-widest mt-0.5 bg-black/40 inline-block px-2 py-0.5 rounded border border-white/5">${stock.view || 'Pending'}</div>
                     </td>
                     <td class="py-4 text-right">
-                        <div class="text-slate-400 font-mono text-xs line-through mb-0.5">₹${basePrice.toFixed(2)}</div>
-                        <div class="text-white font-bold font-mono text-sm">₹${finalPrice.toFixed(2)}</div>
+                        <div class="text-white font-bold font-mono text-sm">${hasPrice ? '₹' + basePrice.toFixed(2) : '—'}</div>
+                    </td>
+                    <td class="py-4 text-right">
+                        <div class="text-white font-bold font-mono text-sm">${hasCurrent ? '₹' + currentPrice.toFixed(2) : '—'}</div>
+                        <div class="font-mono text-xs font-bold ${diffColorCls}">${diffPctStr}</div>
                     </td>
                     <td class="py-4 text-right">
                         <span class="border px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-widest ${colorClasses}">${stock.impact}</span>
@@ -809,25 +831,47 @@
                 return;
             }
             allStocks.forEach(stock => {
-                const isBull = stock.impact.toLowerCase().includes('bull');
-                let colorClasses = isBull ? "bg-green-900/20 border-green-500/40 shadow-[0_0_15px_rgba(34,197,94,0.1)]" : "bg-red-900/20 border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.1)]";
-                let textCol = isBull ? "text-green-400" : "text-red-400";
-                const bp = stock.base_price ? `₹${parseFloat(stock.base_price).toFixed(2)}` : '—';
-                const cp = stock.current_price ? `₹${parseFloat(stock.current_price).toFixed(2)}` : '—';
-                const statusColor = stock.status === 'Profit Target 2% Hit' ? 'text-green-400' : stock.status === 'Stop Loss 2% Hit' ? 'text-red-400' : 'text-slate-400';
+                const impact = (stock.impact || '').toLowerCase();
+                const isBull = impact.includes('bullish');
+                const isSlightly = impact.includes('slightly');
+                let colorClasses, textCol;
+                if (impact === 'bullish') { colorClasses = "bg-green-900/20 border-green-500/40 shadow-[0_0_15px_rgba(34,197,94,0.1)]"; textCol = "text-green-400"; }
+                else if (impact === 'slightly bullish') { colorClasses = "bg-emerald-900/15 border-emerald-500/30 shadow-[0_0_10px_rgba(52,211,153,0.08)]"; textCol = "text-emerald-400"; }
+                else if (impact === 'slightly bearish') { colorClasses = "bg-orange-900/15 border-orange-500/30 shadow-[0_0_10px_rgba(251,146,60,0.08)]"; textCol = "text-orange-400"; }
+                else { colorClasses = "bg-red-900/20 border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.1)]"; textCol = "text-red-400"; }
+
+                const bp = parseFloat(stock.base_price);
+                const cp = parseFloat(stock.current_price);
+                const hasPrice = !isNaN(bp) && bp > 0;
+                const hasCurrent = !isNaN(cp) && cp > 0;
+                const diffPct = hasPrice && hasCurrent ? ((cp - bp) / bp * 100) : null;
+                const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
+                const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
+
+                const statusBadge = getStatusBadge(stock.status);
                 const card = document.createElement('div');
                 card.className = `p-5 rounded-2xl border ${colorClasses} hover:scale-[1.01] transition-all cursor-default relative overflow-hidden`;
                 card.innerHTML = `
                     <div class="flex justify-between items-start mb-3">
                         <div>
                             <h3 class="text-xl font-bold font-display text-white tracking-widest">${stock.ticker}</h3>
-                            <span class="text-[9px] uppercase font-bold ${statusColor}">${stock.status || 'Active View'}</span>
+                            <span class="text-[9px] uppercase font-bold ${statusBadge.cls}">${statusBadge.text}</span>
                         </div>
                         <span class="text-[10px] uppercase font-bold px-2 py-1 rounded border ${textCol} border-current">${stock.impact}</span>
                     </div>
-                    <div class="flex justify-between text-xs font-mono mb-3">
-                        <span class="text-slate-500">Entry <span class="text-slate-300">${bp}</span></span>
-                        <span class="text-slate-500">Live <span class="${textCol} font-bold">${cp}</span></span>
+                    <div class="grid grid-cols-3 gap-2 text-xs font-mono mb-3 bg-black/30 rounded-lg p-3">
+                        <div class="text-center">
+                            <div class="text-slate-500 text-[9px] uppercase mb-1">At News</div>
+                            <div class="text-slate-300 font-bold">${hasPrice ? '₹' + bp.toFixed(2) : '—'}</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-slate-500 text-[9px] uppercase mb-1">Live Price</div>
+                            <div class="text-white font-bold">${hasCurrent ? '₹' + cp.toFixed(2) : '—'}</div>
+                        </div>
+                        <div class="text-center">
+                            <div class="text-slate-500 text-[9px] uppercase mb-1">Change</div>
+                            <div class="font-bold ${diffColorCls}">${diffPctStr}</div>
+                        </div>
                     </div>
                     <p class="text-xs text-slate-300 leading-relaxed mb-3 line-clamp-2">${stock.reason || 'Analyzing macro flow...'}</p>
                     <div class="flex items-center gap-1 text-[9px] text-slate-500 border-t border-white/10 pt-2">
@@ -870,6 +914,8 @@
             playInitialWelcome();
             checkAuthStatus();
             fetchLiveNews();
+            // Refresh live prices & status every 60 seconds
+            setInterval(fetchLiveNews, 60000);
         };
 
         // Three.js particle background
