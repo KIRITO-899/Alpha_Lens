@@ -399,8 +399,8 @@
                     <div id="auth-lock" style="width:48px;height:48px;border:2px solid #06b6d4;border-radius:50%;display:flex;align-items:center;justify-content:center;margin-bottom:20px;opacity:0;transform:scale(0.5);box-shadow:0 0 20px rgba(6,182,212,0.4);">
                         <svg id="auth-icon-svg" style="width:24px;height:24px;color:#06b6d4;" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
                     </div>
-                    <div id="auth-status" style="font-family:'Space Grotesk',sans-serif;font-size:28px;font-weight:900;color:#06b6d4;letter-spacing:0.3em;text-transform:uppercase;opacity:0;">
-                        Authorizing...
+                    <div id="auth-status" style="font-family:'Space Grotesk',sans-serif;font-size:24px;font-weight:900;color:#06b6d4;letter-spacing:0.1em;text-transform:uppercase;opacity:0;">
+                        Authenticating...
                     </div>
                     <div style="width:100%;height:2px;background:rgba(6,182,212,0.2);margin-top:15px;position:relative;overflow:hidden;border-radius:2px;">
                         <div id="auth-bar" style="position:absolute;left:0;top:0;height:100%;width:0%;background:#06b6d4;box-shadow:0 0 10px #06b6d4;"></div>
@@ -418,18 +418,20 @@
             tl.to("#auth-lock", { opacity: 1, scale: 1, duration: 0.5, ease: "back.out(1.7)" })
               .to("#auth-status", { opacity: 1, duration: 0.3 }, "-=0.2")
               .to("#auth-bar", { width: "100%", duration: 1.2, ease: "power2.inOut" })
-              // Flash success!
               .add(() => {
-                 document.getElementById('auth-status').innerText = "LOGIN AUTHENTICATED";
+                 const statusEl = document.getElementById('auth-status');
+                 statusEl.style.color = '#06b6d4'; // Consistent brand cyan for "WELCOME TO"
+                 statusEl.style.fontSize = '20px'; // Adjust for logo fit
+                 statusEl.innerHTML = `WELCOME TO <span class="bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-blue-400 to-cyan-300 ml-2">ALPHA</span><span class="text-white ml-2">LENS</span>`;
+                 
                  document.getElementById('auth-icon-svg').innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path>';
                  
-                 // Switch colors to intense green
-                 gsap.set(["#auth-lock", "#auth-bg-top", "#auth-bg-bottom"], { borderColor: '#10b981' });
-                 gsap.set("#auth-icon-svg", { color: '#10b981' });
-                 gsap.set("#auth-status", { color: '#10b981' });
-                 gsap.set("#auth-bar", { background: '#10b981', boxShadow: "0 0 15px #10b981" });
-                 gsap.set("#auth-glow", { background: '#10b981', boxShadow: "0 0 50px 20px rgba(16,185,129,0.8)" });
-                 gsap.set("#auth-lock", { boxShadow: "0 0 30px rgba(16,185,129,0.6)" });
+                 // Switch colors to brand cyan for consistency (removing green)
+                 gsap.set(["#auth-lock", "#auth-bg-top", "#auth-bg-bottom"], { borderColor: '#06b6d4' });
+                 gsap.set("#auth-icon-svg", { color: '#06b6d4' });
+                 gsap.set("#auth-bar", { background: '#06b6d4', boxShadow: "0 0 15px #06b6d4" });
+                 gsap.set("#auth-glow", { background: '#06b6d4', boxShadow: "0 0 50px 20px rgba(6,182,212,0.8)" });
+                 gsap.set("#auth-lock", { boxShadow: "0 0 30px rgba(6,182,212,0.6)" });
               })
               // Scale lock & text up sharply
               .to("#auth-text-container", { scale: 1.1, duration: 0.15, ease: "power2.out" })
