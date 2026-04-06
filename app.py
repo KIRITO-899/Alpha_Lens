@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 app = Flask(__name__, template_folder='.')
 app.secret_key = "super_secret_alpha_lens_key"
 
+import performance_report
+
 # In-memory store for OTPs
 OTP_STORE = {}
 SENDGRID_API_KEY = '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'
@@ -531,5 +533,9 @@ def logout():
     return jsonify({"message": "Logged out"}), 200
 
 if __name__ == '__main__':
+    # Run performance check
+    import performance_report
+    performance_report.run_performance_check()
+
     # Threaded=True allows the background AI loop to run alongside the website
     app.run(debug=True, port=5000, threaded=True)
