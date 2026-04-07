@@ -1,5 +1,10 @@
-news_cache.db-shm
-news_cache.db-wal
-
+news_cache.db*
+users.db
+*.pyc
 __pycache__/
 venv/
+*.log
+backtest_results.json
+news_dataset_mini.csv
+verification_log.json
+temp_report.txt

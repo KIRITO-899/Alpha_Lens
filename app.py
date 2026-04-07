@@ -9,18 +9,27 @@ from werkzeug.security import generate_password_hash
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import feedparser
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 import yfinance as yf
 import logging
-yf.set_tz_cache_location("venv/yf_cache") # Optional, but helps cleanly separate cache
+yf.set_tz_cache_location("venv/yf_cache")
 logger = logging.getLogger('yfinance')
 logger.disabled = True
 logger.propagate = False
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from technical_analysis import (
+    get_stock_technical_context,
+    format_technical_context_for_prompt,
+    get_market_regime
+)
 
 app = Flask(__name__, template_folder='.')
 app.secret_key = "super_secret_alpha_lens_key"
+
+# Minimum AI confidence to accept a prediction
+MIN_CONFIDENCE = 65
 
 import performance_report
 
@@ -74,13 +83,17 @@ def init_news_db():
             reason TEXT,
             base_price REAL,
             current_price REAL,
-            status TEXT DEFAULT 'Active View', -- 'Active View', 'Profit Target Hit', 'Stop Loss Hit'
+            status TEXT DEFAULT 'Active View',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(news_id) REFERENCES news(id)
         )
     ''')
     try:
         c.execute("ALTER TABLE stock_impact ADD COLUMN confidence_score INTEGER DEFAULT 80")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE stock_impact ADD COLUMN technical_context TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
     conn.commit()
@@ -97,19 +110,18 @@ LIVE_NEWS_CACHE = []
 
 # Your Gemini API Keys for rotation
 API_KEYS = [
-    "AIzaSyBpbzop1zP_7fLml_09Oo7aFk8W1jWF9SQ",
-    "AIzaSyABS1FGUxLRNcekIfquMcIKcGVjKd-bGq4",
-    "AIzaSyDkS2vjNmGCQXwqUjhYx5dMdP_qwwQlqTU"
+    "AIzaSyAX3Tj_yErU_aP19kXlmGDa-URAYGEYojc",
 ]
 current_key_idx = 0
-genai.configure(api_key=API_KEYS[current_key_idx])
-model = genai.GenerativeModel('gemini-2.5-flash')
+client = genai.Client(api_key=API_KEYS[current_key_idx])
+MODEL_NAME = 'gemini-2.5-flash'
 
-# Top Tier Indian Financial RSS Feeds
+# Top Tier Indian Financial RSS Feeds (Targeted for Stock-Specific News)
 RSS_SOURCES = [
-    "https://www.livemint.com/rss/markets", 
-    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-    "https://www.moneycontrol.com/rss/MCtopnews.xml"
+    "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms",   # ET Stocks in News
+    "https://economictimes.indiatimes.com/markets/stocks/earnings/rssfeeds/837588974.cms", # ET Earnings
+    "https://www.moneycontrol.com/rss/buzzingstocks.xml", # MC Buzzing Stocks
+    "https://www.livemint.com/rss/markets"
 ]
 
 def clean_json(raw_text):
@@ -119,16 +131,16 @@ def clean_json(raw_text):
     return json.loads(cleaned.strip())
 
 def ai_news_worker():
-    global LIVE_NEWS_CACHE, current_key_idx, model
-    print("🚀 Alpha Lens Background Engine Started. Fetching LiveMint, ET & MoneyControl...")
+    global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME
+    print("🚀 Alpha Lens v2.0 Background Engine Started. Fetching LiveMint, ET & MoneyControl...")
+    print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | Technical Confirmation ON")
     
     while True:
         raw_articles = []
         for url in RSS_SOURCES:
             try:
                 feed = feedparser.parse(url)
-                # Get top 3 latest news from each source
-                for entry in feed.entries[:15]:  # Deeper scrape to avoid missing updates
+                for entry in feed.entries[:15]:
                     raw_articles.append({
                         "headline": entry.title,
                         "time": entry.published if hasattr(entry, 'published') else "Just Now"
@@ -137,13 +149,29 @@ def ai_news_worker():
                 print(f"RSS Error on {url}: {e}")
         
         if raw_articles:
-            print(f"📡 Scraped {len(raw_articles)} headlines. Analyzing with Gemini...")
+            print(f"📡 Scraped {len(raw_articles)} headlines. Analyzing with Gemini + Technical Confirmation...")
+
+        # Get overall market regime for context
+        market_regime = get_market_regime()
         
         analyzed_news = []
         for article in raw_articles:
             headline = article['headline']
+            
+            # --- 1. EARLY EXIT: Check if headline is already processed ---
+            conn = connect_news_db()
+            c = conn.cursor()
+            c.execute("SELECT id FROM news WHERE headline = ?", (headline,))
+            if c.fetchone():
+                conn.close()
+                continue
+            conn.close()
+            
             prompt = f"""
+            You are an elite quantitative portfolio manager at a top-tier Indian hedge fund.
             Identify high-impact news and categorize it accurately.
+            
+            Current Market Regime: {market_regime}
 
             Headline: '{headline}'
 
@@ -155,14 +183,17 @@ def ai_news_worker():
             - "World": Global events, international politics, wars.
             - "General": Miscellaneous news ONLY if none of the above fit. DO NOT use this for market/corporate news.
 
-            OTHER RULES:
+            CRITICAL HIGH-WIN-RATE RULES:
             1. If garbage/ad, set "ignore" to true.
-            2. If it directly impacts the Indian stock market, identify 1-4 NSE/BSE tickers (ticker.NS or ticker.BO). 
-            3. If no specific stock impact, leave "affected_stocks" as [].
-            4. Realistic 'estimated_change_percent' only (0.5 for small move, 2-4 for major).
-            5. 'impact': BULLISH | SLIGHTLY BULLISH | BEARISH | SLIGHTLY BEARISH.
-            6. 'view': High Conviction | Moderate Conviction.
-            7. 'confidence_score': An integer (0-100) reflecting the clarity of the news impact.
+            2. If the news is ambiguous, already priced in, or routine — DO NOT identify stocks. Leave "affected_stocks" as [].
+            3. Identify stocks when there is a highly probable directional edge from this news.
+            4. Maximum 1-3 stocks per news item — pick the best candidates.
+            5. 'impact': BULLISH or BEARISH only. NO SLIGHTLY variants — commit to a clear direction or skip.
+            6. 'view': High Conviction (confidence 80+) or Moderate Conviction (confidence 65-79).
+            7. 'confidence_score': Be realistic. 85+ for crystal-clear catalysts. 65-84 for strong probable signals. Below 65 means you should NOT be recommending this stock.
+            8. Think 2nd order: Crude crash → Short ONGC, Buy Paints. Rate hike → Short realty, Buy banks.
+            9. Consider if the move is "buy the rumour, sell the news".
+            10. **ONLY IDENTIFY INDIAN STOCKS LISTED ON THE NSE.** You MUST append '.NS' to the ticker symbol. Do NOT recommend foreign stocks like US tech companies (e.g., AVGO, AAPL).
 
             Output STRICT valid JSON:
             {{
@@ -174,11 +205,11 @@ def ai_news_worker():
               "affected_stocks": [
                 {{
                     "ticker": "TICKER.NS",
-                    "impact": "BULLISH | SLIGHTLY BULLISH | BEARISH | SLIGHTLY BEARISH",
+                    "impact": "BULLISH",
                     "estimated_change_percent": 2.5,
-                    "view": "High Conviction | Moderate Conviction",
-                    "confidence_score": 92,
-                    "reason": "Why?"
+                    "view": "High Conviction",
+                    "confidence_score": 85,
+                    "reason": "Clear 1-sentence reason"
                 }}
               ]
             }}
@@ -186,86 +217,156 @@ def ai_news_worker():
             
             success = False
             retries = 0
-            while not success and retries < 2:
+            while not success and retries < len(API_KEYS):
                 try:
-                    resp = model.generate_content(prompt, generation_config={"response_mime_type": "application/json"})
+                    resp = client.models.generate_content(
+                        model=MODEL_NAME, 
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json"
+                        )
+                    )
                     analysis = clean_json(resp.text)
-                    if not analysis.get("ignore", False):
-                        analysis['news_time'] = article['time']
-                        analyzed_news.append(analysis)
+                    
+                    conn = connect_news_db()
+                    c = conn.cursor()
+                    
+                    # Insert headline into DB regardless of result so we don't query Gemini again
+                    c.execute('''
+                        INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
+                        VALUES (?, ?, ?, ?, ?)
+                    ''', (headline, article['time'], analysis.get('aam_janta_translation', ''), json.dumps(analysis.get('macro_pathway', [])), analysis.get('category', 'General')))
+                    news_id = c.lastrowid
+                    
+                    if analysis.get("ignore", False):
+                        print(f"   🚮 Ignored {headline[:40]}... (Classified as garbage/no-edge)")
+                    else:
+                        filtered_stocks = []
+                        for stock in analysis.get('affected_stocks', []):
+                            conf = stock.get('confidence_score', 50)
+                            ticker_name = stock.get('ticker', 'UNKNOWN')
+                            if not ticker_name.endswith('.NS') and not ticker_name.endswith('.BO'):
+                                ticker_name += '.NS'
+                                stock['ticker'] = ticker_name
+
+                            if conf >= MIN_CONFIDENCE:
+                                filtered_stocks.append(stock)
+                            else:
+                                print(f"   🔴 Filtered out {ticker_name} — confidence {conf} < {MIN_CONFIDENCE}")
                         
-                        # --- INSERT INTO DB ---
-                        conn = connect_news_db()
-                        c = conn.cursor()
-                        # Check if headline already exists to avoid duplicates
-                        c.execute("SELECT id FROM news WHERE headline = ?", (headline,))
-                        if not c.fetchone():
-                            c.execute('''
-                                INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
-                                VALUES (?, ?, ?, ?, ?)
-                            ''', (headline, analysis['news_time'], analysis.get('aam_janta_translation', ''), json.dumps(analysis.get('macro_pathway', [])), analysis.get('category', 'General')))
-                            
-                            news_id = c.lastrowid
-                            
-                            # Add stocks with base prices
-                            for stock in analysis.get('affected_stocks', []):
+                        if len(filtered_stocks) == 0:
+                            print(f"   ⏭️ Skipped {headline[:40]}... (No high-conviction Indian stocks found)")
+                        else:
+                            saved_count = 0
+                            for stock in filtered_stocks:
                                 ticker = stock.get('ticker')
                                 base_price = 0.0
+                                tech_context_str = ""
+                                passed_filters = True
+                                
                                 try:
                                     tick_data = yf.Ticker(ticker)
                                     base_price = tick_data.fast_info.last_price
+                                    
+                                    tech_data = get_stock_technical_context(ticker)
+                                    if tech_data:
+                                        tech_context_str = json.dumps(tech_data)
+                                        impact_lower = stock.get('impact', '').lower()
+                                        range_pos = tech_data.get('range_position_52w', 0.5)
+                                        above_sma20 = tech_data.get('above_sma20')
+                                        
+                                        if 'bull' in impact_lower:
+                                            if above_sma20 is False:
+                                                print(f"   🔴 Trend Blocker rejected {ticker}: BELOW SMA20")
+                                                passed_filters = False
+                                            elif market_regime == "RISK_OFF":
+                                                print(f"   🔴 Regime Blocker rejected {ticker}: RISK_OFF market")
+                                                passed_filters = False
+                                            elif range_pos > 0.85:
+                                                print(f"   🔴 Exhaustion Blocker rejected {ticker}: Range {range_pos}")
+                                                passed_filters = False
+                                                
+                                        if 'bear' in impact_lower:
+                                            if above_sma20 is True:
+                                                print(f"   🔴 Trend Blocker rejected {ticker}: ABOVE SMA20")
+                                                passed_filters = False
+                                            elif market_regime == "RISK_ON":
+                                                print(f"   🔴 Regime Blocker rejected {ticker}: RISK_ON market")
+                                                passed_filters = False
+                                            elif range_pos < 0.15:
+                                                print(f"   🔴 Exhaustion Blocker rejected {ticker}: Range {range_pos}")
+                                                passed_filters = False
                                 except:
-                                    base_price = 100.0 # fallback
+                                    base_price = 100.0
                                 
-                                c.execute('''
-                                    INSERT INTO stock_impact (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                ''', (news_id, ticker, stock.get('impact'), stock.get('estimated_change_percent'), stock.get('view'), stock.get('reason'), base_price, base_price, stock.get('confidence_score', 80)))
-                            
-                            conn.commit()
-                            print(f"✅ AI Found Alpha & Saved to DB: {headline[:40]}...")
-                        conn.close()
-                        
+                                if passed_filters:
+                                    c.execute('''
+                                        INSERT INTO stock_impact (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    ''', (news_id, ticker, stock.get('impact'), stock.get('estimated_change_percent'), stock.get('view'), stock.get('reason'), base_price, base_price, stock.get('confidence_score', 80), tech_context_str))
+                                    saved_count += 1
+                                    
+                            if saved_count > 0:
+                                print(f"   ✅ AI Found Alpha & Saved to DB: {headline[:40]}... ({saved_count} stocks passed strict filters)")
+                            else:
+                                print(f"   🛡️ All {len(filtered_stocks)} candidates for {headline[:30]} blocked by V2 Tech Guards!")
+                    
+                    conn.commit()
+                    conn.close()
                     success = True
                 except Exception as e:
                     error_msg = str(e).lower()
                     if "429" in error_msg or "quota" in error_msg:
+                        print(f"   ⚠️ API Quota Reached on Key Index {current_key_idx}. Swapping keys...")
                         current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-                        genai.configure(api_key=API_KEYS[current_key_idx])
-                        model = genai.GenerativeModel('gemini-2.5-flash')
+                        client = genai.Client(api_key=API_KEYS[current_key_idx])
                         time.sleep(2)
                         retries += 1
                     else:
+                        print(f"   🔴 Unknown API Error: {str(e)[:100]}")
                         break
-            time.sleep(3) # Prevent rate limiting
+            if not success:
+                print(f"   ❌ Failed to analyze article after {retries} retries: {headline[:40]}...")
+            
+            time.sleep(3)
             
         # Clean up old news (older than 4 days)
         try:
             conn = connect_news_db()
             c = conn.cursor()
-            four_days_ago = (datetime.utcnow() - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
+            four_days_ago = (datetime.now(timezone.utc) - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
             c.execute("DELETE FROM stock_impact WHERE news_id IN (SELECT id FROM news WHERE created_at < ?)", (four_days_ago,))
             c.execute("DELETE FROM news WHERE created_at < ?", (four_days_ago,))
             conn.commit()
             conn.close()
         except Exception as e:
-            print("Cleanup error:", e)
+            print("DB Cleanup Error:", e)
             
-        time.sleep(600) # Wait 10 minutes before scraping again
+        # Show latest performance only AFTER the batch of news has been completely analyzed
+        try:
+            import performance_report
+            print("\n" + "="*60)
+            print(" 🔄 END OF BATCH ANALYSIS — LATEST RESULTS:")
+            print("="*60)
+            performance_report.run_performance_check()
+        except Exception as e:
+            print("Performance Report Error:", e)
+            
+        time.sleep(600)
 
 def yfinance_worker():
-    print("📈 YFinance Live Price Engine Started. Tracking Active Views...")
+    print("YFinance Live Price Engine v2.1 Started. Asymmetric Thresholds + Time Expiry Active...")
     while True:
         try:
             conn = connect_news_db()
             c = conn.cursor()
-            # Fetch active views from last 2 days
-            two_days_ago = (datetime.utcnow() - timedelta(days=2)).strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("SELECT id, ticker, base_price, impact FROM stock_impact WHERE status = 'Active View' AND created_at > ?", (two_days_ago,))
+            # Fetch active views from last 3 days
+            three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
+            c.execute("SELECT id, ticker, base_price, impact, created_at FROM stock_impact WHERE status = 'Active View' AND created_at > ?", (three_days_ago,))
             active_stocks = c.fetchall()
             
             for row in active_stocks:
-                stock_id, ticker, base_price, impact = row
+                stock_id, ticker, base_price, impact, created_at_str = row
                 try:
                     tick_data = yf.Ticker(ticker)
                     current_price = tick_data.fast_info.last_price
@@ -275,39 +376,44 @@ def yfinance_worker():
                     new_status = 'Active View'
                     impact_lower = impact.lower()
                     is_bullish = 'bullish' in impact_lower
-                    is_slightly = 'slightly' in impact_lower
                     
-                    # For slightly bullish/bearish, use 1% target/loss thresholds
-                    target_pct = 1.0 if is_slightly else 2.0
+                    # ASYMMETRIC thresholds: 1.5% target, 3% stop (wide stop = breathing room)
+                    target_pct = 1.5
+                    stop_pct = 3.0
                     
                     if is_bullish:
                         if diff_percent >= target_pct:
                             new_status = 'Predicted Target Hit'
-                        elif diff_percent <= -target_pct:
+                        elif diff_percent <= -stop_pct:
                             new_status = 'Reacted Against Prediction'
                     else: # bearish
-                        if diff_percent <= -target_pct: # stock dropped, bearish call correct
+                        if diff_percent <= -target_pct:
                             new_status = 'Predicted Target Hit'
-                        elif diff_percent >= target_pct:
+                        elif diff_percent >= stop_pct:
                             new_status = 'Reacted Against Prediction'
+                    
+                    # TIME-BASED EXPIRY: If trade hasn't resolved in 3 days, expire it
+                    if new_status == 'Active View':
+                        try:
+                            created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S')
+                            age_hours = (datetime.now(timezone.utc).replace(tzinfo=None) - created_dt).total_seconds() / 3600
+                            if age_hours >= 72:  # 3 days
+                                new_status = 'Expired'
+                        except:
+                            pass
                             
                     c.execute("UPDATE stock_impact SET current_price = ?, status = ? WHERE id = ?", (current_price, new_status, stock_id))
                 except Exception as e:
-                    pass # ignore yfinance errors for individual tickers
+                    pass
                 
             conn.commit()
             conn.close()
         except Exception as e:
             print("YFinance Worker Error:", e)
             
-        time.sleep(60) # Update prices every 1 minute
+        time.sleep(60)
 
-# Start background threads
-engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
-engine_thread.start()
-
-yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
-yf_thread.start()
+# Threading starts moved to main block to prevent Flask reloader duplicate race conditions.
 
 # ==========================================
 # APP ROUTES
@@ -533,9 +639,13 @@ def logout():
     return jsonify({"message": "Logged out"}), 200
 
 if __name__ == '__main__':
-    # Run performance check
-    import performance_report
-    performance_report.run_performance_check()
+    # Start background threads
+    engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
+    engine_thread.start()
+
+    yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
+    yf_thread.start()
 
     # Threaded=True allows the background AI loop to run alongside the website
-    app.run(debug=True, port=5000, threaded=True)
+    # use_reloader=False prevents double execution of our background threads on restart
+    app.run(debug=True, port=5000, threaded=True, use_reloader=False)
