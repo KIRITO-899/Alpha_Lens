@@ -1,2 +1,7 @@
 news_cache.db-shm
 news_cache.db-wal
+
+__pycache__/
+venv/
+*.log
+perf.txt

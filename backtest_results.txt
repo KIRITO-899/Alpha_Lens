@@ -1,0 +1,5 @@
+Total News: 60
+Predictions: 1
+Wins: 1
+Losses: 0
+Win Rate: 100.0%
