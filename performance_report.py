@@ -10,10 +10,11 @@ def connect_news_db():
 def run_performance_check():
     """
     Analyzes the 'stock_impact' table to report prediction accuracy.
+    Now includes Expired status tracking and excludes expired/active from win rate calculation.
     """
-    print("\n" + "="*50)
-    print("  ALPHA LENS: STRATEGY PERFORMANCE REPORT")
-    print("="*50)
+    print("\n" + "=" * 60)
+    print(" 📊 ALPHA LENS v2.0: STRATEGY PERFORMANCE REPORT")
+    print("=" * 60)
 
     try:
         conn = connect_news_db()
@@ -34,45 +35,68 @@ def run_performance_check():
         hits = status_counts.get('Predicted Target Hit', 0)
         misses = status_counts.get('Reacted Against Prediction', 0)
         active = status_counts.get('Active View', 0)
-        total_calls = hits + misses + active
+        expired = status_counts.get('Expired', 0)
+        total_calls = hits + misses + active + expired
 
-        # Win Rate calculation (only on closed trades)
-        closed_trades = hits + misses
-        win_rate = 0
-        if closed_trades > 0:
-            win_rate = round((hits / closed_trades) * 100, 2)
-
-        # Print the Report
-        print(f"Total News Articles Analyzed:  {total_news}")
-        print(f"Total Stock Calls Triggered:   {total_calls}")
-        print("-" * 50)
-        
-        # Color coding in terminal (standard ANSI)
+        # Color coding in terminal
         GREEN = "\033[92m"
         RED = "\033[91m"
         CYAN = "\033[96m"
+        YELLOW = "\033[93m"
         RESET = "\033[0m"
         BOLD = "\033[1m"
 
-        print(f"{GREEN} [WIN] TARGET HIT:             {hits}{RESET}")
-        print(f"{RED} [LOSS] REACTED AGAINST:     {misses}{RESET}")
-        print(f"{CYAN} [ACTIVE] STILL RUNNING:       {active}{RESET}")
-        print("-" * 50)
-        
-        # Performance indicator
-        if win_rate >= 70:
-            rating = f"{GREEN} ELITE{RESET}"
-        elif win_rate >= 50:
-            rating = f"{CYAN} DECENT{RESET}"
+        # Win Rate calculation (only on RESOLVED trades — excluding active and expired)
+        resolved_trades = hits + misses
+        if resolved_trades > 0:
+            win_rate = round((hits / resolved_trades) * 100, 2)
+            
+            if win_rate >= 70:
+                rating = f"{GREEN}🔥 ELITE{RESET}"
+            elif win_rate >= 55:
+                rating = f"{CYAN}📈 SOLID{RESET}"
+            elif win_rate >= 45:
+                rating = f"{YELLOW}📊 MODERATE{RESET}"
+            else:
+                rating = f"{RED}⚠️ NEEDS IMPROVEMENT{RESET}"
+                
+            win_display = f"{win_rate}%  ({rating})"
         else:
-            rating = f"{RED} VOLATILE{RESET}"
+            win_display = f"{YELLOW}N/A (No resolved trades yet){RESET}"
 
-        print(f"{BOLD} STRATEGY WIN RATE:          {win_rate}%  ({rating}){RESET}")
-        print("="*50 + "\n")
+
+        # Get average confidence of winning vs losing trades
+        c.execute("SELECT AVG(confidence_score) FROM stock_impact WHERE status = 'Predicted Target Hit'")
+        avg_win_confidence = c.fetchone()[0] or 0
+
+        c.execute("SELECT AVG(confidence_score) FROM stock_impact WHERE status = 'Reacted Against Prediction'")
+        avg_loss_confidence = c.fetchone()[0] or 0
+
+        # Print the Report
+        print(f"Total News Articles Analyzed:       {total_news}")
+        print(f"Total Stock Calls Triggered:        {total_calls}")
+        print("-" * 60)
+
+        print(f"{GREEN}✅ TARGET HIT (Wins):               {hits}{RESET}")
+        print(f"{RED}❌ REACTED AGAINST (Losses):         {misses}{RESET}")
+        print(f"{YELLOW}⏰ EXPIRED (No move in 3 days):      {expired}{RESET}")
+        print(f"{CYAN}⏳ STILL RUNNING (Active):           {active}{RESET}")
+        print("-" * 60)
+
+        # Confidence analysis
+        if avg_win_confidence > 0 or avg_loss_confidence > 0:
+            print(f"Avg Confidence on Wins:              {round(avg_win_confidence, 1)}")
+            print(f"Avg Confidence on Losses:            {round(avg_loss_confidence, 1)}")
+            print("-" * 60)
+
+        print(f"{BOLD}🏆 AI STRATEGY WIN RATE:             {win_display}{RESET}")
+        print(f"   (Based on {resolved_trades} resolved trades)")
+        print(f"   (Excluding {expired} expired + {active} still active)")
+        print("=" * 60 + "\n")
 
         conn.close()
     except Exception as e:
-        print(f" [ERROR] Error during performance check: {e}")
+        print(f"❌ Error during performance check: {e}")
 
 if __name__ == "__main__":
     run_performance_check()
