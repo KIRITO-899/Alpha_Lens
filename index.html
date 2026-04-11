@@ -757,17 +757,19 @@
         }
 
         // Priority 1: Published Time from RSS (news_time), Priority 2: Database Storage Time (created_at)
+        // If RSS date is stale (>7 days old), fall back to created_at to avoid showing wrong dates
         function getNewsDate(newsItem) {
             if (!newsItem) return new Date(0);
+            const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
             if (newsItem.news_time && newsItem.news_time !== "Just Now" && newsItem.news_time !== "System Processing") {
                 // Try standard parsing first
                 let d = new Date(newsItem.news_time);
-                if (!isNaN(d.getTime())) return d;
+                if (!isNaN(d.getTime()) && d.getTime() >= sevenDaysAgo) return d;
                 
                 // Try stripping leading day name if any (e.g., "Sun, ")
                 const cleaned = newsItem.news_time.includes(',') ? newsItem.news_time.split(',')[1].trim() : newsItem.news_time;
                 d = new Date(cleaned);
-                if (!isNaN(d.getTime())) return d;
+                if (!isNaN(d.getTime()) && d.getTime() >= sevenDaysAgo) return d;
             }
             return parseSQLiteDate(newsItem.created_at);
         }
@@ -921,9 +923,9 @@
             const container = document.getElementById('archive-news-list');
             if(!container) return;
             container.innerHTML = '';
+            // Filter by DB insertion time (created_at), NOT stale RSS publish dates
             const fourDaysAgo = Date.now() - (96 * 60 * 60 * 1000);
-            // Show ALL news — stock badges are hidden by CSS when in non-stock mode
-            let recentNews = globalNewsData.filter(news => getNewsDate(news).getTime() >= fourDaysAgo);
+            let recentNews = globalNewsData.filter(news => parseSQLiteDate(news.created_at).getTime() >= fourDaysAgo);
             
             // Apply filtering logic
             if (currentArchiveFilter !== 'all') {
@@ -997,10 +999,10 @@
             const container = document.getElementById('portfolio-news-list');
             if (!container) return;
             container.innerHTML = '';
+            // Only show news that HAS stock impacts (filtered by DB insertion time)
             const fourDaysAgo = Date.now() - (96 * 60 * 60 * 1000);
-            // Only show news that HAS stock impacts
             const stockNews = globalNewsData.filter(n =>
-                getNewsDate(n).getTime() >= fourDaysAgo &&
+                parseSQLiteDate(n.created_at).getTime() >= fourDaysAgo &&
                 n.affected_stocks && n.affected_stocks.length > 0
             );
             const countEl = document.getElementById('portfolio-count');
@@ -1064,8 +1066,9 @@
             container.innerHTML = '';
             let allStocks = [];
             // Use published time
+            // Filter by DB insertion time (created_at), NOT stale RSS dates
             const fourDaysAgo = Date.now() - (96 * 60 * 60 * 1000);
-            const recentNews = globalNewsData.filter(n => getNewsDate(n).getTime() >= fourDaysAgo);
+            const recentNews = globalNewsData.filter(n => parseSQLiteDate(n.created_at).getTime() >= fourDaysAgo);
             recentNews.forEach(news => {
                 if(news.affected_stocks && news.affected_stocks.length > 0) {
                     news.affected_stocks.forEach(stock => {

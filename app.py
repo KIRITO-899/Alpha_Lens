@@ -13,6 +13,7 @@ from google import genai
 from google.genai import types
 import yfinance as yf
 import logging
+from email.utils import parsedate_to_datetime
 yf.set_tz_cache_location("venv/yf_cache")
 logger = logging.getLogger('yfinance')
 logger.disabled = True
@@ -121,7 +122,14 @@ RSS_SOURCES = [
     "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms",   # ET Stocks in News
     "https://economictimes.indiatimes.com/markets/stocks/earnings/rssfeeds/837588974.cms", # ET Earnings
     "https://www.moneycontrol.com/rss/buzzingstocks.xml", # MC Buzzing Stocks
-    "https://www.livemint.com/rss/markets"
+    "https://www.livemint.com/rss/markets",
+    # Additional ET sections for broader market coverage
+    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",  # ET Markets Overview
+    # Google News RSS — returns articles from the PAST 4 DAYS for Indian market news
+    "https://news.google.com/rss/search?q=indian+stock+market+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=NSE+BSE+Nifty+Sensex+stocks+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=indian+economy+RBI+market+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
 ]
 
 def clean_json(raw_text):
@@ -132,24 +140,38 @@ def clean_json(raw_text):
 
 def ai_news_worker():
     global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME
-    print("🚀 Alpha Lens v2.0 Background Engine Started. Fetching LiveMint, ET & MoneyControl...")
+    print("🚀 Alpha Lens v2.0 Background Engine Started. Fetching LiveMint, ET, MoneyControl & Google News (4-day history)...")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | Technical Confirmation ON")
     
     while True:
         raw_articles = []
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=5)
         for url in RSS_SOURCES:
             try:
                 feed = feedparser.parse(url)
-                for entry in feed.entries[:15]:
+                for entry in feed.entries[:30]:
+                    pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
+                    
+                    # FILTER: Skip stale RSS entries older than 5 days (e.g. MoneyControl serves 2024 articles)
+                    if pub_time and pub_time != "Just Now":
+                        try:
+                            pub_dt = parsedate_to_datetime(pub_time)
+                            if pub_dt.tzinfo is None:
+                                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                            if pub_dt < stale_cutoff:
+                                continue  # Skip — this RSS entry is too old
+                        except Exception:
+                            pass  # Can't parse date, allow it through
+                    
                     raw_articles.append({
                         "headline": entry.title,
-                        "time": entry.published if hasattr(entry, 'published') else "Just Now"
+                        "time": pub_time
                     })
             except Exception as e:
                 print(f"RSS Error on {url}: {e}")
         
         if raw_articles:
-            print(f"📡 Scraped {len(raw_articles)} headlines. Analyzing with Gemini + Technical Confirmation...")
+            print(f"📡 Scraped {len(raw_articles)} headlines (after filtering stale RSS). Analyzing with Gemini + Technical Confirmation...")
 
         # Get overall market regime for context
         market_regime = get_market_regime()
@@ -297,7 +319,9 @@ def ai_news_worker():
                                                 print(f"   🔴 Exhaustion Blocker rejected {ticker}: Range {range_pos}")
                                                 passed_filters = False
                                 except:
-                                    base_price = 100.0
+                                    base_price = 0  # Mark as failed
+                                    passed_filters = False
+                                    print(f"   🔴 Price fetch failed for {ticker} — skipping")
                                 
                                 if passed_filters:
                                     c.execute('''
@@ -369,7 +393,31 @@ def yfinance_worker():
                 stock_id, ticker, base_price, impact, created_at_str = row
                 try:
                     tick_data = yf.Ticker(ticker)
-                    current_price = tick_data.fast_info.last_price
+                    current_price = None
+                    
+                    # PRIMARY: Use 1-minute intraday history for fresh live price
+                    try:
+                        hist = tick_data.history(period='1d', interval='1m')
+                        if not hist.empty:
+                            current_price = float(hist['Close'].iloc[-1])
+                    except Exception:
+                        pass
+                    
+                    # FALLBACK 1: Use 5-day daily history (works when market is closed)
+                    if current_price is None:
+                        try:
+                            hist = tick_data.history(period='5d')
+                            if not hist.empty:
+                                current_price = float(hist['Close'].iloc[-1])
+                        except Exception:
+                            pass
+                    
+                    # FALLBACK 2: Use fast_info as last resort
+                    if current_price is None:
+                        current_price = tick_data.fast_info.last_price
+                    
+                    if current_price is None or current_price <= 0:
+                        continue
                     
                     diff_percent = ((current_price - base_price) / base_price) * 100
                     
@@ -520,7 +568,9 @@ def get_all_news():
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        c.execute("SELECT * FROM news ORDER BY created_at DESC")
+        # Only return news from the last 4 days (by DB insertion time, not RSS publish date)
+        four_days_ago = (datetime.now(timezone.utc) - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
+        c.execute("SELECT * FROM news WHERE created_at >= ? ORDER BY created_at DESC", (four_days_ago,))
         news_rows = c.fetchall()
         
         all_news = []
