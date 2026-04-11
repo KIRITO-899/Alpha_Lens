@@ -13,7 +13,7 @@ def run_performance_check():
     Now includes Expired status tracking and excludes expired/active from win rate calculation.
     """
     print("\n" + "=" * 60)
-    print(" 📊 ALPHA LENS v2.0: STRATEGY PERFORMANCE REPORT")
+    print("  ALPHA LENS v2.0: STRATEGY PERFORMANCE REPORT")
     print("=" * 60)
 
     try:
@@ -52,13 +52,13 @@ def run_performance_check():
             win_rate = round((hits / resolved_trades) * 100, 2)
             
             if win_rate >= 70:
-                rating = f"{GREEN}🔥 ELITE{RESET}"
+                rating = f"{GREEN} ELITE{RESET}"
             elif win_rate >= 55:
-                rating = f"{CYAN}📈 SOLID{RESET}"
+                rating = f"{CYAN} SOLID{RESET}"
             elif win_rate >= 45:
-                rating = f"{YELLOW}📊 MODERATE{RESET}"
+                rating = f"{YELLOW} MODERATE{RESET}"
             else:
-                rating = f"{RED}⚠️ NEEDS IMPROVEMENT{RESET}"
+                rating = f"{RED} NEEDS IMPROVEMENT{RESET}"
                 
             win_display = f"{win_rate}%  ({rating})"
         else:
@@ -77,8 +77,8 @@ def run_performance_check():
         print(f"Total Stock Calls Triggered:        {total_calls}")
         print("-" * 60)
 
-        print(f"{GREEN}✅ TARGET HIT (Wins):               {hits}{RESET}")
-        print(f"{RED}❌ REACTED AGAINST (Losses):         {misses}{RESET}")
+        print(f"{GREEN} TARGET HIT (Wins):               {hits}{RESET}")
+        print(f"{RED} REACTED AGAINST (Losses):         {misses}{RESET}")
         print(f"{YELLOW}⏰ EXPIRED (No move in 3 days):      {expired}{RESET}")
         print(f"{CYAN}⏳ STILL RUNNING (Active):           {active}{RESET}")
         print("-" * 60)
@@ -89,14 +89,14 @@ def run_performance_check():
             print(f"Avg Confidence on Losses:            {round(avg_loss_confidence, 1)}")
             print("-" * 60)
 
-        print(f"{BOLD}🏆 AI STRATEGY WIN RATE:             {win_display}{RESET}")
+        print(f"{BOLD} AI STRATEGY WIN RATE:             {win_display}{RESET}")
         print(f"   (Based on {resolved_trades} resolved trades)")
         print(f"   (Excluding {expired} expired + {active} still active)")
         print("=" * 60 + "\n")
 
         conn.close()
     except Exception as e:
-        print(f"❌ Error during performance check: {e}")
+        print(f" Error during performance check: {e}")
 
 if __name__ == "__main__":
     run_performance_check()

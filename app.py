@@ -25,6 +25,7 @@ from technical_analysis import (
     format_technical_context_for_prompt,
     get_market_regime
 )
+from prediction_models import EnsemblePredictor
 
 app = Flask(__name__, template_folder='.')
 app.secret_key = "super_secret_alpha_lens_key"
@@ -97,6 +98,22 @@ def init_news_db():
         c.execute("ALTER TABLE stock_impact ADD COLUMN technical_context TEXT DEFAULT ''")
     except sqlite3.OperationalError:
         pass
+    try:
+        c.execute("ALTER TABLE stock_impact ADD COLUMN ensemble_detail TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+        
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS historical_patterns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            headline TEXT,
+            ticker TEXT,
+            direction TEXT,      -- BULLISH or BEARISH
+            outcome TEXT,        -- HIT or MISS
+            change_pct REAL,     -- actual change %
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -120,15 +137,14 @@ current_key_idx = 0
 client = genai.Client(api_key=API_KEYS[current_key_idx])
 MODEL_NAME = 'gemini-2.5-flash'
 
-# Top Tier Indian Financial RSS Feeds (Targeted for Stock-Specific News)
+# Top Tier Indian Financial RSS Feeds + Google News for 4-day history
 RSS_SOURCES = [
-    "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms",   # ET Stocks in News
-    "https://economictimes.indiatimes.com/markets/stocks/earnings/rssfeeds/837588974.cms", # ET Earnings
-    "https://www.moneycontrol.com/rss/buzzingstocks.xml", # MC Buzzing Stocks
+    "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms",
+    "https://economictimes.indiatimes.com/markets/stocks/earnings/rssfeeds/837588974.cms",
+    "https://www.moneycontrol.com/rss/buzzingstocks.xml",
     "https://www.livemint.com/rss/markets",
-    # Additional ET sections for broader market coverage
-    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",  # ET Markets Overview
-    # Google News RSS — returns articles from the PAST 4 DAYS for Indian market news
+    "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
+    # Google News RSS — past 4 days of Indian market news (instant historical backfill)
     "https://news.google.com/rss/search?q=indian+stock+market+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=NSE+BSE+Nifty+Sensex+stocks+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:4d&hl=en-IN&gl=IN&ceid=IN:en",
@@ -141,12 +157,257 @@ def clean_json(raw_text):
         cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
     return json.loads(cleaned.strip())
 
+# ==========================================
+# KEYWORD FILTER — fast relevance check
+# ==========================================
+FINANCE_KEYWORDS = [
+    'stock', 'share', 'shares', 'market', 'nifty', 'sensex', 'bse', 'nse',
+    'rally', 'crash', 'bull', 'bear', 'trade', 'trading', 'etf', 'ipo', 'fpo',
+    'dividend', 'earnings', 'profit', 'loss', 'revenue', 'quarter',
+    'q1', 'q2', 'q3', 'q4', 'rbi', 'sebi', 'inflation', 'rate', 'bond',
+    'rupee', 'crude', 'oil', 'gold', 'bank', 'nbfc', 'mutual fund',
+    'buy', 'sell', 'target', 'upgrade', 'downgrade', 'fii', 'dii', 'fpi',
+    'block deal', 'bulk deal', 'merger', 'acquisition', 'buyback', 'delisting',
+    'rebound', 'correction', 'breakout', 'support', 'resistance',
+    'sector', 'pharma', 'auto', 'realty', 'infra', 'defence', 'power',
+    'cement', 'fmcg', 'telecom', 'midcap', 'smallcap', 'largecap',
+    'result', 'growth', 'margin', 'ebitda', 'pat', 'eps',
+    'investor', 'portfolio', 'fund', 'index', 'return', 'equity',
+    'debt', 'credit', 'loan', 'interest', 'fiscal', 'gdp',
+    'export', 'import', 'tariff', 'manufacturing', 'corporate', 'company',
+]
+
+def is_finance_relevant(headline):
+    h = headline.lower()
+    return any(kw in h for kw in FINANCE_KEYWORDS)
+
+# ==========================================
+# SENTIMENT KEYWORDS — bullish/bearish rules
+# ==========================================
+BULLISH_KEYWORDS = [
+    'rise', 'rises', 'rising', 'rally', 'rallies', 'surge', 'surges',
+    'jump', 'jumps', 'gain', 'gains', 'gained', 'up ', 'high', 'highs',
+    'record', 'soar', 'soars', 'zoom', 'zooms', 'profit', 'growth',
+    'upgrade', 'outperform', 'buy', 'bullish', 'positive', 'strong',
+    'beat', 'beats', 'exceed', 'boost', 'rebound', 'recovery', 'breakout',
+    'dividend', 'buyback', 'expansion', 'robust', 'stellar', 'doubles',
+    'optimistic', 'upside', 'winner', 'outpace', 'top pick',
+]
+
+BEARISH_KEYWORDS = [
+    'fall', 'falls', 'falling', 'drop', 'drops', 'crash', 'crashes',
+    'plunge', 'plunges', 'decline', 'declines', 'declined', 'down ', 'low',
+    'lows', 'sink', 'sinks', 'tumble', 'tumbles', 'loss', 'losses',
+    'downgrade', 'underperform', 'sell', 'bearish', 'negative', 'weak',
+    'miss', 'misses', 'cut', 'cuts', 'slash', 'concern', 'fear',
+    'warning', 'ban', 'penalty', 'fine', 'fraud', 'scam', 'debt',
+    'default', 'flee', 'exit', 'outflow', 'worst', 'slump',
+]
+
+# ==========================================
+# CATEGORY CLASSIFICATION — rule-based
+# ==========================================
+CATEGORY_KEYWORDS = {
+    'Finance': ['stock', 'market', 'nifty', 'sensex', 'rbi', 'sebi', 'fund', 'fii', 'dii', 'bond', 'yield', 'inflation', 'rate', 'rupee', 'forex', 'index', 'rally', 'crash', 'bull', 'bear'],
+    'Business': ['company', 'merger', 'acquisition', 'ipo', 'earnings', 'profit', 'revenue', 'ceo', 'board', 'startup', 'valuation', 'q1', 'q2', 'q3', 'q4', 'quarter', 'result', 'dividend', 'buyback'],
+    'Technology': ['tech', 'ai ', 'software', 'digital', 'chip', 'semiconductor', 'data', 'cloud', 'cyber', 'app ', 'gadget'],
+    'Politics': ['government', 'election', 'minister', 'parliament', 'policy', 'modi', 'bjp', 'congress', 'bill ', 'political'],
+    'World': ['global', 'us ', 'china', 'trump', 'fed ', 'european', 'war', 'tariff', 'trade war', 'geopolitical', 'iran', 'russia'],
+}
+
+def classify_category(headline):
+    h = headline.lower()
+    scores = {}
+    for cat, keywords in CATEGORY_KEYWORDS.items():
+        scores[cat] = sum(1 for kw in keywords if kw in h)
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else 'General'
+
+# ==========================================
+# RULE-BASED STOCK MAPPING — instant, no AI
+# ==========================================
+import re
+
+STOCK_KEYWORD_MAP = {
+    # NIFTY 50
+    'reliance': 'RELIANCE.NS', 'reliance industries': 'RELIANCE.NS',
+    'tcs': 'TCS.NS', 'tata consultancy': 'TCS.NS',
+    'infosys': 'INFY.NS', 'infy': 'INFY.NS',
+    'hdfc bank': 'HDFCBANK.NS',
+    'icici bank': 'ICICIBANK.NS',
+    'sbi ': 'SBIN.NS', 'state bank': 'SBIN.NS',
+    'bharti airtel': 'BHARTIARTL.NS', 'airtel': 'BHARTIARTL.NS',
+    'hindustan unilever': 'HINDUNILVR.NS', 'hul ': 'HINDUNILVR.NS',
+    'itc ': 'ITC.NS',
+    'kotak mahindra': 'KOTAKBANK.NS', 'kotak bank': 'KOTAKBANK.NS',
+    'larsen': 'LT.NS', 'l&t ': 'LT.NS',
+    'axis bank': 'AXISBANK.NS',
+    'bajaj finance': 'BAJFINANCE.NS',
+    'bajaj finserv': 'BAJAJFINSV.NS',
+    'maruti': 'MARUTI.NS', 'maruti suzuki': 'MARUTI.NS',
+    'asian paints': 'ASIANPAINT.NS',
+    'titan ': 'TITAN.NS', 'titan company': 'TITAN.NS',
+    'sun pharma': 'SUNPHARMA.NS', 'sun pharmaceutical': 'SUNPHARMA.NS',
+    'wipro': 'WIPRO.NS',
+    'hcl tech': 'HCLTECH.NS', 'hcl technologies': 'HCLTECH.NS',
+    'power grid': 'POWERGRID.NS',
+    'ntpc': 'NTPC.NS',
+    'tata motors': 'TATAMOTORS.NS',
+    'tata steel': 'TATASTEEL.NS',
+    'mahindra': 'M&M.NS', 'm&m': 'M&M.NS',
+    'adani enterprises': 'ADANIENT.NS', 'adani ent': 'ADANIENT.NS',
+    'adani ports': 'ADANIPORTS.NS',
+    'adani green': 'ADANIGREEN.NS',
+    'adani power': 'ADANIPOWER.NS',
+    'ultratech': 'ULTRACEMCO.NS', 'ultratech cement': 'ULTRACEMCO.NS',
+    'nestle india': 'NESTLEIND.NS', 'nestle': 'NESTLEIND.NS',
+    'tech mahindra': 'TECHM.NS',
+    'indusind bank': 'INDUSINDBK.NS', 'indusind': 'INDUSINDBK.NS',
+    'grasim': 'GRASIM.NS',
+    'bajaj auto': 'BAJAJ-AUTO.NS',
+    'cipla': 'CIPLA.NS',
+    'dr reddy': 'DRREDDY.NS', 'dr. reddy': 'DRREDDY.NS',
+    'hero motocorp': 'HEROMOTOCO.NS', 'hero moto': 'HEROMOTOCO.NS',
+    'coal india': 'COALINDIA.NS',
+    'ongc': 'ONGC.NS',
+    'bpcl': 'BPCL.NS', 'bharat petroleum': 'BPCL.NS',
+    'divis lab': 'DIVISLAB.NS',
+    'britannia': 'BRITANNIA.NS',
+    'eicher motors': 'EICHERMOT.NS', 'royal enfield': 'EICHERMOT.NS',
+    'apollo hospital': 'APOLLOHOSP.NS',
+    'tata consumer': 'TATACONSUM.NS',
+    'sbi life': 'SBILIFE.NS',
+    'hdfc life': 'HDFCLIFE.NS',
+    'shriram finance': 'SHRIRAMFIN.NS',
+    'bhel': 'BHEL.NS',
+    'jsw steel': 'JSWSTEEL.NS',
+    'hindalco': 'HINDALCO.NS',
+    # Popular Mid/Small Caps
+    'muthoot finance': 'MUTHOOTFIN.NS', 'muthoot fin': 'MUTHOOTFIN.NS', 'muthoot': 'MUTHOOTFIN.NS',
+    'aurobindo pharma': 'AUROPHARMA.NS', 'aurobindo': 'AUROPHARMA.NS',
+    'hpcl': 'HINDPETRO.NS', 'hindustan petroleum': 'HINDPETRO.NS',
+    'ioc': 'IOC.NS', 'indian oil': 'IOC.NS',
+    'bel': 'BEL.NS', 'bharat electronics': 'BEL.NS',
+    'hal': 'HAL.NS', 'hindustan aeronautics': 'HAL.NS',
+    'solar industries': 'SOLARINDS.NS',
+    'vodafone idea': 'IDEA.NS',
+    'godfrey phillips': 'GODFRYPHLP.NS', 'godfrey': 'GODFRYPHLP.NS',
+    'tejas network': 'TEJASNET.NS',
+    'bandhan bank': 'BANDHANBNK.NS',
+    'manappuram': 'MANAPPURAM.NS',
+    'zomato': 'ZOMATO.NS',
+    'paytm': 'PAYTM.NS', 'one97': 'PAYTM.NS',
+    'nykaa': 'NYKAA.NS',
+    'delhivery': 'DELHIVERY.NS',
+    'vedanta': 'VEDL.NS',
+    'jindal steel': 'JINDALSTEL.NS',
+    'tata power': 'TATAPOWER.NS',
+    'tata elxsi': 'TATAELXSI.NS',
+    'ltimindtree': 'LTIM.NS', 'lti mindtree': 'LTIM.NS',
+    'pnb': 'PNB.NS', 'punjab national': 'PNB.NS',
+    'bank of baroda': 'BANKBARODA.NS',
+    'canara bank': 'CANBK.NS',
+    'idbi bank': 'IDBI.NS',
+    'federal bank': 'FEDERALBNK.NS',
+    'yes bank': 'YESBANK.NS',
+    'irctc': 'IRCTC.NS',
+    'irfc': 'IRFC.NS',
+    'rvnl': 'RVNL.NS', 'rail vikas': 'RVNL.NS',
+    'nhpc': 'NHPC.NS',
+    'suzlon': 'SUZLON.NS', 'suzlon energy': 'SUZLON.NS',
+    'tata chemicals': 'TATACHEM.NS',
+    'godrej consumer': 'GODREJCP.NS', 'godrej': 'GODREJCP.NS',
+    'pidilite': 'PIDILITIND.NS',
+    'havells': 'HAVELLS.NS',
+    'siemens': 'SIEMENS.NS',
+    'abb india': 'ABB.NS',
+    'page industries': 'PAGEIND.NS',
+    'dmart': 'DMART.NS', 'avenue supermarts': 'DMART.NS',
+    'biocon': 'BIOCON.NS',
+    'lupin': 'LUPIN.NS',
+    'torrent pharma': 'TORNTPHARM.NS',
+    'jubilant food': 'JUBLFOOD.NS',
+    'indigo': 'INDIGO.NS', 'interglobe': 'INDIGO.NS',
+    'spicejet': 'SPICEJET.NS',
+    'dixon': 'DIXON.NS', 'dixon tech': 'DIXON.NS',
+    'polycab': 'POLYCAB.NS',
+    'persistent': 'PERSISTENT.NS', 'persistent systems': 'PERSISTENT.NS',
+    'coforge': 'COFORGE.NS',
+    'mphasis': 'MPHASIS.NS',
+    'max health': 'MAXHEALTH.NS', 'max healthcare': 'MAXHEALTH.NS',
+    'motherson': 'MOTHERSON.NS',
+    'srf': 'SRF.NS',
+    'pi industries': 'PIIND.NS',
+    'cholamandalam': 'CHOLAFIN.NS',
+    'voltas': 'VOLTAS.NS',
+    'bharat forge': 'BHARATFORG.NS',
+    'exide': 'EXIDEIND.NS',
+    'amara raja': 'AMARAJABAT.NS',
+    'marico': 'MARICO.NS',
+    'dabur': 'DABUR.NS',
+    'colgate': 'COLPAL.NS',
+    'acc cement': 'ACC.NS', 'acc ': 'ACC.NS',
+    'ambuja': 'AMBUJACEM.NS', 'ambuja cement': 'AMBUJACEM.NS',
+    'shree cement': 'SHREECEM.NS',
+    'dalmia bharat': 'DALBHARAT.NS',
+    'hatsun agro': 'HATSUN.NS', 'hatsun': 'HATSUN.NS',
+}
+
+# ==========================================
+# MACRO & SECTOR IMPACT MAP — 2nd order effects
+# ==========================================
+MACRO_IMPACT_MAP = {
+    'crude oil rise': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('ASIANPAINT.NS', 'BEARISH')],
+    'crude oil crash': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH'), ('ASIANPAINT.NS', 'BULLISH')],
+    'fii selling': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fii buying': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
+    'rate hike': [('DLF.NS', 'BEARISH'), ('LODHA.NS', 'BEARISH'), ('SBIN.NS', 'BULLISH')],
+    'rate cut': [('DLF.NS', 'BULLISH'), ('LODHA.NS', 'BULLISH'), ('SBIN.NS', 'BEARISH')],
+    'defense budget': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH'), ('MAZDOCK.NS', 'BULLISH')],
+    'railway budget': [('RVNL.NS', 'BULLISH'), ('IRFC.NS', 'BULLISH'), ('IRCTC.NS', 'BULLISH')],
+    'pharma sector rally': [('SUNPHARMA.NS', 'BULLISH'), ('CIPLA.NS', 'BULLISH'), ('DRREDDY.NS', 'BULLISH')],
+    'it sector rally': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
+}
+
+def get_candidate_stocks(headline):
+    """Finds candidate stock tickers from headline via direct name or macro effects."""
+    h = ' ' + headline.lower() + ' '
+    candidates = {}
+    
+    # 1. Direct Stock Mentions
+    for keyword, ticker in sorted(STOCK_KEYWORD_MAP.items(), key=lambda x: -len(x[0])):
+        if keyword in h and ticker not in candidates:
+            # Basic sentiment guess as starting point
+            bull_score = sum(1 for kw in BULLISH_KEYWORDS if kw in h)
+            bear_score = sum(1 for kw in BEARISH_KEYWORDS if kw in h)
+            impact = 'BULLISH' if bull_score >= bear_score else 'BEARISH'
+            candidates[ticker] = impact
+
+    # 2. Macro/Sector Mentions
+    for macro_kw, effects in MACRO_IMPACT_MAP.items():
+        if macro_kw in h:
+            for ticker, impact in effects:
+                if ticker not in candidates:
+                    candidates[ticker] = impact
+
+    # Maximum 3 candidates to avoid noise
+    return list(candidates.items())[:3]
+
+
+# ==========================================
+# V3 INSTANT NEWS ENGINE — Two-Phase Pipeline
+# ==========================================
 def ai_news_worker():
     global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME
-    print("🚀 Alpha Lens v2.0 Background Engine Started. Fetching LiveMint, ET, MoneyControl & Google News (4-day history)...")
-    print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | Technical Confirmation ON")
+    print("[SYSTEM] Alpha Lens v4.0 ENSEMBLE Engine Started!")
+    print(f"   Pipeline: RSS -> Keyword Filter -> Duplicate Filter -> Macro Map -> 5-Model Ensemble (Requires >= 70% and 3/5 vote)")
+    print(f"   Background: Batch Gemini for Aam Janta explanations only")
+    print(f"   Settings: Min Confidence={MIN_CONFIDENCE}")
     
     while True:
+        # ============================================================
+        # PHASE 1: INSTANT — Scrape, Filter, Save, Map (no API calls)
+        # ============================================================
         raw_articles = []
         stale_cutoff = datetime.now(timezone.utc) - timedelta(days=5)
         for url in RSS_SOURCES:
@@ -154,209 +415,190 @@ def ai_news_worker():
                 feed = feedparser.parse(url)
                 for entry in feed.entries[:30]:
                     pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
-                    
-                    # FILTER: Skip stale RSS entries older than 5 days (e.g. MoneyControl serves 2024 articles)
                     if pub_time and pub_time != "Just Now":
                         try:
                             pub_dt = parsedate_to_datetime(pub_time)
                             if pub_dt.tzinfo is None:
                                 pub_dt = pub_dt.replace(tzinfo=timezone.utc)
                             if pub_dt < stale_cutoff:
-                                continue  # Skip — this RSS entry is too old
+                                continue
                         except Exception:
-                            pass  # Can't parse date, allow it through
-                    
-                    raw_articles.append({
-                        "headline": entry.title,
-                        "time": pub_time
-                    })
+                            pass
+                    raw_articles.append({"headline": entry.title, "time": pub_time})
             except Exception as e:
-                print(f"RSS Error on {url}: {e}")
+                print(f"   RSS Error: {e}")
         
-        if raw_articles:
-            print(f"📡 Scraped {len(raw_articles)} headlines (after filtering stale RSS). Analyzing with Gemini + Technical Confirmation...")
-
-        # Get overall market regime for context
+        print(f"Scraped {len(raw_articles)} headlines from all sources")
+        
+        # STEP 1: Keyword Filter
+        relevant = [a for a in raw_articles if is_finance_relevant(a['headline'])]
+        print(f"Keyword Filter: {len(relevant)}/{len(raw_articles)} finance-relevant")
+        
+        # Get market regime for technical filters
         market_regime = get_market_regime()
         
-        analyzed_news = []
-        for article in raw_articles:
+        # STEP 2: Duplicate Filter + Instant Save + Stock Mapping
+        new_article_ids = []
+        conn = connect_news_db()
+        c = conn.cursor()
+        
+        for article in relevant:
             headline = article['headline']
             
-            # --- 1. EARLY EXIT: Check if headline is already processed ---
-            conn = connect_news_db()
-            c = conn.cursor()
+            # Duplicate check
             c.execute("SELECT id FROM news WHERE headline = ?", (headline,))
             if c.fetchone():
-                conn.close()
                 continue
-            conn.close()
             
-            prompt = f"""
-            You are an elite quantitative portfolio manager at a top-tier Indian hedge fund.
-            Identify high-impact news and categorize it accurately.
+            # Rule-based category
+            category = classify_category(headline)
             
-            Current Market Regime: {market_regime}
-
-            Headline: '{headline}'
-
-            STRICT CATEGORIZATION RULES (Choose ONE):
-            - "Finance": Stock market trends, RBI policy, banking, macroeconomics, Sensex/Nifty, currency.
-            - "Business": Company specific news (mergers, earnings, IPOs, management), startup news, industries.
-            - "Technology": Tech launches, AI, gadgets, software.
-            - "Politics": Government decisions, elections, policy shifts (not purely economic).
-            - "World": Global events, international politics, wars.
-            - "General": Miscellaneous news ONLY if none of the above fit. DO NOT use this for market/corporate news.
-
-            CRITICAL HIGH-WIN-RATE RULES:
-            1. If garbage/ad, set "ignore" to true.
-            2. If the news is ambiguous, already priced in, or routine — DO NOT identify stocks. Leave "affected_stocks" as [].
-            3. Identify stocks when there is a highly probable directional edge from this news.
-            4. Maximum 1-3 stocks per news item — pick the best candidates.
-            5. 'impact': BULLISH or BEARISH only. NO SLIGHTLY variants — commit to a clear direction or skip.
-            6. 'view': High Conviction (confidence 80+) or Moderate Conviction (confidence 65-79).
-            7. 'confidence_score': Be realistic. 85+ for crystal-clear catalysts. 65-84 for strong probable signals. Below 65 means you should NOT be recommending this stock.
-            8. Think 2nd order: Crude crash → Short ONGC, Buy Paints. Rate hike → Short realty, Buy banks.
-            9. Consider if the move is "buy the rumour, sell the news".
-            10. **ONLY IDENTIFY INDIAN STOCKS LISTED ON THE NSE.** You MUST append '.NS' to the ticker symbol. Do NOT recommend foreign stocks like US tech companies (e.g., AVGO, AAPL).
-
-            Output STRICT valid JSON:
-            {{
-              "ignore": false,
-              "category": "Finance",
-              "headline": "{headline}",
-              "aam_janta_translation": "Summary in 2 simple sentences.",
-              "macro_pathway": ["Trigger", "Direct Impact", "Ripple", "Result"],
-              "affected_stocks": [
-                {{
-                    "ticker": "TICKER.NS",
-                    "impact": "BULLISH",
-                    "estimated_change_percent": 2.5,
-                    "view": "High Conviction",
-                    "confidence_score": 85,
-                    "reason": "Clear 1-sentence reason"
-                }}
-              ]
-            }}
-            """
+            # INSTANT SAVE — headline goes to DB immediately (aam_janta_translation = NULL)
+            c.execute('''INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
+                VALUES (?, ?, ?, ?, ?)''',
+                (headline, article['time'], None, '[]', category))
+            news_id = c.lastrowid
             
-            success = False
-            retries = 0
-            while not success and retries < len(API_KEYS):
+            # 5-MODEL ENSEMBLE STOCK MAPPING
+            candidates = get_candidate_stocks(headline)
+            ensemble = EnsemblePredictor()
+            saved = 0
+            
+            for ticker, base_direction in candidates:
+                # 1. Fetch fast intraday price (fixes the zero-change bug)
+                base_price = 0.0
                 try:
-                    resp = client.models.generate_content(
-                        model=MODEL_NAME, 
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json"
-                        )
-                    )
-                    analysis = clean_json(resp.text)
-                    
-                    conn = connect_news_db()
-                    c = conn.cursor()
-                    
-                    # Insert headline into DB regardless of result so we don't query Gemini again
-                    c.execute('''
-                        INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
-                        VALUES (?, ?, ?, ?, ?)
-                    ''', (headline, article['time'], analysis.get('aam_janta_translation', ''), json.dumps(analysis.get('macro_pathway', [])), analysis.get('category', 'General')))
-                    news_id = c.lastrowid
-                    
-                    if analysis.get("ignore", False):
-                        print(f"   🚮 Ignored {headline[:40]}... (Classified as garbage/no-edge)")
+                    tick_data = yf.Ticker(ticker)
+                    hist = tick_data.history(period='1d', interval='1m')
+                    if not hist.empty:
+                        base_price = round(hist['Close'].iloc[-1], 2)
                     else:
-                        filtered_stocks = []
-                        for stock in analysis.get('affected_stocks', []):
-                            conf = stock.get('confidence_score', 50)
-                            ticker_name = stock.get('ticker', 'UNKNOWN')
-                            if not ticker_name.endswith('.NS') and not ticker_name.endswith('.BO'):
-                                ticker_name += '.NS'
-                                stock['ticker'] = ticker_name
+                        hist_5d = tick_data.history(period='5d')
+                        if not hist_5d.empty:
+                            base_price = round(hist_5d['Close'].iloc[-1], 2)
+                except:
+                    base_price = 0.0
+                    
+                if base_price <= 0:
+                    continue  # Skip if we can't reliably get the current price
+                    
+                # 2. Get tech context
+                tech_data = get_stock_technical_context(ticker)
+                tech_context_str = json.dumps(tech_data) if tech_data else ""
+                
+                # 3. Predict using 5-Model Ensemble
+                result = ensemble.predict(
+                    headline=headline,
+                    ticker=ticker,
+                    direction=base_direction,
+                    tech_data=tech_data,
+                    market_regime=market_regime,
+                    db_connect_fn=connect_news_db,
+                    min_score=MIN_CONFIDENCE
+                )
+                
+                # 4. Save if highly confident (ensemble approved)
+                if result['approved']:
+                    view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
+                    reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). Expected directional breakout."
+                    c.execute('''INSERT INTO stock_impact 
+                        (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                        (news_id, ticker, result['direction'], 2.5,
+                         view, reason, base_price, base_price, result['final_score'], tech_context_str, result['detail']))
+                    saved += 1
+            
+            new_article_ids.append({'id': news_id, 'headline': headline})
+            if saved > 0:
+                print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({saved} alpha signals)")
+        
+        conn.commit()
+        conn.close()
+        
+        print(f"PHASE 1 DONE: {len(new_article_ids)} new headlines saved INSTANTLY to database!")
+        
+        # ============================================================
+        # PHASE 2: BACKGROUND — Batch Gemini for explanations only
+        # ============================================================
+        # Find all articles missing AI explanation
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("SELECT id, headline FROM news WHERE aam_janta_translation IS NULL ORDER BY created_at DESC LIMIT 100")
+        pending_articles = [{'id': r[0], 'headline': r[1]} for r in c.fetchall()]
+        conn.close()
+        
+        if pending_articles:
+            print(f"[Phase 2] Batch AI explanations for {len(pending_articles)} articles (5 per API call)...")
+            
+            # Process in batches of 5 headlines per single Gemini call
+            for i in range(0, len(pending_articles), 5):
+                batch = pending_articles[i:i+5]
+                headlines_text = "\n".join([f"{j+1}. {a['headline']}" for j, a in enumerate(batch)])
+                
+                prompt = f"""You are a financial journalist writing for everyday Indians.
+For each headline below, provide:
+1. "aam_janta_translation": A 2-sentence explanation in simple language about what this means for common people.
+2. "macro_pathway": A 4-step chain showing the macro impact flow.
 
-                            if conf >= MIN_CONFIDENCE:
-                                filtered_stocks.append(stock)
-                            else:
-                                print(f"   🔴 Filtered out {ticker_name} — confidence {conf} < {MIN_CONFIDENCE}")
+Headlines:
+{headlines_text}
+
+Output STRICT valid JSON array:
+[
+  {{
+    "index": 1,
+    "aam_janta_translation": "Simple 2-sentence explanation for common people.",
+    "macro_pathway": ["Trigger Event", "Direct Impact", "Ripple Effect", "End Result"]
+  }}
+]"""
+                
+                success = False
+                retries = 0
+                while not success and retries < len(API_KEYS):
+                    try:
+                        resp = client.models.generate_content(
+                            model=MODEL_NAME,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json"
+                            )
+                        )
+                        analyses = clean_json(resp.text)
+                        if not isinstance(analyses, list):
+                            analyses = [analyses]
                         
-                        if len(filtered_stocks) == 0:
-                            print(f"   ⏭️ Skipped {headline[:40]}... (No high-conviction Indian stocks found)")
+                        conn = connect_news_db()
+                        c = conn.cursor()
+                        for analysis in analyses:
+                            idx = analysis.get('index', 0) - 1
+                            if 0 <= idx < len(batch):
+                                news_id = batch[idx]['id']
+                                c.execute('''UPDATE news SET aam_janta_translation = ?, macro_pathway = ? WHERE id = ?''',
+                                    (analysis.get('aam_janta_translation', 'Analysis complete.'),
+                                     json.dumps(analysis.get('macro_pathway', [])),
+                                     news_id))
+                        conn.commit()
+                        conn.close()
+                        
+                        print(f"   [+] Batch {i//5 + 1}: Explained {len(batch)} articles in 1 API call")
+                        success = True
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if "429" in error_msg or "quota" in error_msg:
+                            print(f"   [!] API Quota Reached. Swapping keys...")
+                            current_key_idx = (current_key_idx + 1) % len(API_KEYS)
+                            client = genai.Client(api_key=API_KEYS[current_key_idx])
+                            time.sleep(2)
+                            retries += 1
                         else:
-                            saved_count = 0
-                            for stock in filtered_stocks:
-                                ticker = stock.get('ticker')
-                                base_price = 0.0
-                                tech_context_str = ""
-                                passed_filters = True
-                                
-                                try:
-                                    tick_data = yf.Ticker(ticker)
-                                    base_price = tick_data.fast_info.last_price
-                                    
-                                    tech_data = get_stock_technical_context(ticker)
-                                    if tech_data:
-                                        tech_context_str = json.dumps(tech_data)
-                                        impact_lower = stock.get('impact', '').lower()
-                                        range_pos = tech_data.get('range_position_52w', 0.5)
-                                        above_sma20 = tech_data.get('above_sma20')
-                                        
-                                        if 'bull' in impact_lower:
-                                            if above_sma20 is False:
-                                                print(f"   🔴 Trend Blocker rejected {ticker}: BELOW SMA20")
-                                                passed_filters = False
-                                            elif market_regime == "RISK_OFF":
-                                                print(f"   🔴 Regime Blocker rejected {ticker}: RISK_OFF market")
-                                                passed_filters = False
-                                            elif range_pos > 0.85:
-                                                print(f"   🔴 Exhaustion Blocker rejected {ticker}: Range {range_pos}")
-                                                passed_filters = False
-                                                
-                                        if 'bear' in impact_lower:
-                                            if above_sma20 is True:
-                                                print(f"   🔴 Trend Blocker rejected {ticker}: ABOVE SMA20")
-                                                passed_filters = False
-                                            elif market_regime == "RISK_ON":
-                                                print(f"   🔴 Regime Blocker rejected {ticker}: RISK_ON market")
-                                                passed_filters = False
-                                            elif range_pos < 0.15:
-                                                print(f"   🔴 Exhaustion Blocker rejected {ticker}: Range {range_pos}")
-                                                passed_filters = False
-                                except:
-                                    base_price = 0  # Mark as failed
-                                    passed_filters = False
-                                    print(f"   🔴 Price fetch failed for {ticker} — skipping")
-                                
-                                if passed_filters:
-                                    c.execute('''
-                                        INSERT INTO stock_impact (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context)
-                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                    ''', (news_id, ticker, stock.get('impact'), stock.get('estimated_change_percent'), stock.get('view'), stock.get('reason'), base_price, base_price, stock.get('confidence_score', 80), tech_context_str))
-                                    saved_count += 1
-                                    
-                            if saved_count > 0:
-                                print(f"   ✅ AI Found Alpha & Saved to DB: {headline[:40]}... ({saved_count} stocks passed strict filters)")
-                            else:
-                                print(f"   🛡️ All {len(filtered_stocks)} candidates for {headline[:30]} blocked by V2 Tech Guards!")
-                    
-                    conn.commit()
-                    conn.close()
-                    success = True
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if "429" in error_msg or "quota" in error_msg:
-                        print(f"   ⚠️ API Quota Reached on Key Index {current_key_idx}. Swapping keys...")
-                        current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-                        client = genai.Client(api_key=API_KEYS[current_key_idx])
-                        time.sleep(2)
-                        retries += 1
-                    else:
-                        print(f"   🔴 Unknown API Error: {str(e)[:100]}")
-                        break
-            if not success:
-                print(f"   ❌ Failed to analyze article after {retries} retries: {headline[:40]}...")
-            
-            time.sleep(3)
-            
+                            print(f"   [-] Batch Gemini Error: {str(e)[:80]}")
+                            break
+                
+                if not success:
+                    print(f"   [-] Failed batch {i//5 + 1} after {retries} retries")
+                
+                time.sleep(2)  # Small delay between batches
+        
         # Clean up old news (older than 4 days)
         try:
             conn = connect_news_db()
@@ -369,11 +611,11 @@ def ai_news_worker():
         except Exception as e:
             print("DB Cleanup Error:", e)
             
-        # Show latest performance only AFTER the batch of news has been completely analyzed
+        # Performance report
         try:
             import performance_report
             print("\n" + "="*60)
-            print(" 🔄 END OF BATCH ANALYSIS — LATEST RESULTS:")
+            print(" END OF CYCLE — PERFORMANCE REPORT:")
             print("="*60)
             performance_report.run_performance_check()
         except Exception as e:
@@ -389,11 +631,11 @@ def yfinance_worker():
             c = conn.cursor()
             # Fetch active views from last 3 days
             three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("SELECT id, ticker, base_price, impact, created_at FROM stock_impact WHERE status = 'Active View' AND created_at > ?", (three_days_ago,))
+            c.execute("SELECT id, news_id, ticker, base_price, impact, created_at FROM stock_impact WHERE status = 'Active View' AND created_at > ?", (three_days_ago,))
             active_stocks = c.fetchall()
             
             for row in active_stocks:
-                stock_id, ticker, base_price, impact, created_at_str = row
+                stock_id, news_id, ticker, base_price, impact, created_at_str = row
                 try:
                     tick_data = yf.Ticker(ticker)
                     current_price = None
@@ -454,6 +696,18 @@ def yfinance_worker():
                             pass
                             
                     c.execute("UPDATE stock_impact SET current_price = ?, status = ? WHERE id = ?", (current_price, new_status, stock_id))
+                    
+                    # ENSEMBLE LEARNING LOOP: Save resolved signals to historical_patterns
+                    if new_status in ['Predicted Target Hit', 'Reacted Against Prediction']:
+                        c.execute("SELECT headline FROM news WHERE id = ?", (news_id,))
+                        news_row = c.fetchone()
+                        if news_row:
+                            headline = news_row[0]
+                            outcome = 'HIT' if new_status == 'Predicted Target Hit' else 'MISS'
+                            direction = 'BULLISH' if is_bullish else 'BEARISH'
+                            c.execute('''INSERT INTO historical_patterns (headline, ticker, direction, outcome, change_pct)
+                                         VALUES (?, ?, ?, ?, ?)''', (headline, ticker, direction, outcome, diff_percent))
+                                         
                 except Exception as e:
                     pass
                 

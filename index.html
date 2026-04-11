@@ -870,7 +870,7 @@
 
         function loadArticleIntoMainViewer(newsItem) {
             document.getElementById('main-headline-text').innerText = newsItem.headline;
-            document.getElementById('aam-janta-text').innerText = newsItem.aam_janta_translation || "Analyzing impact...";
+            document.getElementById('aam-janta-text').innerText = newsItem.aam_janta_translation || "🧠 AI is analyzing this article in the background. Refresh in a moment for the full explanation.";
             if(newsItem.macro_pathway && newsItem.macro_pathway.length >= 4) {
                 document.getElementById('path-1').innerText = newsItem.macro_pathway[0];
                 document.getElementById('path-2').innerText = newsItem.macro_pathway[1];
