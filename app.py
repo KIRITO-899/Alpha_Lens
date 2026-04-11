@@ -111,7 +111,10 @@ LIVE_NEWS_CACHE = []
 
 # Your Gemini API Keys for rotation
 API_KEYS = [
-    "AIzaSyAX3Tj_yErU_aP19kXlmGDa-URAYGEYojc",
+    "AIzaSyABS1FGUxLRNcekIfquMcIKcGVjKd-bGq4",
+    "AIzaSyCt_GQ1Z39bpkIZMjRZtjmyx-zjxqiFlUw",
+    "AIzaSyCUJbHzWvCYzokef_NyXKNWQ6ywniO-wb4",
+    "AIzaSyA6En5i8Bpr6_lPKWSMecchwRfHruHw0tU"
 ]
 current_key_idx = 0
 client = genai.Client(api_key=API_KEYS[current_key_idx])
