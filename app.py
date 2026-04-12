@@ -31,7 +31,7 @@ app = Flask(__name__, template_folder='.')
 app.secret_key = "super_secret_alpha_lens_key"
 
 # Minimum AI confidence to accept a prediction
-MIN_CONFIDENCE = 65
+MIN_CONFIDENCE = 58
 
 import performance_report
 
@@ -228,170 +228,271 @@ def classify_category(headline):
 # ==========================================
 import re
 
+# All keywords use plain strings; matching uses regex word-boundaries (see get_candidate_stocks)
 STOCK_KEYWORD_MAP = {
-    # NIFTY 50
-    'reliance': 'RELIANCE.NS', 'reliance industries': 'RELIANCE.NS',
-    'tcs': 'TCS.NS', 'tata consultancy': 'TCS.NS',
+    # ── NIFTY 50 ──
+    'reliance industries': 'RELIANCE.NS', 'reliance': 'RELIANCE.NS', 'ril': 'RELIANCE.NS',
+    'tata consultancy': 'TCS.NS', 'tcs': 'TCS.NS',
     'infosys': 'INFY.NS', 'infy': 'INFY.NS',
-    'hdfc bank': 'HDFCBANK.NS',
-    'icici bank': 'ICICIBANK.NS',
-    'sbi ': 'SBIN.NS', 'state bank': 'SBIN.NS',
+    'hdfc bank': 'HDFCBANK.NS', 'hdfcbank': 'HDFCBANK.NS', 'hdfc': 'HDFCBANK.NS',
+    'icici bank': 'ICICIBANK.NS', 'icicibank': 'ICICIBANK.NS', 'icici': 'ICICIBANK.NS',
+    'state bank of india': 'SBIN.NS', 'state bank': 'SBIN.NS', 'sbi': 'SBIN.NS',
     'bharti airtel': 'BHARTIARTL.NS', 'airtel': 'BHARTIARTL.NS',
-    'hindustan unilever': 'HINDUNILVR.NS', 'hul ': 'HINDUNILVR.NS',
-    'itc ': 'ITC.NS',
-    'kotak mahindra': 'KOTAKBANK.NS', 'kotak bank': 'KOTAKBANK.NS',
-    'larsen': 'LT.NS', 'l&t ': 'LT.NS',
-    'axis bank': 'AXISBANK.NS',
+    'hindustan unilever': 'HINDUNILVR.NS', 'hul': 'HINDUNILVR.NS',
+    'itc': 'ITC.NS',
+    'kotak mahindra': 'KOTAKBANK.NS', 'kotak bank': 'KOTAKBANK.NS', 'kotak': 'KOTAKBANK.NS',
+    'larsen & toubro': 'LT.NS', 'larsen and toubro': 'LT.NS', 'larsen': 'LT.NS', 'l&t': 'LT.NS', 'l and t': 'LT.NS',
+    'axis bank': 'AXISBANK.NS', 'axis': 'AXISBANK.NS',
     'bajaj finance': 'BAJFINANCE.NS',
     'bajaj finserv': 'BAJAJFINSV.NS',
-    'maruti': 'MARUTI.NS', 'maruti suzuki': 'MARUTI.NS',
+    'maruti suzuki': 'MARUTI.NS', 'maruti': 'MARUTI.NS',
     'asian paints': 'ASIANPAINT.NS',
-    'titan ': 'TITAN.NS', 'titan company': 'TITAN.NS',
-    'sun pharma': 'SUNPHARMA.NS', 'sun pharmaceutical': 'SUNPHARMA.NS',
+    'titan company': 'TITAN.NS', 'titan': 'TITAN.NS',
+    'sun pharmaceutical': 'SUNPHARMA.NS', 'sun pharma': 'SUNPHARMA.NS',
     'wipro': 'WIPRO.NS',
-    'hcl tech': 'HCLTECH.NS', 'hcl technologies': 'HCLTECH.NS',
-    'power grid': 'POWERGRID.NS',
+    'hcl technologies': 'HCLTECH.NS', 'hcl tech': 'HCLTECH.NS', 'hcl': 'HCLTECH.NS',
+    'power grid': 'POWERGRID.NS', 'powergrid': 'POWERGRID.NS',
     'ntpc': 'NTPC.NS',
     'tata motors': 'TATAMOTORS.NS',
     'tata steel': 'TATASTEEL.NS',
-    'mahindra': 'M&M.NS', 'm&m': 'M&M.NS',
+    'mahindra & mahindra': 'M&M.NS', 'mahindra and mahindra': 'M&M.NS', 'mahindra': 'M&M.NS', 'm&m': 'M&M.NS',
     'adani enterprises': 'ADANIENT.NS', 'adani ent': 'ADANIENT.NS',
     'adani ports': 'ADANIPORTS.NS',
     'adani green': 'ADANIGREEN.NS',
     'adani power': 'ADANIPOWER.NS',
-    'ultratech': 'ULTRACEMCO.NS', 'ultratech cement': 'ULTRACEMCO.NS',
+    'adani total': 'ADANITOTAL.NS',
+    'adani': 'ADANIENT.NS',
+    'ultratech cement': 'ULTRACEMCO.NS', 'ultratech': 'ULTRACEMCO.NS',
     'nestle india': 'NESTLEIND.NS', 'nestle': 'NESTLEIND.NS',
     'tech mahindra': 'TECHM.NS',
     'indusind bank': 'INDUSINDBK.NS', 'indusind': 'INDUSINDBK.NS',
     'grasim': 'GRASIM.NS',
     'bajaj auto': 'BAJAJ-AUTO.NS',
     'cipla': 'CIPLA.NS',
-    'dr reddy': 'DRREDDY.NS', 'dr. reddy': 'DRREDDY.NS',
-    'hero motocorp': 'HEROMOTOCO.NS', 'hero moto': 'HEROMOTOCO.NS',
+    'dr reddy': 'DRREDDY.NS', "dr. reddy's": 'DRREDDY.NS', 'dr reddys': 'DRREDDY.NS',
+    'hero motocorp': 'HEROMOTOCO.NS', 'hero moto': 'HEROMOTOCO.NS', 'hero': 'HEROMOTOCO.NS',
     'coal india': 'COALINDIA.NS',
     'ongc': 'ONGC.NS',
-    'bpcl': 'BPCL.NS', 'bharat petroleum': 'BPCL.NS',
-    'divis lab': 'DIVISLAB.NS',
+    'bharat petroleum': 'BPCL.NS', 'bpcl': 'BPCL.NS',
+    "divi's laboratories": 'DIVISLAB.NS', "divi's lab": 'DIVISLAB.NS', 'divis lab': 'DIVISLAB.NS', 'divis': 'DIVISLAB.NS',
     'britannia': 'BRITANNIA.NS',
     'eicher motors': 'EICHERMOT.NS', 'royal enfield': 'EICHERMOT.NS',
-    'apollo hospital': 'APOLLOHOSP.NS',
+    'apollo hospitals': 'APOLLOHOSP.NS', 'apollo hospital': 'APOLLOHOSP.NS', 'apollo': 'APOLLOHOSP.NS',
     'tata consumer': 'TATACONSUM.NS',
     'sbi life': 'SBILIFE.NS',
     'hdfc life': 'HDFCLIFE.NS',
     'shriram finance': 'SHRIRAMFIN.NS',
-    'bhel': 'BHEL.NS',
-    'jsw steel': 'JSWSTEEL.NS',
+    'bhel': 'BHEL.NS', 'bharat heavy electricals': 'BHEL.NS',
+    'jsw steel': 'JSWSTEEL.NS', 'jsw': 'JSWSTEEL.NS',
     'hindalco': 'HINDALCO.NS',
-    # Popular Mid/Small Caps
+    # ── Popular Mid/Small Caps ──
     'muthoot finance': 'MUTHOOTFIN.NS', 'muthoot fin': 'MUTHOOTFIN.NS', 'muthoot': 'MUTHOOTFIN.NS',
     'aurobindo pharma': 'AUROPHARMA.NS', 'aurobindo': 'AUROPHARMA.NS',
-    'hpcl': 'HINDPETRO.NS', 'hindustan petroleum': 'HINDPETRO.NS',
-    'ioc': 'IOC.NS', 'indian oil': 'IOC.NS',
-    'bel': 'BEL.NS', 'bharat electronics': 'BEL.NS',
-    'hal': 'HAL.NS', 'hindustan aeronautics': 'HAL.NS',
+    'hindustan petroleum': 'HINDPETRO.NS', 'hpcl': 'HINDPETRO.NS',
+    'indian oil': 'IOC.NS', 'ioc': 'IOC.NS',
+    'bharat electronics': 'BEL.NS', 'bel': 'BEL.NS',
+    'hindustan aeronautics': 'HAL.NS', 'hal': 'HAL.NS',
     'solar industries': 'SOLARINDS.NS',
-    'vodafone idea': 'IDEA.NS',
-    'godfrey phillips': 'GODFRYPHLP.NS', 'godfrey': 'GODFRYPHLP.NS',
-    'tejas network': 'TEJASNET.NS',
-    'bandhan bank': 'BANDHANBNK.NS',
+    'vodafone idea': 'IDEA.NS', 'vi ': 'IDEA.NS',
+    'godfrey phillips': 'GODFRYPHLP.NS',
+    'tejas networks': 'TEJASNET.NS', 'tejas network': 'TEJASNET.NS',
+    'bandhan bank': 'BANDHANBNK.NS', 'bandhan': 'BANDHANBNK.NS',
     'manappuram': 'MANAPPURAM.NS',
     'zomato': 'ZOMATO.NS',
     'paytm': 'PAYTM.NS', 'one97': 'PAYTM.NS',
     'nykaa': 'NYKAA.NS',
     'delhivery': 'DELHIVERY.NS',
     'vedanta': 'VEDL.NS',
-    'jindal steel': 'JINDALSTEL.NS',
+    'jindal steel': 'JINDALSTEL.NS', 'jindal': 'JINDALSTEL.NS',
     'tata power': 'TATAPOWER.NS',
     'tata elxsi': 'TATAELXSI.NS',
-    'ltimindtree': 'LTIM.NS', 'lti mindtree': 'LTIM.NS',
-    'pnb': 'PNB.NS', 'punjab national': 'PNB.NS',
-    'bank of baroda': 'BANKBARODA.NS',
-    'canara bank': 'CANBK.NS',
-    'idbi bank': 'IDBI.NS',
+    'ltimindtree': 'LTIM.NS', 'lti mindtree': 'LTIM.NS', 'lti': 'LTIM.NS',
+    'punjab national bank': 'PNB.NS', 'punjab national': 'PNB.NS', 'pnb': 'PNB.NS',
+    'bank of baroda': 'BANKBARODA.NS', 'bob': 'BANKBARODA.NS',
+    'canara bank': 'CANBK.NS', 'canara': 'CANBK.NS',
+    'idbi bank': 'IDBI.NS', 'idbi': 'IDBI.NS',
     'federal bank': 'FEDERALBNK.NS',
     'yes bank': 'YESBANK.NS',
     'irctc': 'IRCTC.NS',
     'irfc': 'IRFC.NS',
     'rvnl': 'RVNL.NS', 'rail vikas': 'RVNL.NS',
     'nhpc': 'NHPC.NS',
-    'suzlon': 'SUZLON.NS', 'suzlon energy': 'SUZLON.NS',
+    'suzlon energy': 'SUZLON.NS', 'suzlon': 'SUZLON.NS',
     'tata chemicals': 'TATACHEM.NS',
     'godrej consumer': 'GODREJCP.NS', 'godrej': 'GODREJCP.NS',
     'pidilite': 'PIDILITIND.NS',
     'havells': 'HAVELLS.NS',
     'siemens': 'SIEMENS.NS',
-    'abb india': 'ABB.NS',
+    'abb india': 'ABB.NS', 'abb': 'ABB.NS',
     'page industries': 'PAGEIND.NS',
     'dmart': 'DMART.NS', 'avenue supermarts': 'DMART.NS',
     'biocon': 'BIOCON.NS',
     'lupin': 'LUPIN.NS',
-    'torrent pharma': 'TORNTPHARM.NS',
-    'jubilant food': 'JUBLFOOD.NS',
-    'indigo': 'INDIGO.NS', 'interglobe': 'INDIGO.NS',
+    'torrent pharma': 'TORNTPHARM.NS', 'torrent': 'TORNTPHARM.NS',
+    'jubilant foodworks': 'JUBLFOOD.NS', 'jubilant food': 'JUBLFOOD.NS',
+    'indigo airlines': 'INDIGO.NS', 'interglobe aviation': 'INDIGO.NS', 'indigo': 'INDIGO.NS',
     'spicejet': 'SPICEJET.NS',
-    'dixon': 'DIXON.NS', 'dixon tech': 'DIXON.NS',
+    'dixon technologies': 'DIXON.NS', 'dixon tech': 'DIXON.NS', 'dixon': 'DIXON.NS',
     'polycab': 'POLYCAB.NS',
-    'persistent': 'PERSISTENT.NS', 'persistent systems': 'PERSISTENT.NS',
+    'persistent systems': 'PERSISTENT.NS', 'persistent': 'PERSISTENT.NS',
     'coforge': 'COFORGE.NS',
     'mphasis': 'MPHASIS.NS',
-    'max health': 'MAXHEALTH.NS', 'max healthcare': 'MAXHEALTH.NS',
-    'motherson': 'MOTHERSON.NS',
+    'max healthcare': 'MAXHEALTH.NS', 'max health': 'MAXHEALTH.NS',
+    'motherson sumi': 'MOTHERSON.NS', 'motherson': 'MOTHERSON.NS',
     'srf': 'SRF.NS',
     'pi industries': 'PIIND.NS',
-    'cholamandalam': 'CHOLAFIN.NS',
+    'cholamandalam investment': 'CHOLAFIN.NS', 'cholamandalam': 'CHOLAFIN.NS', 'chola': 'CHOLAFIN.NS',
     'voltas': 'VOLTAS.NS',
     'bharat forge': 'BHARATFORG.NS',
-    'exide': 'EXIDEIND.NS',
+    'exide industries': 'EXIDEIND.NS', 'exide': 'EXIDEIND.NS',
     'amara raja': 'AMARAJABAT.NS',
     'marico': 'MARICO.NS',
     'dabur': 'DABUR.NS',
-    'colgate': 'COLPAL.NS',
-    'acc cement': 'ACC.NS', 'acc ': 'ACC.NS',
-    'ambuja': 'AMBUJACEM.NS', 'ambuja cement': 'AMBUJACEM.NS',
-    'shree cement': 'SHREECEM.NS',
-    'dalmia bharat': 'DALBHARAT.NS',
+    'colgate palmolive': 'COLPAL.NS', 'colgate': 'COLPAL.NS',
+    'acc cement': 'ACC.NS', 'acc': 'ACC.NS',
+    'ambuja cements': 'AMBUJACEM.NS', 'ambuja cement': 'AMBUJACEM.NS', 'ambuja': 'AMBUJACEM.NS',
+    'shree cement': 'SHREECEM.NS', 'shree': 'SHREECEM.NS',
+    'dalmia bharat': 'DALBHARAT.NS', 'dalmia': 'DALBHARAT.NS',
     'hatsun agro': 'HATSUN.NS', 'hatsun': 'HATSUN.NS',
+    # ── Tata Group (generic "tata" catches news about the whole group) ──
+    'tata group': 'TATAMOTORS.NS',
+    # ── Other large populars ──
+    'dlf': 'DLF.NS',
+    'lodha': 'LODHA.NS', 'macrotech': 'LODHA.NS',
+    'oberoi realty': 'OBEROIRLTY.NS', 'oberoi': 'OBEROIRLTY.NS',
+    'lici': 'LICI.NS', 'lic india': 'LICI.NS', 'lic': 'LICI.NS',
+    'nuvoco': 'NUVOCO.NS',
+    'syngene': 'SYNGENE.NS',
+    'laurus labs': 'LAURUSLABS.NS', 'laurus': 'LAURUSLABS.NS',
+    'alkem laboratories': 'ALKEM.NS', 'alkem': 'ALKEM.NS',
+    'the ramco': 'RAMCOCEM.NS', 'ramco cement': 'RAMCOCEM.NS',
+    'emami': 'EMAMILTD.NS',
+    'astral': 'ASTRAL.NS',
+    'supreme industries': 'SUPREMEIND.NS',
+    'kajaria': 'KAJARIACER.NS', 'kajaria ceramics': 'KAJARIACER.NS',
+    'relaxo': 'RELAXO.NS',
+    'campus activewear': 'CAMPUS.NS',
+    'one mobi': 'ONMOBILE.NS',
+    'nesco': 'NESCO.NS',
+    'gland pharma': 'GLAND.NS',
+    'ipca laboratories': 'IPCALAB.NS', 'ipca': 'IPCALAB.NS',
+    'navin fluorine': 'NAVINFLUOR.NS',
+    'deepak nitrite': 'DEEPAKNTR.NS', 'deepak': 'DEEPAKNTR.NS',
+    'clean science': 'CLEANSCI.NS',
+    'fine organics': 'FINEORG.NS',
+    'aarti industries': 'AARTIIND.NS', 'aarti': 'AARTIIND.NS',
+    'nocil': 'NOCIL.NS',
+    'bombay burmah': 'BBTC.NS',
+    'edelweiss': 'EDELWEISS.NS',
+    'angel one': 'ANGELONE.NS', 'angel broking': 'ANGELONE.NS',
+    'hdfc amc': 'HDFCAMC.NS',
+    'nippon india': 'NAM-INDIA.NS', 'nippon': 'NAM-INDIA.NS',
+    'bajaj consumer': 'BAJAJCON.NS',
+    'trent': 'TRENT.NS',
+    'v-mart': 'VMART.NS', 'v mart': 'VMART.NS',
+    'metro brands': 'METROBRAND.NS',
+    'bata': 'BATAIND.NS', 'bata india': 'BATAIND.NS',
+    'kpit technologies': 'KPITTECH.NS', 'kpit': 'KPITTECH.NS',
+    'tata technologies': 'TATATECH.NS', 'tata tech': 'TATATECH.NS',
+    'cams': 'CAMS.NS',
+    'cdsl': 'CDSL.NS',
+    'bse': 'BSE.NS',
+    'mcx': 'MCX.NS',
+    'nse india': 'NSEI.NS',
+    'mamaearth': 'HONASA.NS', 'honasa': 'HONASA.NS',
+    'boat': 'IMAGINE.NS',
+    'swiggy': 'SWIGGY.NS',
+    'ola electric': 'OLAELEC.NS', 'ola': 'OLAELEC.NS',
 }
 
 # ==========================================
 # MACRO & SECTOR IMPACT MAP — 2nd order effects
 # ==========================================
 MACRO_IMPACT_MAP = {
+    # ── Crude oil ──
     'crude oil rise': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('ASIANPAINT.NS', 'BEARISH')],
     'crude oil crash': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH'), ('ASIANPAINT.NS', 'BULLISH')],
+    'crude rises': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH')],
+    'crude falls': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH')],
+    'oil prices rise': [('ONGC.NS', 'BULLISH'), ('HINDPETRO.NS', 'BEARISH'), ('BPCL.NS', 'BEARISH')],
+    'oil prices fall': [('ONGC.NS', 'BEARISH'), ('HINDPETRO.NS', 'BULLISH'), ('BPCL.NS', 'BULLISH')],
+    # ── FII / FPI ──
     'fii selling': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fii sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fii sells': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fiis sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fiis selling': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fii outflow': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fpi sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fpis sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'fpi outflow': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'foreign investor sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
     'fii buying': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
+    'fii buy': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
+    'fii inflow': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
+    'fpi inflow': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
+    # ── RBI Rates ──
     'rate hike': [('DLF.NS', 'BEARISH'), ('LODHA.NS', 'BEARISH'), ('SBIN.NS', 'BULLISH')],
     'rate cut': [('DLF.NS', 'BULLISH'), ('LODHA.NS', 'BULLISH'), ('SBIN.NS', 'BEARISH')],
-    'defense budget': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH'), ('MAZDOCK.NS', 'BULLISH')],
+    'rbi rate': [('HDFCBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH'), ('DLF.NS', 'BULLISH')],
+    'repo rate cut': [('HDFCBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH'), ('DLF.NS', 'BULLISH')],
+    'repo rate hike': [('HDFCBANK.NS', 'BEARISH'), ('SBIN.NS', 'BEARISH'), ('DLF.NS', 'BEARISH')],
+    # ── Defence / Infra ──
+    'defense budget': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH'), ('BHARATFORG.NS', 'BULLISH')],
+    'defence budget': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH'), ('BHARATFORG.NS', 'BULLISH')],
     'railway budget': [('RVNL.NS', 'BULLISH'), ('IRFC.NS', 'BULLISH'), ('IRCTC.NS', 'BULLISH')],
+    'infrastructure spending': [('LT.NS', 'BULLISH'), ('RVNL.NS', 'BULLISH'), ('NTPC.NS', 'BULLISH')],
+    # ── Sector rallies ──
     'pharma sector rally': [('SUNPHARMA.NS', 'BULLISH'), ('CIPLA.NS', 'BULLISH'), ('DRREDDY.NS', 'BULLISH')],
+    'pharma stocks rally': [('SUNPHARMA.NS', 'BULLISH'), ('CIPLA.NS', 'BULLISH'), ('DRREDDY.NS', 'BULLISH')],
     'it sector rally': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
+    'it stocks rally': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
+    'banking sector': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH')],
+    'bank nifty': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('KOTAKBANK.NS', 'BULLISH')],
+    'auto sector': [('MARUTI.NS', 'BULLISH'), ('TATAMOTORS.NS', 'BULLISH'), ('M&M.NS', 'BULLISH')],
+    'realty stocks': [('DLF.NS', 'BULLISH'), ('LODHA.NS', 'BULLISH'), ('OBEROIRLTY.NS', 'BULLISH')],
+    'metal stocks': [('TATASTEEL.NS', 'BULLISH'), ('JSWSTEEL.NS', 'BULLISH'), ('HINDALCO.NS', 'BULLISH')],
+    'gold surges': [('MUTHOOTFIN.NS', 'BULLISH'), ('MANAPPURAM.NS', 'BULLISH')],
+    'gold rises': [('MUTHOOTFIN.NS', 'BULLISH'), ('MANAPPURAM.NS', 'BULLISH')],
+    'gold falls': [('MUTHOOTFIN.NS', 'BEARISH'), ('MANAPPURAM.NS', 'BEARISH')],
+    # ── Macro/Geopolitical ──
+    'rupee falls': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
+    'rupee weakens': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
+    'rupee rises': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
+    'tariff': [('TATAMOTORS.NS', 'BEARISH'), ('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
+    'trade war': [('TATAMOTORS.NS', 'BEARISH'), ('INFY.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'inflation rise': [('HDFCBANK.NS', 'BEARISH'), ('DLF.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'gdp growth': [('HDFCBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH'), ('LT.NS', 'BULLISH')],
 }
 
-def get_candidate_stocks(headline):
-    """Finds candidate stock tickers from headline via direct name or macro effects."""
-    h = ' ' + headline.lower() + ' '
-    candidates = {}
-    
-    # 1. Direct Stock Mentions
-    for keyword, ticker in sorted(STOCK_KEYWORD_MAP.items(), key=lambda x: -len(x[0])):
-        if keyword in h and ticker not in candidates:
-            # Basic sentiment guess as starting point
-            bull_score = sum(1 for kw in BULLISH_KEYWORDS if kw in h)
-            bear_score = sum(1 for kw in BEARISH_KEYWORDS if kw in h)
-            impact = 'BULLISH' if bull_score >= bear_score else 'BEARISH'
-            candidates[ticker] = impact
 
-    # 2. Macro/Sector Mentions
+def get_candidate_stocks(headline):
+    """Finds candidate stock tickers from headline via regex word-boundary matching and macro effects."""
+    h = headline.lower()
+    candidates = {}  # ticker -> impact
+
+    bull_score = sum(1 for kw in BULLISH_KEYWORDS if kw in h)
+    bear_score = sum(1 for kw in BEARISH_KEYWORDS if kw in h)
+    headline_sentiment = 'BULLISH' if bull_score >= bear_score else 'BEARISH'
+
+    # 1. Direct Stock Mentions — longest keyword first to avoid partial shadowing
+    for keyword, ticker in sorted(STOCK_KEYWORD_MAP.items(), key=lambda x: -len(x[0])):
+        if ticker in candidates:
+            continue
+        # Use word-boundary regex so "SBI" matches "SBI's", "SBI-backed" etc.
+        pattern = r'\b' + re.escape(keyword) + r'\b'
+        if re.search(pattern, h):
+            candidates[ticker] = headline_sentiment
+
+    # 2. Macro/Sector Mentions (plain substring — these are longer phrases)
     for macro_kw, effects in MACRO_IMPACT_MAP.items():
         if macro_kw in h:
             for ticker, impact in effects:
                 if ticker not in candidates:
                     candidates[ticker] = impact
 
-    # Maximum 3 candidates to avoid noise
-    return list(candidates.items())[:3]
+    # Return up to 10 candidates (increased from 3 to surface more signals)
+    return list(candidates.items())[:10]
 
 
 # ==========================================

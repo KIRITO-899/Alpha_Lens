@@ -18,14 +18,19 @@ class SentimentDepthModel:
     MILD_BULLISH = ['rise', 'rises', 'gain', 'gains', 'up ', 'high', 'positive',
                     'growth', 'profit', 'beat', 'rebound', 'recovery', 'dividend',
                     'upgrade', 'buy', 'bullish', 'outperform', 'optimistic', 'winner',
-                    'top pick', 'expansion', 'recommend']
+                    'top pick', 'expansion', 'recommend', 'jumps', 'jump', 'advances',
+                    'higher', 'gainer', 'gainers', 'best performer', 'outpaces',
+                    'valued', 'confident', 'strong results', 'record', 'boost',
+                    'allotment', 'listing', 'inflow', 'rally', 'rallies', 'upside']
     STRONG_BEARISH = ['crash', 'crashes', 'plunge', 'plunges', 'collapse', 'tank', 'tanks',
                       'worst', 'crisis', 'scam', 'fraud', 'ban', 'default', 'bloodbath',
                       'meltdown', 'wipeout', 'halt', '52-week low']
     MILD_BEARISH = ['fall', 'falls', 'drop', 'drops', 'decline', 'declines', 'down ',
                     'loss', 'losses', 'weak', 'negative', 'concern', 'fear', 'sell',
                     'downgrade', 'underperform', 'miss', 'cut', 'cuts', 'slash', 'warning',
-                    'flee', 'exit', 'outflow', 'slump']
+                    'flee', 'exit', 'outflow', 'slump', 'lower', 'loser', 'losers',
+                    'pressure', 'drag', 'disappoint', 'disappoints', 'fii sells',
+                    'bearish', 'underperforms', 'slows', 'retreats', 'selling']
     NEGATION = ['despite', 'but', 'however', 'although', 'even as', 'in spite of']
     INTENSITY = {'sharply': 1.5, 'significantly': 1.4, 'massively': 1.8, 'slightly': 0.5,
                  'marginally': 0.4, 'strongly': 1.5, 'heavily': 1.6, 'aggressively': 1.7}
@@ -86,7 +91,7 @@ class HistoricalSimilarityModel:
             conn.close()
 
             if len(patterns) < 3:
-                return 65  # Not enough data — neutral-high default
+                return 68  # Not enough data — neutral-high default
 
             tokens = self._tokenize(headline)
             matches = []
@@ -96,7 +101,7 @@ class HistoricalSimilarityModel:
                     matches.append({'sim': sim, 'same_dir': past_dir == direction, 'hit': outcome == 'HIT'})
 
             if not matches:
-                return 65
+                return 68
 
             same_dir = [m for m in matches if m['same_dir']]
             if not same_dir:
