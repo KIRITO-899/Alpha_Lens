@@ -11,6 +11,7 @@ from sendgrid.helpers.mail import Mail
 import feedparser
 from google import genai
 from google.genai import types
+from difflib import SequenceMatcher
 import yfinance as yf
 import logging
 from email.utils import parsedate_to_datetime
@@ -546,9 +547,16 @@ def ai_news_worker():
         for article in relevant:
             headline = article['headline']
             
-            # Duplicate check
-            c.execute("SELECT id FROM news WHERE headline = ?", (headline,))
-            if c.fetchone():
+            # Duplicate check (Fuzzy match to catch slightly different titles)
+            is_dupe = False
+            c.execute("SELECT id, headline FROM news ORDER BY created_at DESC LIMIT 50")
+            for row in c.fetchall():
+                # Exact match or high similarity
+                if row[1] == headline or SequenceMatcher(None, headline.lower(), row[1].lower()).ratio() > 0.75:
+                    is_dupe = True
+                    break
+                    
+            if is_dupe:
                 continue
             
             # Rule-based category
