@@ -413,6 +413,7 @@
         let isNonStockMode = false;
         let currentUser = null;
         let currentArchiveFilter = 'all';
+        let marketOpen = true;  // Updated from API — controls whether stock changes are shown
         const tabs = ['top-news', 'all-news', 'portfolio', 'flow', 'stocks'];
 
         function setArchiveFilter(filter) {
@@ -777,7 +778,15 @@
         async function fetchLiveNews() {
             try {
                 const response = await fetch('/api/news/all');
-                const raw = await response.json();
+                const payload = await response.json();
+                // Handle both old array format and new {market_open, news} format
+                let raw;
+                if (Array.isArray(payload)) {
+                    raw = payload;
+                } else {
+                    raw = payload.news || [];
+                    marketOpen = !!payload.market_open;
+                }
                 // Deduplicate by headline — keep newest, merge stocks from duplicates
                 const map = new Map();
                 raw.forEach(item => {
@@ -891,7 +900,8 @@
                 const hasCurrent = !isNaN(currentPrice) && currentPrice > 0;
                 const diffPct = hasPrice && hasCurrent ? ((currentPrice - basePrice) / basePrice * 100) : null;
                 const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
-                const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
+                const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct > 0 ? 'text-green-400' : diffPct < 0 ? 'text-red-400' : 'text-slate-300';
+
                 const statusBadge = getStatusBadge(stock.status);
                 const tr = document.createElement('tr');
                 tr.className = "hover:bg-white/[0.04] transition group";
@@ -1025,7 +1035,7 @@
                     const hasC = !isNaN(cp) && cp > 0;
                     const diff = hasP && hasC ? ((cp - bp) / bp * 100) : null;
                     const diffStr = diff !== null ? (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%' : '—';
-                    const diffCls = diff === null ? 'text-slate-400' : diff >= 0 ? 'text-green-400' : 'text-red-400';
+                    const diffCls = diff === null ? 'text-slate-400' : diff > 0 ? 'text-green-400' : diff < 0 ? 'text-red-400' : 'text-slate-300';
                     const statusBadge = getStatusBadge(stock.status);
                     let tCol = impact === 'bullish' ? 'text-green-400' :
                                impact === 'slightly bullish' ? 'text-emerald-400' :
@@ -1098,7 +1108,7 @@
                 const hasCurrent = !isNaN(cp) && cp > 0;
                 const diffPct = hasPrice && hasCurrent ? ((cp - bp) / bp * 100) : null;
                 const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
-                const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
+                const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct > 0 ? 'text-green-400' : diffPct < 0 ? 'text-red-400' : 'text-slate-300';
 
                 const statusBadge = getStatusBadge(stock.status);
                 const card = document.createElement('div');
@@ -1117,7 +1127,7 @@
                             <div class="text-slate-300 font-bold">${hasPrice ? '₹' + bp.toFixed(2) : '—'}</div>
                         </div>
                         <div class="text-center">
-                            <div class="text-slate-500 text-[9px] uppercase mb-1">Live Price</div>
+                            <div class="text-slate-500 text-[9px] uppercase mb-1">${marketOpen ? 'Live Price' : 'Prev Close'}</div>
                             <div class="text-white font-bold">${hasCurrent ? '₹' + cp.toFixed(2) : '—'}</div>
                         </div>
                         <div class="text-center">

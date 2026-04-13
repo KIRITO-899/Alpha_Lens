@@ -32,6 +32,16 @@ from technical_analysis import (
 )
 from prediction_models import EnsemblePredictor
 
+def is_market_open():
+    """Return True if Indian stock market is currently open (Mon-Fri, 9:15 AM – 3:30 PM IST)."""
+    ist = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(ist)
+    weekday = now_ist.weekday()  # 0=Mon … 4=Fri
+    if weekday >= 5:
+        return False
+    t = now_ist.hour * 60 + now_ist.minute  # minutes since midnight
+    return (9 * 60 + 15) <= t <= (15 * 60 + 30)
+
 app = Flask(__name__, template_folder='.')
 app.secret_key = "super_secret_alpha_lens_key"
 
@@ -629,6 +639,7 @@ def ai_news_worker():
             ensemble = EnsemblePredictor()
             approved_signals = []  # collect results before opening DB again
             
+            market_currently_open = is_market_open()
             for ticker, base_direction in candidates:
                 # 1. Fetch previous close (base) + latest price (current)
                 #    base_price = PREVIOUS session close  →  delta shows today's full move
@@ -659,6 +670,10 @@ def ai_news_worker():
                 except Exception:
                     base_price = 0.0
                     current_price_now = 0.0
+
+                # When market is closed, set current_price = base_price so change shows 0%
+                if not market_currently_open and base_price > 0:
+                    current_price_now = base_price
 
                 if base_price <= 0 or current_price_now <= 0:
                     continue
@@ -809,9 +824,16 @@ Output STRICT valid JSON array:
         time.sleep(600)
 
 def yfinance_worker():
-    print("YFinance Live Price Engine v2.1 Started. Asymmetric Thresholds + Time Expiry Active...")
+    print("YFinance Live Price Engine v2.2 Started. Market-Hours Aware + Asymmetric Thresholds + Time Expiry Active...")
     while True:
         try:
+            # ── MARKET HOURS CHECK ──
+            if not is_market_open():
+                # Market is closed — do NOT update prices so change stays at 0%
+                print("   [YF] Market closed — skipping price update cycle.")
+                time.sleep(60)
+                continue
+
             # ── PHASE A: Read active stocks (read-only, no lock needed in WAL mode) ──
             conn = connect_news_db()
             c = conn.cursor()
@@ -928,17 +950,11 @@ def home():
 
 @app.route('/api/indices', methods=['GET'])
 def get_indices():
-    from datetime import timezone, timedelta as td
-    ist = timezone(td(hours=5, minutes=30))
+    market_open = is_market_open()
+    ist = timezone(timedelta(hours=5, minutes=30))
     now_ist = datetime.now(ist)
-    weekday = now_ist.weekday()  # 0=Mon … 4=Fri, 5=Sat, 6=Sun
+    weekday = now_ist.weekday()
     hour, minute = now_ist.hour, now_ist.minute
-
-    market_open = (
-        weekday < 5 and
-        ((hour == 9 and minute >= 15) or (10 <= hour <= 14) or
-         (hour == 15 and minute <= 30))
-    )
 
     if market_open:
         price_label = "Live"
@@ -965,15 +981,14 @@ def get_indices():
             info = t.fast_info
             price = info.last_price
             prev_close = info.previous_close
-            # Always compute real change vs prev_close — even outside market hours the
-            # last recorded price differs from the previous session's close.
-            if price and prev_close and prev_close > 0:
+            # When market is closed, show 0% change
+            if market_open and price and prev_close and prev_close > 0:
                 change_pct = ((price - prev_close) / prev_close) * 100
             else:
                 change_pct = 0.0
             result.append({
                 "name": idx["name"],
-                "price": round(price, 2),
+                "price": round(price, 2) if price else None,
                 "change_pct": round(change_pct, 2),
                 "is_live": market_open,
                 "price_label": price_label,
@@ -996,13 +1011,13 @@ def get_top_news():
         
         if not news_row:
             conn.close()
-            return jsonify([{
+            return jsonify({"market_open": is_market_open(), "news": [{
                 "headline": "AI Engine is analyzing LiveMint, ET, and MoneyControl...",
                 "news_time": "System Processing",
                 "aam_janta_translation": "The background engine is downloading and filtering live market data. Please wait.",
                 "macro_pathway": ["Scrape", "Filter", "Analyze", "Deploy"],
                 "affected_stocks": []
-            }])
+            }]})
         
         news_item = dict(news_row)
         try:
@@ -1014,10 +1029,10 @@ def get_top_news():
         stocks = [dict(s) for s in c.fetchall()]
         news_item['affected_stocks'] = stocks
         conn.close()
-        return jsonify([news_item])
+        return jsonify({"market_open": is_market_open(), "news": [news_item]})
     except Exception as e:
         print("Error fetching top news", e)
-        return jsonify([])
+        return jsonify({"market_open": is_market_open(), "news": []})
 
 @app.route('/api/news/all', methods=['GET'])
 def get_all_news():
@@ -1043,10 +1058,12 @@ def get_all_news():
             all_news.append(news_item)
             
         conn.close()
-        return jsonify(all_news)
+        
+        mkt_open = is_market_open()
+        return jsonify({"market_open": mkt_open, "news": all_news})
     except Exception as e:
         print("Error fetching all news", e)
-        return jsonify([])
+        return jsonify({"market_open": is_market_open(), "news": []})
 
 @app.route('/api/send-otp', methods=['POST'])
 def send_otp():
