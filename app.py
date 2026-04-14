@@ -630,7 +630,7 @@ def ai_news_worker():
         # PHASE 1: INSTANT — Scrape, Filter, Save, Map (no API calls)
         # ============================================================
         raw_articles = []
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=5)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
         for url in RSS_SOURCES:
             try:
                 feed = feedparser.parse(url)
@@ -901,12 +901,12 @@ Output STRICT valid JSON array:
                 
                 time.sleep(2)  # Small delay between batches
         
-        # Clean up old news (older than 4 days)
+        # Clean up old news (older than 7 days)
         try:
-            four_days_ago = (datetime.now(timezone.utc) - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
+            seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
             def _cleanup(conn, c):
-                c.execute("DELETE FROM stock_impact WHERE news_id IN (SELECT id FROM news WHERE created_at < ?)", (four_days_ago,))
-                c.execute("DELETE FROM news WHERE created_at < ?", (four_days_ago,))
+                c.execute("DELETE FROM stock_impact WHERE news_id IN (SELECT id FROM news WHERE created_at < ?)", (seven_days_ago,))
+                c.execute("DELETE FROM news WHERE created_at < ?", (seven_days_ago,))
             db_write(_cleanup)
         except Exception as e:
             print("DB Cleanup Error:", e)
@@ -933,8 +933,8 @@ def yfinance_worker():
             # ── PHASE A: Read active stocks ──
             conn = connect_news_db()
             c = conn.cursor()
-            three_days_ago = (datetime.now(timezone.utc) - timedelta(days=3)).strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("SELECT id, news_id, ticker, base_price, impact, created_at FROM stock_impact WHERE status = 'Active View' AND created_at > ?", (three_days_ago,))
+            seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+            c.execute("SELECT id, news_id, ticker, base_price, impact, created_at FROM stock_impact WHERE status = 'Active View' AND created_at > ?", (seven_days_ago,))
             active_stocks = c.fetchall()
             conn.close()
 
@@ -1176,9 +1176,9 @@ def get_all_news():
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        # Only return news from the last 4 days (by DB insertion time, not RSS publish date)
-        four_days_ago = (datetime.now(timezone.utc) - timedelta(days=4)).strftime('%Y-%m-%d %H:%M:%S')
-        c.execute("SELECT * FROM news WHERE created_at >= ? ORDER BY created_at DESC", (four_days_ago,))
+        # Only return news from the last 7 days (by DB insertion time, not RSS publish date)
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+        c.execute("SELECT * FROM news WHERE created_at >= ? ORDER BY created_at DESC", (seven_days_ago,))
         news_rows = c.fetchall()
         
         all_news = []
