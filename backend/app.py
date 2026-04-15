@@ -106,7 +106,7 @@ def is_market_open():
     t = now_ist.hour * 60 + now_ist.minute  # minutes since midnight
     return (9 * 60 + 15) <= t <= (15 * 60 + 30)
 
-app = Flask(__name__, template_folder='.')
+app = Flask(__name__, template_folder='../frontend', static_folder='../frontend', static_url_path='/')
 app.secret_key = "super_secret_alpha_lens_key"
 
 # Minimum AI confidence to accept a prediction
