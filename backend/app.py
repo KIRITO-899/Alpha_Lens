@@ -62,7 +62,14 @@ def get_robust_price(ticker, market_open=None):
             # This avoids the ~1-2 hour CDN propagation delay in fast_info
             hist = tick.history(period='2d', interval='1d')
             if not hist.empty:
-                price = float(hist['Close'].iloc[-1])
+                import pandas as pd
+                if isinstance(hist.columns, pd.MultiIndex):
+                    try:
+                        price = float(hist['Close'].iloc[:, 0].iloc[-1])
+                    except:
+                        price = float(hist['Close'].iloc[-1])
+                else:
+                    price = float(hist['Close'].iloc[-1])
     except Exception:
         pass
     
@@ -850,6 +857,7 @@ def ai_news_worker():
                 try:
                     _ist = timezone(timedelta(hours=5, minutes=30))
                     _pub_dt = parsedate_to_datetime(article['time']).astimezone(_ist)
+                    _pub_dt_utc_str = _pub_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
                     _is_trading = True
                     if _pub_dt.weekday() >= 5 or (_pub_dt.month, _pub_dt.day) in NSE_HOLIDAYS_2026:
@@ -863,9 +871,12 @@ def ai_news_worker():
                         # Bulletproof price fetcher — correctly handles yfinance MultiIndex columns
                         base_price = get_base_price_at_time(ticker, _pub_dt)
                     else:
-                        # Off-hours news: use the absolute mathematically correct most recent tick
+                        # Off-hours / weekend news: use history to get the proper previous session close.
+                        # Using market_open=False forces history(period='2d') which returns the
+                        # authoritative closing price — NOT fast_info.last_price (which can equal
+                        # current_price and produce the misleading 0.00% display).
                         try:
-                            _lp = get_robust_price(ticker, market_open=True)  # True allows last_price which holds the final closing tick
+                            _lp = get_robust_price(ticker, market_open=False)
                             base_price = round(float(_lp), 2) if _lp and _lp > 0 else 0.0
                         except Exception:
                             base_price = 0.0
@@ -883,9 +894,12 @@ def ai_news_worker():
                 except Exception:
                     pass
                 
-                # Fallback: if intraday lookup failed, use current price (0.00% start)
+                # Fallback: if intraday lookup completely failed, keep base_price as 0.0.
+                # Storing 0.0 means the frontend will show '—' for the change %,
+                # which is honest. NEVER set base_price = current_price — that
+                # produces a fake +0.00% move that misleads users.
                 if base_price <= 0:
-                    base_price = current_price_now
+                    base_price = 0.0
 
                 # 2. Get tech context
                 tech_data = get_stock_technical_context(ticker)
@@ -910,15 +924,15 @@ def ai_news_worker():
                     reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/7 models approve). Expected directional breakout."
                     approved_signals.append((news_id, ticker, result['direction'], 2.5,
                                              view, reason, base_price, current_price_now,
-                                             result['final_score'], tech_context_str, result['detail']))
+                                             result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
             
             # ── Save approved signals in one short atomic write ──
             if approved_signals:
                 _sigs = approved_signals  # capture for closure
                 def _insert_signals(conn, c):
                     c.executemany('''INSERT INTO stock_impact 
-                        (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', _sigs)
+                        (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', _sigs)
                 result = db_write(_insert_signals)
                 if result is not None or True:  # always log
                     print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({len(approved_signals)} alpha signals)")
@@ -1034,6 +1048,89 @@ Output STRICT valid JSON array:
             
         time.sleep(600)
 
+def get_price_with_range(ticker, market_open=None):
+    """
+    Returns (current_price, eval_high, eval_low) for stop/target evaluation.
+
+    eval_high = highest price seen TODAY (intraday or closing)
+    eval_low  = lowest price seen TODAY (intraday or closing)
+
+    Uses fast_info.day_high / day_low which are real-time and require no extra
+    API call beyond what we already make. Falls back to current price if the
+    attribute is unavailable (market closed / index).
+    """
+    if market_open is None:
+        market_open = is_market_open()
+
+    current = get_robust_price(ticker, market_open=market_open)
+    if not current or current <= 0:
+        return None, None, None
+
+    current = round(float(current), 2)
+    eval_high = current
+    eval_low  = current
+
+    try:
+        fi = yf.Ticker(ticker).fast_info
+        dh = getattr(fi, 'day_high', None)
+        dl = getattr(fi, 'day_low',  None)
+        if dh and float(dh) > 0:
+            eval_high = round(float(dh), 2)
+        if dl and float(dl) > 0:
+            eval_low = round(float(dl), 2)
+    except Exception:
+        pass
+
+    return current, eval_high, eval_low
+
+
+def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is_bullish):
+    """
+    Checks chronological daily OHLC data from since_dt up to yesterday.
+    Returns (hit_status, diff_percent) if a target or stop was hit chronologically.
+    """
+    import pandas as pd
+    try:
+        IST = timezone(timedelta(hours=5, minutes=30))
+        hist = yf.download(ticker, period='7d', interval='1d', progress=False, auto_adjust=True)
+        if hist.empty:
+            return None, None
+
+        hist.index = pd.to_datetime(hist.index)
+        if hist.index.tzinfo is None:
+            hist.index = hist.index.tz_localize('UTC')
+
+        if isinstance(hist.columns, pd.MultiIndex):
+            high_s = hist['High'].iloc[:, 0]
+            low_s  = hist['Low'].iloc[:, 0]
+        else:
+            high_s = hist['High']
+            low_s  = hist['Low']
+        since_utc = since_dt.astimezone(timezone.utc) if since_dt.tzinfo else since_dt.replace(tzinfo=timezone.utc)
+        
+        today_ist = datetime.now(IST).date()
+
+        for date in hist.index:
+            date_ist = date.astimezone(IST).date()
+            if date >= pd.Timestamp(since_utc) and date_ist < today_ist:
+                h = float(high_s.loc[date])
+                l = float(low_s.loc[date])
+                h_pct = ((h - base_price) / base_price) * 100
+                l_pct = ((l - base_price) / base_price) * 100
+                
+                if is_bullish:
+                    # check stop loss conservatively first
+                    if l_pct <= -stop_pct: return 'Stop Loss Hit', l_pct
+                    if h_pct >= target_pct: return 'Predicted Target Hit', h_pct
+                else:
+                    if h_pct >= stop_pct: return 'Stop Loss Hit', h_pct
+                    if l_pct <= -target_pct: return 'Predicted Target Hit', l_pct
+
+        return None, None
+    except Exception:
+        return None, None
+
+
 def yfinance_worker():
     print("YFinance Live Price Engine v2.4 Started. Always-Update + Market-Aware Evaluation...")
 
@@ -1044,9 +1141,11 @@ def yfinance_worker():
             # ── PHASE A: Read active stocks ──
             conn = connect_news_db()
             c = conn.cursor()
-            seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
-            # Fetch ALL stocks that aren't expired (so we always track live current_price)
-            c.execute("SELECT id, news_id, ticker, base_price, impact, created_at, status FROM stock_impact WHERE status != 'Expired' AND created_at > ?", (seven_days_ago,))
+            # Fetch ALL stocks that we still want to evaluate or display
+            # Increased to 14 days because some signals (like April 8) were falling outside
+            # the 7-day evaluation window before their final status was checked.
+            fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).strftime('%Y-%m-%d %H:%M:%S')
+            c.execute("SELECT id, news_id, ticker, base_price, impact, created_at, status FROM stock_impact WHERE status != 'Expired' AND created_at > ?", (fourteen_days_ago,))
             active_stocks = c.fetchall()
             conn.close()
 
@@ -1061,11 +1160,11 @@ def yfinance_worker():
 
             for row in active_stocks:
                 stock_id, news_id, ticker, base_price, impact, created_at_str, status = row
-                current_price = None
-                try:
-                    current_price = get_robust_price(ticker, market_open=market_currently_open)
-                except Exception:
-                    current_price = None
+
+                # ── Fetch current price + today's intraday high/low ──
+                current_price, today_high, today_low = get_price_with_range(
+                    ticker, market_open=market_currently_open
+                )
 
                 if current_price is None or current_price <= 0:
                     continue
@@ -1088,18 +1187,42 @@ def yfinance_worker():
                     impact_lower = impact.lower()
                     is_bullish = 'bullish' in impact_lower
                     target_pct = 3.0   # Hit if stock moves 3% in predicted direction
-                    stop_pct   = 1.5   # Stop loss if stock moves 1.5% against prediction (1:2 R:R)
+                    stop_pct   = 1.5   # Stop loss if stock moves 1.5% against prediction
 
-                    if is_bullish:
-                        if diff_percent >= target_pct:
-                            new_status = 'Predicted Target Hit'
-                        elif diff_percent <= -stop_pct:
-                            new_status = 'Stop Loss Hit'
-                    else:
-                        if diff_percent <= -target_pct:
-                            new_status = 'Predicted Target Hit'
-                        elif diff_percent >= stop_pct:
-                            new_status = 'Stop Loss Hit'
+                    # ── 1. Multi-day catch-up (History from creation up to yesterday) ──
+                    try:
+                        created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                        age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+                        if age_hours >= 12:  # old enough to have "yesterday"
+                            hist_status, hist_diff = check_historical_hits(ticker, created_dt, base_price, target_pct, stop_pct, is_bullish)
+                            if hist_status:
+                                new_status = hist_status
+                                diff_percent = hist_diff
+                    except Exception:
+                        pass
+
+                    # ── 2. Today's intraday range evaluation (Only if not already hit in history) ──
+                    if new_status == 'Active View':
+                        eval_high = today_high if today_high else current_price
+                        eval_low  = today_low  if today_low  else current_price
+
+                        high_pct = ((eval_high - base_price) / base_price) * 100
+                        low_pct  = ((eval_low  - base_price) / base_price) * 100
+
+                        if is_bullish:
+                            if low_pct <= -stop_pct:
+                                new_status = 'Stop Loss Hit'
+                                diff_percent = low_pct
+                            elif high_pct >= target_pct:
+                                new_status = 'Predicted Target Hit'
+                                diff_percent = high_pct
+                        else:  # BEARISH
+                            if high_pct >= stop_pct:
+                                new_status = 'Stop Loss Hit'
+                                diff_percent = high_pct
+                            elif low_pct <= -target_pct:
+                                new_status = 'Predicted Target Hit'
+                                diff_percent = low_pct
 
                     # Check expiry (always, regardless of market hours)
                     if new_status == 'Active View':
@@ -1111,7 +1234,7 @@ def yfinance_worker():
                         except Exception:
                             pass
 
-                    # Only log to patterns if it literally just changed status right now
+                    # Only log to patterns if status just changed right now
                     if new_status in ['Predicted Target Hit', 'Stop Loss Hit']:
                         is_bullish_flag = 'bullish' in impact.lower()
                         patterns.append((news_id, ticker, is_bullish_flag, diff_percent, new_status))
@@ -1225,9 +1348,14 @@ def get_indices():
                 else:
                     change_pct = 0.0
             else:
-                # ── Market CLOSED: show previous closing price, 0% change ──
-                display_price = prev_close
-                change_pct = 0.0
+                # ── Market CLOSED: show today's (last) close with real day-over-day % change.
+                # last_price holds today's closing price; prev_close is yesterday's close.
+                # Showing 0% change was wrong — the market did move during the session.
+                display_price = last_price if last_price and last_price > 0 else prev_close
+                if display_price and prev_close and prev_close > 0 and display_price != prev_close:
+                    change_pct = round(((display_price - prev_close) / prev_close) * 100, 2)
+                else:
+                    change_pct = 0.0
 
             result.append({
                 "name": idx["name"],
