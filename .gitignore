@@ -9,4 +9,4 @@ verification_log.json
 temp_report.txt
 news_cache.db-shm
 news_cache.db-wal
-
+news_cache.db
