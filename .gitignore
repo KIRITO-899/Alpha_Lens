@@ -10,3 +10,5 @@ temp_report.txt
 news_cache.db-shm
 news_cache.db-wal
 news_cache.db
+backend\news_cache.db
+C:\Users\vella\OneDrive\Desktop\New folder (2)\Alpha_Lens\news_cache.db
