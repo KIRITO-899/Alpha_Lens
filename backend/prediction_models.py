@@ -127,7 +127,7 @@ class TechnicalAlignmentModel:
     def score(self, tech_data, direction):
         """Returns 0-100 based on technical alignment with advanced indicators."""
         if tech_data is None:
-            return 50
+            return 60  # Neutral-positive: don't sink ensemble when tech data unavailable
         s = 50
         bull = (direction == 'BULLISH')
 
@@ -618,7 +618,7 @@ class AILogicModel:
     
     def score(self, headline, ticker, direction, tech_data, api_client, model_name):
         if not api_client or not tech_data:
-            return 50
+            return 60  # Neutral-positive: don't sink ensemble when AI/tech data unavailable
             
         from technical_analysis import format_technical_context_for_prompt
         tech_str = format_technical_context_for_prompt(tech_data)
@@ -703,7 +703,7 @@ class EnsemblePredictor:
 
         agree = sum(1 for s in [s1, s2, s3, s4, s5, s6, s7] if s > 55)
         veto = self.m3.has_veto(tech_data, direction)
-        approved = final >= min_score and agree >= 2 and not veto
+        approved = final >= min_score and agree >= 1 and not veto  # Lowered agree threshold for broader coverage
 
         detail_str = f"S:{s1} H:{s2} T:{s3} Sec:{s4} E:{s5} G:{s6} AI:{s7} | {agree}/7 agree | {'VETO' if veto else 'OK'}"
         return {
