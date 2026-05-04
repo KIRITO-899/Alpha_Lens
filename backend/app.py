@@ -6,13 +6,20 @@ import threading
 import time
 import json
 from werkzeug.security import generate_password_hash
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from parent directory
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import feedparser
 from google import genai
 from google.genai import types
 from difflib import SequenceMatcher
-import yfinance as yf
+import requests
+import yfinance_twelvedata_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
 yf.set_tz_cache_location("venv/yf_cache")
@@ -114,7 +121,7 @@ def is_market_open():
     return (9 * 60 + 15) <= t <= (15 * 60 + 30)
 
 app = Flask(__name__, template_folder='../frontend', static_folder='../frontend', static_url_path='/')
-app.secret_key = "super_secret_alpha_lens_key"
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super_secret_alpha_lens_key")
 
 # Minimum AI confidence to accept a prediction
 MIN_CONFIDENCE = 58
@@ -123,7 +130,7 @@ import performance_report
 
 # In-memory store for OTPs
 OTP_STORE = {}
-SENDGRID_API_KEY = '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'
+SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
 def init_db():
     conn = sqlite3.connect('users.db')
@@ -255,11 +262,13 @@ LIVE_NEWS_CACHE = []
 
 # Your Gemini API Keys for rotation
 API_KEYS = [
-    "AIzaSyABS1FGUxLRNcekIfquMcIKcGVjKd-bGq4",
-    "AIzaSyCt_GQ1Z39bpkIZMjRZtjmyx-zjxqiFlUw",
-    "AIzaSyCUJbHzWvCYzokef_NyXKNWQ6ywniO-wb4",
-    "AIzaSyA6En5i8Bpr6_lPKWSMecchwRfHruHw0tU"
+    os.environ.get("GEMINI_API_KEY_1"),
+    os.environ.get("GEMINI_API_KEY_2"),
+    os.environ.get("GEMINI_API_KEY_3"),
+    os.environ.get("GEMINI_API_KEY_4")
 ]
+API_KEYS = [key for key in API_KEYS if key] # Filter out missing keys
+
 current_key_idx = 0
 client = genai.Client(api_key=API_KEYS[current_key_idx])
 MODEL_NAME = 'gemini-2.5-flash'
@@ -1201,8 +1210,11 @@ def yfinance_worker():
                     except Exception:
                         pass
 
-                    # ── 2. Today's intraday range evaluation (Only if not already hit in history) ──
-                    if new_status == 'Active View':
+                    # ── 2. Today's intraday range evaluation (Only during MARKET HOURS) ──
+                    # When market is closed, day_high/day_low belong to the PREVIOUS session,
+                    # not the current one. Using them would give false target hits for
+                    # after-hours news that hasn't had a chance to trade yet.
+                    if new_status == 'Active View' and market_currently_open:
                         eval_high = today_high if today_high else current_price
                         eval_low  = today_low  if today_low  else current_price
 
@@ -1279,8 +1291,49 @@ def yfinance_worker():
 def home():
     return render_template('index.html')
 
+def _fetch_index_from_yahoo_chart(symbol):
+    """
+    Fallback: fetch index price from Yahoo Finance free chart API.
+    No API key needed. Returns (last_price, prev_close) or (None, None).
+    """
+    try:
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=5d&interval=1d"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        }
+        resp = requests.get(url, headers=headers, timeout=8)
+        data = resp.json()
+        result = data.get('chart', {}).get('result', [{}])[0]
+        meta = result.get('meta', {})
+        
+        last_price = meta.get('regularMarketPrice')
+        prev_close = meta.get('chartPreviousClose') or meta.get('previousClose')
+        
+        # Fallback to close prices from the time series if meta is incomplete
+        if not last_price or last_price <= 0:
+            quotes = result.get('indicators', {}).get('quote', [{}])[0]
+            closes = [c for c in quotes.get('close', []) if c is not None]
+            if closes:
+                last_price = closes[-1]
+                if len(closes) >= 2:
+                    prev_close = prev_close or closes[-2]
+        
+        if last_price and last_price > 0:
+            print(f"   [YF-CHART] Fetched {symbol}: ₹{last_price:.2f} (Yahoo chart fallback)")
+            return float(last_price), float(prev_close) if prev_close else None
+    except Exception as e:
+        print(f"   [YF-CHART] Yahoo chart fallback error for {symbol}: {e}")
+    return None, None
+
+
+# In-memory cache for index data (60-second TTL)
+_INDEX_CACHE = {}
+_INDEX_CACHE_TIME = 0
+
 @app.route('/api/indices', methods=['GET'])
 def get_indices():
+    global _INDEX_CACHE, _INDEX_CACHE_TIME
+    
     market_open = is_market_open()
     ist = timezone(timedelta(hours=5, minutes=30))
     now_ist = datetime.now(ist)
@@ -1299,6 +1352,16 @@ def get_indices():
         else:
             market_status = "Market Closed · Closed at 3:30 PM IST"
 
+    # Return cached data if fresh (60s during market hours, 5min when closed)
+    cache_ttl = 60 if market_open else 300
+    if _INDEX_CACHE and (time.time() - _INDEX_CACHE_TIME) < cache_ttl:
+        # Update market status in cached data
+        for item in _INDEX_CACHE:
+            item['is_live'] = market_open
+            item['price_label'] = price_label
+            item['market_status'] = market_status
+        return jsonify(_INDEX_CACHE)
+
     indices = [
         {"symbol": "^NSEI",    "name": "NIFTY 50"},
         {"symbol": "^BSESN",   "name": "SENSEX"},
@@ -1312,7 +1375,7 @@ def get_indices():
         try:
             t = yf.Ticker(idx["symbol"])
 
-            # ── Attempt 1: fast_info (quickest) ──
+            # ── Attempt 1: fast_info via TwelveData (quickest) ──
             try:
                 fi = t.fast_info
                 _pc = fi.previous_close
@@ -1324,7 +1387,7 @@ def get_indices():
             except Exception:
                 pass
 
-            # ── Attempt 2: 5d history fallback ──
+            # ── Attempt 2: 5d history via TwelveData ──
             if prev_close is None or last_price is None:
                 try:
                     hist = t.history(period='5d', interval='1d')
@@ -1340,6 +1403,14 @@ def get_indices():
                 except Exception:
                     pass
 
+            # ── Attempt 3: Yahoo Finance chart API fallback (no API key needed) ──
+            if last_price is None or last_price <= 0:
+                gf_lp, gf_pc = _fetch_index_from_yahoo_chart(idx["symbol"])
+                if gf_lp and gf_lp > 0:
+                    last_price = gf_lp
+                if gf_pc and gf_pc > 0 and prev_close is None:
+                    prev_close = gf_pc
+
             # ── Market OPEN: show live last price + real % change ──
             if market_open:
                 display_price = last_price
@@ -1349,8 +1420,6 @@ def get_indices():
                     change_pct = 0.0
             else:
                 # ── Market CLOSED: show today's (last) close with real day-over-day % change.
-                # last_price holds today's closing price; prev_close is yesterday's close.
-                # Showing 0% change was wrong — the market did move during the session.
                 display_price = last_price if last_price and last_price > 0 else prev_close
                 if display_price and prev_close and prev_close > 0 and display_price != prev_close:
                     change_pct = round(((display_price - prev_close) / prev_close) * 100, 2)
@@ -1366,14 +1435,24 @@ def get_indices():
                 "market_status": market_status
             })
         except Exception as e:
+            # Last resort: try Yahoo chart API even in exception handler
+            gf_lp, gf_pc = _fetch_index_from_yahoo_chart(idx["symbol"])
+            display_price = gf_lp
+            change_pct = 0.0
+            if gf_lp and gf_pc and gf_pc > 0:
+                change_pct = round(((gf_lp - gf_pc) / gf_pc) * 100, 2)
             result.append({
                 "name": idx["name"],
-                "price": round(prev_close, 2) if prev_close else None,
-                "change_pct": 0.0,
+                "price": round(display_price, 2) if display_price else None,
+                "change_pct": change_pct,
                 "is_live": market_open,
                 "price_label": price_label,
                 "market_status": market_status
             })
+    
+    # Cache the result
+    _INDEX_CACHE = result
+    _INDEX_CACHE_TIME = time.time()
     return jsonify(result)
 
 @app.route('/api/news/top', methods=['GET'])
