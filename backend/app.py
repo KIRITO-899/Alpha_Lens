@@ -19,6 +19,9 @@ from google import genai
 from google.genai import types
 from difflib import SequenceMatcher
 import requests
+from bs4 import BeautifulSoup
+import concurrent.futures
+from collections import deque
 import yfinance_twelvedata_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
@@ -286,6 +289,28 @@ RSS_SOURCES = [
     "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=indian+economy+RBI+market+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
 ]
+
+# Global state for scraping optimizations
+RSS_CACHE = {url: {'etag': None, 'modified': None} for url in RSS_SOURCES}
+SEEN_HEADLINES = set()
+
+def scrape_article_text(url):
+    """Fetches the actual article body text (first 3 paragraphs) to give AI better context."""
+    if not url or "google.com" in url:
+        return ""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            # Try to find main article body
+            paragraphs = soup.find_all('p')
+            text = " ".join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 50])
+            # Limit to ~1500 chars to avoid massive Gemini payloads
+            return text[:1500]
+    except Exception as e:
+        print(f"   [Scrape Error] {url}: {e}")
+    return ""
 
 def clean_json(raw_text):
     cleaned = raw_text.strip()
@@ -760,37 +785,66 @@ def get_base_price_at_time(ticker, pub_dt):
 # V3 INSTANT NEWS ENGINE — Two-Phase Pipeline
 # ==========================================
 def ai_news_worker():
-    global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME
+    global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME, SEEN_HEADLINES
     print("[SYSTEM] Alpha Lens v6.0 AI ENSEMBLE Engine Started!")
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 7-Model Ensemble (>= 70 score & 5/7 vote)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = 1.5% stop : 3% target")
     
+    # Initialize SEEN_HEADLINES from DB on first run
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("SELECT headline FROM news ORDER BY created_at DESC LIMIT 1000")
+        for row in c.fetchall():
+            SEEN_HEADLINES.add(row[0].lower().strip())
+        conn.close()
+    except Exception as e:
+        print(f"   [DB Init Error] {e}")
+
+    def fetch_feed(url):
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        articles = []
+        try:
+            cache = RSS_CACHE[url]
+            feed = feedparser.parse(url, etag=cache['etag'], modified=cache['modified'])
+            if feed.status == 304:
+                return [] # Not modified
+            
+            # Update cache
+            if hasattr(feed, 'etag'): RSS_CACHE[url]['etag'] = feed.etag
+            if hasattr(feed, 'modified'): RSS_CACHE[url]['modified'] = feed.modified
+            
+            for entry in feed.entries[:30]:
+                pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
+                if pub_time and pub_time != "Just Now":
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_time)
+                        if pub_dt.tzinfo is None:
+                            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                        if pub_dt < stale_cutoff:
+                            continue
+                    except Exception:
+                        pass
+                link = entry.link if hasattr(entry, 'link') else None
+                articles.append({"headline": entry.title, "time": pub_time, "url": link})
+        except Exception as e:
+            print(f"   RSS Error for {url}: {e}")
+        return articles
+
     while True:
         # ============================================================
         # PHASE 1: INSTANT — Scrape, Filter, Save, Map (no API calls)
         # ============================================================
         raw_articles = []
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        for url in RSS_SOURCES:
-            try:
-                feed = feedparser.parse(url)
-                for entry in feed.entries[:30]:
-                    pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
-                    if pub_time and pub_time != "Just Now":
-                        try:
-                            pub_dt = parsedate_to_datetime(pub_time)
-                            if pub_dt.tzinfo is None:
-                                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-                            if pub_dt < stale_cutoff:
-                                continue
-                        except Exception:
-                            pass
-                    raw_articles.append({"headline": entry.title, "time": pub_time})
-            except Exception as e:
-                print(f"   RSS Error: {e}")
         
-        print(f"Scraped {len(raw_articles)} headlines from all sources")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(RSS_SOURCES)) as executor:
+            results = executor.map(fetch_feed, RSS_SOURCES)
+            for res in results:
+                raw_articles.extend(res)
+        
+        if raw_articles:
+            print(f"Scraped {len(raw_articles)} headlines from all sources")
         
         # STEP 1: Keyword Filter
         relevant = [a for a in raw_articles if is_finance_relevant(a['headline'])]
@@ -808,35 +862,11 @@ def ai_news_worker():
         for article in relevant:
             headline = article['headline']
             
-            # ── Duplicate check (check ALL existing headlines, with RETRY for lock handling) ──
-            is_dupe = False
-            for _retry in range(5):
-                try:
-                    _conn_dup = connect_news_db()
-                    _c_dup = _conn_dup.cursor()
-                    # Exact match first (fast)
-                    _c_dup.execute("SELECT COUNT(*) FROM news WHERE headline = ?", (headline,))
-                    if _c_dup.fetchone()[0] > 0:
-                        is_dupe = True
-                    else:
-                        # Fuzzy match against recent headlines only (last 200)
-                        _c_dup.execute("SELECT headline FROM news ORDER BY created_at DESC LIMIT 200")
-                        for row in _c_dup.fetchall():
-                            if SequenceMatcher(None, headline.lower(), row[0].lower()).ratio() > 0.75:
-                                is_dupe = True
-                                break
-                    _conn_dup.close()
-                    break  # Success, exit retry loop
-                except Exception as _e:
-                    if 'locked' in str(_e).lower():
-                        time.sleep(0.5)
-                        continue
-                    else:
-                        print(f"   Dupe-check DB error: {_e}")
-                        break
-                
-            if is_dupe:
+            # ── Fast In-Memory Duplicate Check ──
+            h_lower = headline.lower().strip()
+            if h_lower in SEEN_HEADLINES:
                 continue
+            SEEN_HEADLINES.add(h_lower)
             
             # Rule-based category
             category = classify_category(headline)
@@ -852,8 +882,14 @@ def ai_news_worker():
             if news_id is None:
                 continue
             
+            # ── Full Text Scraping (Context Boost) ──
+            body_text = scrape_article_text(article.get('url'))
+            ai_input = headline
+            if body_text:
+                ai_input = f"{headline}\nContext: {body_text}"
+
             # ── 7-MODEL ENSEMBLE AI STOCK MAPPING & EXTRACTION ──
-            candidates = get_candidate_stocks(headline, client, MODEL_NAME)
+            candidates = get_candidate_stocks(ai_input, client, MODEL_NAME)
             ensemble = EnsemblePredictor()
             approved_signals = []  # collect results before opening DB again
             
@@ -916,7 +952,7 @@ def ai_news_worker():
                 
                 # 3. Predict using 7-Model Ensemble
                 result = ensemble.predict(
-                    headline=headline,
+                    headline=ai_input,
                     ticker=ticker,
                     direction=base_direction,
                     tech_data=tech_data,
