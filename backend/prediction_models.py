@@ -493,8 +493,8 @@ Return ONLY valid JSON:
 class EnsemblePredictor:
     """
     Combines all 5 models. Signal only emitted when:
-      - Ensemble score >= 70                                    
-      - At least 3 of 5 models agree (score > 55)
+      - Ensemble score >= 50
+      - At least 3 of 5 models agree (score > 50)
       - Technical model does NOT veto
     """
 
@@ -514,7 +514,7 @@ class EnsemblePredictor:
         self.m7 = AILogicModel()
 
     def predict(self, headline, ticker, direction, tech_data, market_regime,
-                db_connect_fn, api_client=None, model_name=None, min_score=70):
+                db_connect_fn, api_client=None, model_name=None, min_score=50):
         s2 = self.m2.score(headline, ticker, direction, db_connect_fn)
         s3 = self.m3.score(tech_data, direction)
         s4 = self.m4.score(ticker, direction, market_regime)
@@ -550,7 +550,7 @@ class EnsemblePredictor:
             s7_val * w_ai
         )
 
-        agree = sum(1 for s in valid_models if s > 55)
+        agree = sum(1 for s in valid_models if s > 50)
         veto = self.m3.has_veto(tech_data, direction)
         
         required_agree = 3 if s7 is not None else 2

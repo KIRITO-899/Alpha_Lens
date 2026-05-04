@@ -128,7 +128,7 @@ app = Flask(__name__, template_folder='../frontend', static_folder='../frontend'
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super_secret_alpha_lens_key")
 
 # Minimum AI confidence to accept a prediction
-MIN_CONFIDENCE = 58
+MIN_CONFIDENCE = 50
 
 import performance_report
 
@@ -1334,15 +1334,39 @@ def yfinance_worker():
 
                 current_price = round(float(current_price), 2)
 
-                # If base_price is 0, initialize it now (first time seeing this signal)
+                # ── If base_price is 0, fetch the real price at news creation time ──
+                # NEVER use current_price as base — that gives a fake 0% change
                 if base_price == 0.0 or base_price is None:
-                    base_price = current_price
-                    _sid_init, _cp_init = stock_id, current_price
-                    def _init_base(conn, c, _sid=_sid_init, _cp=_cp_init):
-                        c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_cp, _sid))
-                    db_write(_init_base)
+                    try:
+                        created_dt_fix = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                        # Use 5-day history to find the closest candle to news time
+                        _hist_fix = yf.download(ticker, period='7d', interval='15m', progress=False, auto_adjust=True)
+                        if not _hist_fix.empty:
+                            import pandas as pd
+                            if _hist_fix.index.tzinfo is None:
+                                _hist_fix.index = _hist_fix.index.tz_localize('UTC')
+                            _hist_fix.index = _hist_fix.index.tz_convert('UTC')
+                            _closes = _hist_fix['Close'] if not isinstance(_hist_fix.columns, pd.MultiIndex) else _hist_fix['Close'].iloc[:, 0]
+                            # Find nearest candle at or just after news time
+                            _candidates = _closes[_closes.index >= created_dt_fix]
+                            if not _candidates.empty:
+                                base_price = round(float(_candidates.iloc[0]), 2)
+                            else:
+                                # News is older than 7d — use oldest available close
+                                base_price = round(float(_closes.iloc[0]), 2)
+                        else:
+                            base_price = current_price  # last resort
+                    except Exception as _bpe:
+                        print(f"   [!] base_price fix failed for {ticker}: {_bpe}")
+                        base_price = current_price
+                    if base_price and base_price > 0:
+                        _sid_init, _cp_init = stock_id, base_price
+                        def _init_base(conn, c, _sid=_sid_init, _cp=_cp_init):
+                            c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_cp, _sid))
+                        db_write(_init_base)
 
-                diff_percent = ((current_price - base_price) / base_price) * 100
+                # Always compute diff from the authoritative base_price
+                diff_percent = round(((current_price - base_price) / base_price) * 100, 2) if base_price and base_price > 0 else 0.0
                 new_status = status  # Keep the old status by default
 
                 # Evaluate target hit / stop loss ONLY IF it hasn't triggered yet
