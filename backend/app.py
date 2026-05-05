@@ -706,61 +706,65 @@ def _extract_scalar(val):
         return None
 
 
-def get_base_price_at_time(ticker, pub_dt):
+def get_base_price_at_time(ticker, pub_dt_ist):
     """
-    Returns the stock price at or just before pub_dt (IST-aware datetime).
-    Priority:
-      1. 1-minute bar within 45 minutes before pub_dt (most accurate)
-      2. Broadest 1-min bar before pub_dt in the 7-day dataset
-      3. Previous close from Angel One (reliable baseline)
-      4. Live LTP as absolute last resort
+    Returns the stock price at the moment of news publication.
+    Uses Angel One 1-min candles (primary) → Yahoo Finance 2d/1m (fallback).
+    pub_dt_ist must be an IST-aware datetime.
     """
     import pandas as pd
     IST = timezone(timedelta(hours=5, minutes=30))
 
+    # ── PRIMARY: Angel One 1-min candles ──
     try:
-        # ── Step 1: 1-minute intraday data (7-day history) ──
-        hist = yf.download(ticker, period='7d', interval='1m', progress=False, auto_adjust=True)
-        if not hist.empty:
-            hist.index = pd.to_datetime(hist.index).tz_convert(IST)
-
-            # Normalize column access: yfinance returns MultiIndex ('Close', 'TICKER')
-            if isinstance(hist.columns, pd.MultiIndex):
-                close_series = hist['Close'].iloc[:, 0]  # Always take first ticker
-            else:
-                close_series = hist['Close']
-
-            # Find the closest bar within 45-min BEFORE pub_dt
-            window_start = pub_dt - timedelta(minutes=45)
-            window = close_series[(close_series.index >= window_start) & (close_series.index <= pub_dt)]
-            if not window.empty:
-                price = _extract_scalar(window.iloc[-1])
-                if price and price > 0:
-                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: {price:.2f} (1-min window)")
-                    return round(price, 2)
-
-            # Broader: any bar before pub_dt
-            past = close_series[close_series.index <= pub_dt]
-            if not past.empty:
-                price = _extract_scalar(past.iloc[-1])
-                if price and price > 0:
-                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: {price:.2f} (1-min broad)")
-                    return round(price, 2)
-
+        exchange, token = yf._get_exchange_token(ticker)
+        if exchange and token:
+            from_dt = pub_dt_ist - timedelta(hours=1)
+            to_dt   = pub_dt_ist + timedelta(minutes=5)
+            df = yf._ao_get_candle(exchange, token, 'ONE_MINUTE', from_dt, to_dt)
+            if not df.empty:
+                df.index = df.index.tz_convert(IST)
+                past = df[df.index <= pub_dt_ist]
+                if not past.empty:
+                    price = float(past.iloc[-1]['Close'])
+                    if price > 0:
+                        print(f"   [Price] {ticker} @ {pub_dt_ist.strftime('%H:%M IST')}: {price:.2f} (AngelOne 1m)")
+                        return round(price, 2)
     except Exception as e:
-        print(f"   [Price] 1-min fetch error for {ticker}: {e}")
+        print(f"   [Price] AngelOne 1m error for {ticker}: {e}")
 
-    # ── Step 2: Use previous_close as baseline (NOT LTP which = closing price after hours) ──
+    # ── FALLBACK: Yahoo Finance 2d/1m chart ──
+    try:
+        import requests as _req
+        _h = {"User-Agent": "Mozilla/5.0"}
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=2d&interval=1m"
+        resp = _req.get(url, headers=_h, timeout=10)
+        data = resp.json()
+        result   = data['chart']['result'][0]
+        tss      = result['timestamp']
+        closes   = result['indicators']['quote'][0]['close']
+        best_p, best_t = None, None
+        for ts, cl in zip(tss, closes):
+            if cl is None:
+                continue
+            bar_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
+            if bar_dt <= pub_dt_ist:
+                best_p = cl
+                best_t = bar_dt
+        if best_p and best_p > 0:
+            print(f"   [Price] {ticker} @ {best_t.strftime('%H:%M IST')}: {best_p:.2f} (Yahoo 1m)")
+            return round(best_p, 2)
+    except Exception as e:
+        print(f"   [Price] Yahoo 1m error for {ticker}: {e}")
+
+    # ── LAST RESORT: Angel One prev_close ──
     try:
         ltp, prev, _, _ = yf._get_cached_quote(ticker)
         if prev and prev > 0:
-            print(f"   [Price] {ticker}: {prev:.2f} (prev_close baseline)")
+            print(f"   [Price] {ticker}: {prev:.2f} (prev_close last resort)")
             return round(prev, 2)
-        if ltp and ltp > 0:
-            print(f"   [Price] {ticker}: {ltp:.2f} (LTP fallback)")
-            return round(ltp, 2)
-    except Exception as e:
-        print(f"   [Price] quote fallback error for {ticker}: {e}")
+    except Exception:
+        pass
 
     return 0.0
 
@@ -1367,26 +1371,39 @@ def yfinance_worker():
                     db_write(_init_base)
                     print(f"   [YF] Initialized base_price=current_price={base_price} for {ticker} (ID={_sid_init})")
 
-                # ── KEY RULE: When market is CLOSED, signals that were created ──
-                # ── AFTER the last market close should show 0% change.         ──
-                # ── The LTP after hours = today's close, and base_price was    ──
-                # ── also set to today's close, so they should match.           ──
-                # ── But Angel One returns prev_close (yesterday) vs LTP (today)──
-                # ── as different values, so we force current_price = base_price──
-                # ── when market is closed to prevent fake deltas.              ──
+                # ── KEY RULE: After-hours signals → force current_price = base_price (0%) ──
+                # When market is closed AND the signal's news was published after the last
+                # market close, no trading has happened since the news — show 0% until open.
+                # Market-hours signals keep their real base_price and show actual movement.
                 if not market_currently_open and status == 'Active View':
-                    # Check if this signal was created after the last market close
                     try:
-                        created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-                        IST = timezone(timedelta(hours=5, minutes=30))
-                        created_ist = created_dt.astimezone(IST)
-                        now_ist = datetime.now(IST)
-                        last_close_today = now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+                        _pub_ist = parsedate_to_datetime(created_at_str).astimezone(
+                            timezone(timedelta(hours=5, minutes=30))
+                        ) if '+' in created_at_str or 'GMT' in created_at_str else \
+                        datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(
+                            tzinfo=timezone.utc
+                        ).astimezone(timezone(timedelta(hours=5, minutes=30)))
 
-                        # If created after today's close (or today is weekend/holiday),
-                        # no trading has happened since the signal was created
-                        if created_ist >= last_close_today or now_ist.weekday() >= 5:
-                            current_price = base_price  # Force 0% — no real trading since news
+                        _IST = timezone(timedelta(hours=5, minutes=30))
+                        _now_ist = datetime.now(_IST)
+                        _last_close = _now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+
+                        # Signal was created today after market close or on weekend
+                        _signal_ist_date = _pub_ist.date()
+                        _today_ist = _now_ist.date()
+                        _is_today_after_close = (_signal_ist_date == _today_ist and _pub_ist >= _last_close)
+                        _is_weekend = _now_ist.weekday() >= 5
+
+                        # Check if the signal's news was during market hours
+                        _t = _pub_ist.hour * 60 + _pub_ist.minute
+                        _news_was_market_hours = (
+                            _pub_ist.weekday() < 5 and
+                            (9 * 60 + 15) <= _t <= (15 * 60 + 30)
+                        )
+
+                        # Only force current=base for after-hours news signals
+                        if not _news_was_market_hours and (_is_today_after_close or _is_weekend):
+                            current_price = base_price  # 0% until next session
                     except Exception:
                         pass
 
