@@ -1011,15 +1011,17 @@ Return the full array covering all {len(articles_batch)} headlines."""
             approved_signals = []
             market_currently_open = is_market_open()
 
-            # Fetch the stock price at the NEWS PUBLICATION TIME
+            # ── Get base_price = ACTUAL PRICE at news publication time ──
+            # Priority: 1-minute candle at news time → prev_close fallback
+            _ist = timezone(timedelta(hours=5, minutes=30))
             base_price = 0.0
             current_price_now = 0.0
             _pub_dt_utc_str = ""
             try:
-                _ist = timezone(timedelta(hours=5, minutes=30))
                 _pub_dt = parsedate_to_datetime(signal['time']).astimezone(_ist)
                 _pub_dt_utc_str = _pub_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
+                # Check if news was during trading hours
                 _is_trading = True
                 if _pub_dt.weekday() >= 5 or (_pub_dt.month, _pub_dt.day) in NSE_HOLIDAYS_2026:
                     _is_trading = False
@@ -1030,26 +1032,21 @@ Return the full array covering all {len(articles_batch)} headlines."""
 
                 if _is_trading:
                     base_price = get_base_price_at_time(ticker, _pub_dt)
-                else:
-                    try:
-                        _lp = get_robust_price(ticker, market_open=False)
-                        base_price = round(float(_lp), 2) if _lp and _lp > 0 else 0.0
-                    except Exception:
-                        base_price = 0.0
+
+                # Get current LTP + prev_close from Angel One
+                _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
+                if _ltp and _ltp > 0:
+                    current_price_now = round(float(_ltp), 2)
+
+                # Fallback: if base_price couldn't be found from candles, use prev_close
+                if base_price <= 0:
+                    if _prev and _prev > 0:
+                        base_price = round(float(_prev), 2)
+                    elif current_price_now > 0:
+                        base_price = current_price_now
 
             except Exception as _e:
                 print(f"   [!] Price fetch error for {ticker}: {_e}")
-                base_price = 0.0
-
-            try:
-                _cp = get_robust_price(ticker, market_open=market_currently_open)
-                if _cp > 0:
-                    current_price_now = round(float(_cp), 2)
-            except Exception:
-                pass
-
-            if base_price <= 0:
-                base_price = 0.0
 
             # Get tech context
             tech_data = get_stock_technical_context(ticker)
