@@ -55,6 +55,11 @@ _INDEX_MAP = {
     "^NSMIDCP": ("NSE", "26074"),   # NIFTY MIDCAP 50
 }
 
+# ── Quote Cache (30s TTL) ──────────────────────────────────────────────────────
+# Stores full quote dicts keyed by ticker, avoids redundant API calls
+_QUOTE_CACHE = {}       # ticker -> {"ltp", "prev", "high", "low", "ts"}
+_QUOTE_CACHE_TTL = 30   # seconds
+
 # ── Yahoo Finance Fallback ─────────────────────────────────────────────────────
 _YF_HEADERS = {
     "User-Agent": (
@@ -392,23 +397,9 @@ class Ticker:
 
     @property
     def fast_info(self):
-        # ── Primary: Angel One FULL quote ──
-        if self._exchange and self._token:
-            try:
-                q = _ao_get_full_quote(self._exchange, self._token)
-                if q:
-                    ltp  = float(q.get("ltp",   0.0))
-                    prev = float(q.get("close",  ltp))   # 'close' = previous session close
-                    dh   = float(q.get("high",   ltp))
-                    dl   = float(q.get("low",    ltp))
-                    if ltp > 0:
-                        return FastInfo(ltp, prev, dh, dl)
-            except Exception:
-                pass
-
-        # ── Fallback: Yahoo Finance ──
-        lp, pc = _yahoo_get_quote(self.ticker)
-        return FastInfo(lp, pc, lp, lp)
+        # Use shared quote cache — no extra API call if get_ltp already fetched
+        ltp, prev, dh, dl = _get_cached_quote(self.ticker)
+        return FastInfo(ltp, prev, dh, dl)
 
     def history(self, period="60d", interval="1d"):
         # ── Primary: Angel One candles ──
@@ -432,12 +423,16 @@ class Ticker:
 Ticker.FastInfo = FastInfo
 
 
-def get_ltp(ticker):
+def _get_cached_quote(ticker):
     """
-    Public helper — returns (ltp, prev_close) for a yfinance-style ticker.
-    Used by get_robust_price() and get_indices() in app.py.
-    Tries Angel One first, falls back to Yahoo Finance.
+    Returns cached (ltp, prev, high, low) or fetches from Angel One & caches.
+    30-second TTL. Used by both get_ltp() and Ticker.fast_info.
     """
+    now = time.time()
+    cached = _QUOTE_CACHE.get(ticker)
+    if cached and (now - cached["ts"]) < _QUOTE_CACHE_TTL:
+        return cached["ltp"], cached["prev"], cached["high"], cached["low"]
+
     exchange, token = _get_exchange_token(ticker)
     if exchange and token:
         try:
@@ -445,12 +440,28 @@ def get_ltp(ticker):
             if q:
                 ltp  = float(q.get("ltp",  0.0))
                 prev = float(q.get("close", ltp))
+                dh   = float(q.get("high",  ltp))
+                dl   = float(q.get("low",   ltp))
                 if ltp > 0:
-                    return ltp, prev
+                    _QUOTE_CACHE[ticker] = {"ltp": ltp, "prev": prev, "high": dh, "low": dl, "ts": now}
+                    return ltp, prev, dh, dl
         except Exception:
             pass
+
     # Yahoo fallback
-    return _yahoo_get_quote(ticker)
+    lp, pc = _yahoo_get_quote(ticker)
+    if lp and lp > 0:
+        _QUOTE_CACHE[ticker] = {"ltp": lp, "prev": pc, "high": lp, "low": lp, "ts": now}
+    return lp, pc, lp, lp
+
+
+def get_ltp(ticker):
+    """
+    Public helper -- returns (ltp, prev_close) for a yfinance-style ticker.
+    Uses 30-second quote cache to avoid redundant API calls.
+    """
+    ltp, prev, _, _ = _get_cached_quote(ticker)
+    return ltp, prev
 
 
 def get_ohlc(ticker, days=14):

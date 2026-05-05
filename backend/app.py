@@ -1,3 +1,6 @@
+import sys, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 from flask import Flask, render_template, request, jsonify, session
 import sqlite3
 import secrets
@@ -709,13 +712,11 @@ def get_base_price_at_time(ticker, pub_dt):
     Priority:
       1. 1-minute bar within 45 minutes before pub_dt (most accurate)
       2. Broadest 1-min bar before pub_dt in the 7-day dataset
-      3. Live fast_info.last_price (if news is from today)
-      4. Previous close from fast_info (absolute last resort)
-    NEVER returns yesterday's daily close for today's news.
+      3. Previous close from Angel One (reliable baseline)
+      4. Live LTP as absolute last resort
     """
     import pandas as pd
     IST = timezone(timedelta(hours=5, minutes=30))
-    today = datetime.now(IST).date()
 
     try:
         # ── Step 1: 1-minute intraday data (7-day history) ──
@@ -735,7 +736,7 @@ def get_base_price_at_time(ticker, pub_dt):
             if not window.empty:
                 price = _extract_scalar(window.iloc[-1])
                 if price and price > 0:
-                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: ₹{price:.2f} (1-min window ✓)")
+                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: {price:.2f} (1-min window)")
                     return round(price, 2)
 
             # Broader: any bar before pub_dt
@@ -743,28 +744,23 @@ def get_base_price_at_time(ticker, pub_dt):
             if not past.empty:
                 price = _extract_scalar(past.iloc[-1])
                 if price and price > 0:
-                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: ₹{price:.2f} (1-min broad ✓)")
+                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: {price:.2f} (1-min broad)")
                     return round(price, 2)
 
     except Exception as e:
         print(f"   [Price] 1-min fetch error for {ticker}: {e}")
 
+    # ── Step 2: Use previous_close as baseline (NOT LTP which = closing price after hours) ──
     try:
-        # ── Step 2: Use live price if news is from today ──
-        t_obj = yf.Ticker(ticker)
-        fi = t_obj.fast_info
-        if pub_dt.date() == today:
-            lp = _extract_scalar(fi.last_price)
-            if lp and lp > 0:
-                print(f"   [Price] {ticker}: ₹{lp:.2f} (live fast_info ✓)")
-                return round(lp, 2)
-        # ── Step 3: previous_close as absolute fallback ──
-        pc = _extract_scalar(fi.previous_close)
-        if pc and pc > 0:
-            print(f"   [Price] {ticker}: ₹{pc:.2f} (previous_close fallback ⚠)")
-            return round(pc, 2)
+        ltp, prev, _, _ = yf._get_cached_quote(ticker)
+        if prev and prev > 0:
+            print(f"   [Price] {ticker}: {prev:.2f} (prev_close baseline)")
+            return round(prev, 2)
+        if ltp and ltp > 0:
+            print(f"   [Price] {ticker}: {ltp:.2f} (LTP fallback)")
+            return round(ltp, 2)
     except Exception as e:
-        print(f"   [Price] fast_info fallback error for {ticker}: {e}")
+        print(f"   [Price] quote fallback error for {ticker}: {e}")
 
     return 0.0
 
@@ -1208,39 +1204,25 @@ Output STRICT valid JSON array:
 def get_price_with_range(ticker, market_open=None):
     """
     Returns (current_price, eval_high, eval_low) for stop/target evaluation.
-
-    eval_high = highest price seen TODAY (intraday or closing)
-    eval_low  = lowest price seen TODAY (intraday or closing)
-
-    Uses fast_info.day_high / day_low which are real-time and require no extra
-    API call beyond what we already make. Falls back to current price if the
-    attribute is unavailable (market closed / index).
+    Uses the shim's 30-second quote cache — no extra API call needed.
     """
     if market_open is None:
         market_open = is_market_open()
 
-    current = get_robust_price(ticker, market_open=market_open)
-    if not current or current <= 0:
+    # Single cached call gets ltp + day_high + day_low
+    ltp, prev, dh, dl = yf._get_cached_quote(ticker)
+    if not ltp or ltp <= 0:
         return None, None, None
 
-    current = round(float(current), 2)
-    eval_high = current
-    eval_low  = current
+    current = round(float(ltp), 2)
 
-    # Only fetch intraday high/low when market is OPEN — those values are
-    # irrelevant (= yesterday's session) when market is closed and not used
-    # in evaluation anyway (intraday check is guarded by market_currently_open).
+    # Only use intraday high/low when market is OPEN
     if market_open:
-        try:
-            fi = yf.Ticker(ticker).fast_info
-            dh = getattr(fi, 'day_high', None)
-            dl = getattr(fi, 'day_low',  None)
-            if dh and float(dh) > 0:
-                eval_high = round(float(dh), 2)
-            if dl and float(dl) > 0:
-                eval_low = round(float(dl), 2)
-        except Exception:
-            pass
+        eval_high = round(float(dh), 2) if dh and dh > 0 else current
+        eval_low  = round(float(dl), 2) if dl and dl > 0 else current
+    else:
+        eval_high = current
+        eval_low  = current
 
     return current, eval_high, eval_low
 
@@ -1375,8 +1357,8 @@ def yfinance_worker():
                         if _bp_cached and _bp_cached > 0:
                             base_price = round(float(_bp_cached), 2)
                         else:
-                            # Final fallback: direct fetch
-                            _bp_live, _ = _yahoo_direct_price(ticker)
+                            # Final fallback: Angel One LTP
+                            _bp_live, _ = yf.get_ltp(ticker)
                             base_price = round(float(_bp_live), 2) if _bp_live and _bp_live > 0 else current_price
                         if base_price and base_price > 0:
                             _sid_init, _cp_init = stock_id, base_price
@@ -1417,10 +1399,7 @@ def yfinance_worker():
                     except Exception:
                         pass
 
-                    # ── 2. Today's intraday range evaluation (Only during MARKET HOURS) ──
-                    # When market is closed, day_high/day_low belong to the PREVIOUS session,
-                    # not the current one. Using them would give false target hits for
-                    # after-hours news that hasn't had a chance to trade yet.
+                    # ── 2. Intraday high/low evaluation (Only during MARKET HOURS) ──
                     if new_status == 'Active View' and market_currently_open:
                         eval_high = today_high if today_high else current_price
                         eval_low  = today_low  if today_low  else current_price
@@ -1442,6 +1421,21 @@ def yfinance_worker():
                             elif low_pct <= -target_pct:
                                 new_status = 'Predicted Target Hit'
                                 diff_percent = low_pct
+
+                    # ── 3. Current price evaluation (ALWAYS — market open or closed) ──
+                    # If neither historical nor intraday caught it, check the
+                    # current/closing price directly against thresholds.
+                    if new_status == 'Active View' and base_price > 0:
+                        if is_bullish:
+                            if diff_percent >= target_pct:
+                                new_status = 'Predicted Target Hit'
+                            elif diff_percent <= -stop_pct:
+                                new_status = 'Stop Loss Hit'
+                        else:  # BEARISH
+                            if diff_percent <= -target_pct:
+                                new_status = 'Predicted Target Hit'
+                            elif diff_percent >= stop_pct:
+                                new_status = 'Stop Loss Hit'
 
                     # Check expiry (always, regardless of market hours)
                     if new_status == 'Active View':
