@@ -709,13 +709,12 @@ def _extract_scalar(val):
 def get_base_price_at_time(ticker, pub_dt_ist):
     """
     Returns the stock price at the moment of news publication.
-    Uses Angel One 1-min candles (primary) → Yahoo Finance 2d/1m (fallback).
+    Uses Angel One 1-min candles (primary) -> Yahoo Finance 5d/1m (fallback).
     pub_dt_ist must be an IST-aware datetime.
     """
-    import pandas as pd
     IST = timezone(timedelta(hours=5, minutes=30))
 
-    # ── PRIMARY: Angel One 1-min candles ──
+    # -- PRIMARY: Angel One 1-min candles --
     try:
         exchange, token = yf._get_exchange_token(ticker)
         if exchange and token:
@@ -733,12 +732,11 @@ def get_base_price_at_time(ticker, pub_dt_ist):
     except Exception as e:
         print(f"   [Price] AngelOne 1m error for {ticker}: {e}")
 
-    # ── FALLBACK: Yahoo Finance 2d/1m chart ──
+    # -- FALLBACK: Yahoo Finance 5d/1m chart --
     try:
-        import requests as _req
         _h = {"User-Agent": "Mozilla/5.0"}
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=2d&interval=1m"
-        resp = _req.get(url, headers=_h, timeout=10)
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1m"
+        resp = requests.get(url, headers=_h, timeout=10)
         data = resp.json()
         result   = data['chart']['result'][0]
         tss      = result['timestamp']
@@ -757,7 +755,7 @@ def get_base_price_at_time(ticker, pub_dt_ist):
     except Exception as e:
         print(f"   [Price] Yahoo 1m error for {ticker}: {e}")
 
-    # ── LAST RESORT: Angel One prev_close ──
+    # -- LAST RESORT: Angel One prev_close --
     try:
         ltp, prev, _, _ = yf._get_cached_quote(ticker)
         if prev and prev > 0:
@@ -767,6 +765,85 @@ def get_base_price_at_time(ticker, pub_dt_ist):
         pass
 
     return 0.0
+
+
+def get_price_with_range(ticker, market_open=None):
+    """
+    Returns (current_price, eval_high, eval_low) for stop/target evaluation.
+    MARKET OPEN  : Angel One LTP + day high/low (live, real-time).
+    MARKET CLOSED: Yahoo Finance official 3:30 PM close (authoritative NSE close).
+                   Falls back to Angel One LTP if Yahoo fails.
+    """
+    if market_open is None:
+        market_open = is_market_open()
+
+    if market_open:
+        ltp, prev, dh, dl = yf._get_cached_quote(ticker)
+        if not ltp or ltp <= 0:
+            return None, None, None
+        current   = round(float(ltp), 2)
+        eval_high = round(float(dh), 2) if dh and dh > 0 else current
+        eval_low  = round(float(dl), 2) if dl and dl > 0 else current
+        return current, eval_high, eval_low
+    else:
+        # Market closed: authoritative NSE close from Yahoo
+        official_close = _get_yahoo_official_close(ticker)
+        if official_close and official_close > 0:
+            return official_close, official_close, official_close
+        # Fallback: Angel One LTP
+        ltp, prev, dh, dl = yf._get_cached_quote(ticker)
+        if not ltp or ltp <= 0:
+            return None, None, None
+        current = round(float(ltp), 2)
+        return current, current, current
+
+
+# Cache: ticker -> (close_price, fetched_at_timestamp)
+_YAHOO_CLOSE_CACHE = {}
+_YAHOO_CLOSE_CACHE_TTL = 300  # 5 minutes
+
+
+def _get_yahoo_official_close(ticker):
+    """
+    Fetch the most recent official closing price from Yahoo Finance 5d/1m data.
+    Finds the last 1-min candle in the 15:28-15:31 IST window of the most recent trading day.
+    Results cached for 5 minutes to avoid hammering Yahoo.
+    """
+    import time as _time
+    now_ts = _time.time()
+
+    cached = _YAHOO_CLOSE_CACHE.get(ticker)
+    if cached and (now_ts - cached[1]) < _YAHOO_CLOSE_CACHE_TTL:
+        return cached[0]
+
+    try:
+        _h = {"User-Agent": "Mozilla/5.0"}
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1m"
+        resp = requests.get(url, headers=_h, timeout=8)
+        data = resp.json()
+        IST = timezone(timedelta(hours=5, minutes=30))
+        result   = data['chart']['result'][0]
+        tss      = result['timestamp']
+        closes   = result['indicators']['quote'][0]['close']
+        best_price = None
+        best_dt    = None
+        for ts, cl in zip(tss, closes):
+            if cl is None:
+                continue
+            bar_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
+            bar_t  = bar_dt.hour * 60 + bar_dt.minute
+            # 15:28-15:31 IST = official close window
+            if (15 * 60 + 28) <= bar_t <= (15 * 60 + 31):
+                best_price = round(float(cl), 2)
+                best_dt    = bar_dt
+        if best_price and best_price > 0:
+            _YAHOO_CLOSE_CACHE[ticker] = (best_price, now_ts)
+            return best_price
+
+    except Exception:
+        pass  # Silent fail — caller will use Angel One fallback
+
+    return None
 
 
 # ==========================================
@@ -1050,16 +1127,24 @@ Return the full array covering all {len(articles_batch)} headlines."""
                     if base_price <= 0:
                         base_price = _prev_val if _prev_val > 0 else _ltp_val
                 else:
-                    # NEWS AFTER MARKET HOURS: Both prices = today's close (LTP)
-                    # This ensures 0% change until the next trading session.
-                    # LTP after hours = today's official closing price.
-                    if _ltp_val > 0:
+                    # NEWS AFTER MARKET HOURS:
+                    # base_price = official NSE closing price of today's session (from Yahoo 3:28-3:31 PM)
+                    # Angel One LTP is the "last tick" — NOT the official close (NSE uses VWAP of last 30 min).
+                    # Using LTP causes base = wrong value → 0% even when stock actually changed.
+                    _official_close = _get_yahoo_official_close(ticker)
+                    if _official_close and _official_close > 0:
+                        base_price = _official_close
+                        current_price_now = _official_close
+                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (Yahoo official close, 0% until market opens)")
+                    elif _ltp_val > 0:
+                        # Fallback: Angel One LTP
                         base_price = _ltp_val
                         current_price_now = _ltp_val
+                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (AO LTP fallback, 0% until market opens)")
                     elif _prev_val > 0:
                         base_price = _prev_val
                         current_price_now = _prev_val
-                    print(f"   [Price] {ticker}: After-hours news → base=current={base_price} (0% until market opens)")
+
 
             except Exception as _e:
                 print(f"   [!] Price fetch error for {ticker}: {_e}")
