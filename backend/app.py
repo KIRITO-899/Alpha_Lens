@@ -256,7 +256,7 @@ API_KEYS = [
 API_KEYS = [key for key in API_KEYS if key] # Filter out missing keys
 
 current_key_idx = 0
-client = genai.Client(api_key=API_KEYS[current_key_idx])
+client = genai.Client(api_key=API_KEYS[current_key_idx]) if API_KEYS else None
 MODEL_NAME = 'gemini-2.5-flash'
 
 # Top Tier Indian Financial RSS Feeds + Google News for 7-day history
