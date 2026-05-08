@@ -68,7 +68,7 @@ class TechnicalAlignmentModel:
     def score(self, tech_data, direction):
         """Returns 0-100 based on technical alignment with advanced indicators."""
         if tech_data is None:
-            return 50
+            return 60  # Neutral-positive: don't sink ensemble when tech data unavailable
         s = 50
         bull = (direction == 'BULLISH')
 
@@ -443,25 +443,22 @@ class AILogicModel:
 
     def score(self, headline, ticker, direction, tech_data, api_client, model_name):
         if not api_client or not tech_data:
-            return None
-
+            return 50
+            
         from technical_analysis import format_technical_context_for_prompt
         tech_str = format_technical_context_for_prompt(tech_data)
+        
+        prompt = f"""As an elite quantitative multi-strategy portfolio manager, evaluate this potential setup:
+News Headline: "{headline}"
+Target Ticker: {ticker}
+Direction Bias: {direction}
 
-        prompt = f"""You are a quantitative analyst at an Indian hedge fund.
+Technical & Volatility Context:
+{tech_str}
 
-News: {headline}
-Stock: {ticker}
-Technical Data: {tech_str}
-
-Based on the news and the technical indicators above, what is your view on this stock?
-
-Answer with:
-1. "view": BULLISH or BEARISH
-2. "confidence": a number from 0 to 100 (how confident are you in this view?)
-
-Return ONLY valid JSON:
-{{"view": "BULLISH", "confidence": 75}}"""
+Given the news catalyst and the precise technical context (EMA alignment, Volume Profile, Liquidity sweeps, ADX trend strength), does this represent a highly actionable, high-probability trade setup that will move 3% before hitting a 1.5% stop loss?
+Consider if the news is already priced into the technicals.
+Return ONLY a valid JSON object in this format: {{"score": <integer from 0 to 100>}}"""
 
         try:
             response = api_client.models.generate_content(
@@ -552,9 +549,7 @@ class EnsemblePredictor:
 
         agree = sum(1 for s in valid_models if s > 50)
         veto = self.m3.has_veto(tech_data, direction)
-        
-        required_agree = 3 if s7 is not None else 2
-        approved = final >= min_score and agree >= required_agree and not veto
+        approved = final >= min_score and agree >= 5 and not veto
 
         s7_str = s7 if s7 is not None else "FAIL"
         total_models = len(valid_models)

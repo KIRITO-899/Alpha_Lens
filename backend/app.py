@@ -645,49 +645,70 @@ def _fallback_get_candidate_stocks(headline):
 
 def get_candidate_stocks(headline, api_client, model_name):
     """
-    Uses Gemini to act as a top-tier quantitative researcher.
+    HYBRID approach: Runs BOTH Gemini LLM AND rule-based keyword/macro map,
+    then unions the results. This ensures:
+    - Macro news (RBI rates, FII flows, crude oil) always generates signals via MACRO_IMPACT_MAP
+    - Stock-specific news gets precise tickers from the LLM
+    - Never returns empty for finance-relevant headlines
     Returns list of tuples: [(ticker, impact_direction)]
     """
-    if not api_client:
-        return _fallback_get_candidate_stocks(headline)
-        
-    prompt = f"""As a top-tier quantitative researcher in the Indian equities market, evaluate this headline: '{headline}'. Look for deep secondary-order effects, hidden supply/demand constraints, unspoken regulatory impacts, or institutional positioning triggers. 
-1) Identify ALL primary or secondary NSE/BSE stock tickers implicitly impacted by this news to ensure no opportunities are missed (append .NS to the ticker, e.g., RELIANCE.NS).
-2) Determine the actionable forward-looking bias for each (BULLISH/BEARISH/NEUTRAL). 
-3) Classify the overall materiality (MATERIAL/IGNORE) — drop retail fluff, flag news capable of causing structural repricing.
-Return exactly formatted JSON like this:
-{{
-  "materiality": "MATERIAL",
-  "impacts": [
-    {{"ticker": "TCS.NS", "bias": "BULLISH"}}
-  ]
-}}
-"""
-    try:
-        response = api_client.models.generate_content(
-            model=model_name,
-            contents=prompt,
+    # Step 1: Always run rule-based (instant, no API call)
+    rule_based = _fallback_get_candidate_stocks(headline)
+    rule_tickers = {t for t, _ in rule_based}
+
+    # Step 2: Try LLM extraction if client available
+    llm_results = []
+    if api_client:
+        prompt = (
+            "As a quantitative researcher in the Indian equities market, evaluate this headline: '" + headline + "'. \n"
+            "1) Identify the direct primary NSE/BSE stock tickers explicitly impacted by this news (append .NS to the ticker, e.g., RELIANCE.NS). Limit to a maximum of 3 most relevant stocks. If no specific stock is mentioned, infer the most likely major index component affected.\n"
+            "2) Determine the forward-looking bias for each (BULLISH/BEARISH). If neutral, still pick a slight directional bias based on market context.\n"
+            "3) Classify the overall materiality as MATERIAL. Only use IGNORE if it is completely unrelated to finance or business.\n"
+            "Return exactly formatted JSON like this:\n"
+            "{\n"
+            '  "materiality": "MATERIAL",\n'
+            '  "impacts": [\n'
+            '    {"ticker": "TCS.NS", "bias": "BULLISH"}\n'
+            "  ]\n"
+            "}\n"
         )
-        import re, json
-        match = re.search(r'\{.*\}', response.text, re.DOTALL)
-        if match:
-            data = json.loads(match.group(0))
-            if data.get("materiality") == "IGNORE":
-                return []
-            
-            candidates = []
-            for item in data.get("impacts", []):
-                ticker = item.get("ticker", "").upper()
-                bias = item.get("bias", "NEUTRAL").upper()
-                if ticker and bias in ("BULLISH", "BEARISH"):
-                    if not ticker.endswith('.NS') and not ticker.endswith('.BO'):
-                        ticker += '.NS'
-                    candidates.append((ticker, bias))
-            return candidates
-        return []
-    except Exception as e:
-        print(f"   [!] LLM Target Extraction Error (falling back to keywords): {e}")
-        return _fallback_get_candidate_stocks(headline)
+        try:
+            response = api_client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            import re, json
+            match = re.search(r'\{.*\}', response.text, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                if data.get("materiality") != "IGNORE":
+                    for item in data.get("impacts", []):
+                        ticker = item.get("ticker", "").upper()
+                        bias = item.get("bias", "NEUTRAL").upper()
+                        if ticker and bias in ("BULLISH", "BEARISH"):
+                            if not ticker.endswith('.NS') and not ticker.endswith('.BO'):
+                                ticker += '.NS'
+                            llm_results.append((ticker, bias))
+        except Exception as e:
+            print(f"   [!] LLM Target Extraction Error (using rule-based only): {e}")
+
+    # Step 3: Union — LLM results first (higher priority), then rule-based additions
+    merged = {}
+    for ticker, direction in llm_results:
+        merged[ticker] = direction
+    for ticker, direction in rule_based:
+        if ticker not in merged:
+            merged[ticker] = direction
+
+    # Return up to 5 candidates (LLM usually gives 1-3, rule-based may add macro stocks)
+    candidates = list(merged.items())[:5]
+    
+    # If still empty (very generic headline), use rule-based alone
+    if not candidates:
+        candidates = rule_based[:3]
+
+    return candidates
+
 
 
 # ==========================================
@@ -1173,6 +1194,36 @@ Return the full array covering all {len(articles_batch)} headlines."""
                                          view, reason, base_price, current_price_now,
                                          result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
 
+                # 2. Get tech context
+                tech_data = get_stock_technical_context(ticker)
+                tech_context_str = json.dumps(tech_data) if tech_data else ""
+                
+                # 3. Predict using 7-Model Ensemble
+                result = ensemble.predict(
+                    headline=headline,
+                    ticker=ticker,
+                    direction=base_direction,
+                    tech_data=tech_data,
+                    market_regime=market_regime,
+                    db_connect_fn=connect_news_db,
+                    api_client=client,
+                    model_name=MODEL_NAME,
+                    min_score=MIN_CONFIDENCE
+                )
+                
+                # 4. Collect ALL predictions to ensure coverage for every news item
+                if result['final_score'] >= 85:
+                    view = 'High Conviction'
+                elif result['final_score'] >= 65:
+                    view = 'Moderate Conviction'
+                else:
+                    view = 'Speculative'
+                
+                reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/7 models agree). {'Expected directional breakout.' if result['final_score'] >= 65 else 'Speculative directional bias.'}"
+                approved_signals.append((news_id, ticker, result['direction'], 2.5,
+                                         view, reason, base_price, current_price_now,
+                                         result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
+            
             # ── Save approved signals in one short atomic write ──
             if approved_signals:
                 _sigs = approved_signals
@@ -1691,7 +1742,6 @@ def get_indices():
     # Return cached data if fresh (60s during market hours, 5min when closed)
     cache_ttl = 60 if market_open else 300
     if _INDEX_CACHE and (time.time() - _INDEX_CACHE_TIME) < cache_ttl:
-        # Update market status in cached data
         for item in _INDEX_CACHE:
             item['is_live'] = market_open
             item['price_label'] = price_label
@@ -1706,82 +1756,94 @@ def get_indices():
     ]
     result = []
     for idx in indices:
-        prev_close = None
         last_price = None
-        try:
-            # ── PRIMARY: Angel One SmartAPI LTP (exchange-sourced, accurate) ──
-            ao_lp, ao_pc = yf.get_ltp(idx["symbol"])
-            if ao_lp and ao_lp > 0:
-                last_price = ao_lp
-            if ao_pc and ao_pc > 0:
-                prev_close = ao_pc
+        prev_close = None
+        change_pct = 0.0
 
-            # ── FALLBACK: Yahoo Finance history if Angel One failed ──
-            if last_price is None or prev_close is None:
+        # ── PRIMARY: Yahoo Finance Chart API (most reliable for prev_close) ──
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{idx['symbol']}?range=5d&interval=1d"
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            }
+            resp = requests.get(url, headers=headers, timeout=8)
+            data = resp.json()
+            chart_result = data.get('chart', {}).get('result', [{}])[0]
+            meta = chart_result.get('meta', {})
+
+            # regularMarketPrice = current live/last price
+            _lp = meta.get('regularMarketPrice')
+            # chartPreviousClose = prior trading session official close (Yahoo's own field)
+            _pc = meta.get('chartPreviousClose') or meta.get('previousClose')
+
+            # Fallback to close price series if meta incomplete
+            if not _lp or _lp <= 0:
+                quotes = chart_result.get('indicators', {}).get('quote', [{}])[0]
+                closes = [c for c in quotes.get('close', []) if c is not None]
+                if closes:
+                    _lp = closes[-1]
+                    if len(closes) >= 2 and not _pc:
+                        _pc = closes[-2]
+
+            if _lp and _lp > 0:
+                last_price = float(_lp)
+                print(f"   [IDX] {idx['name']}: ₹{last_price:.2f} (Yahoo Chart ✓)")
+            if _pc and _pc > 0:
+                prev_close = float(_pc)
+        except Exception as e:
+            print(f"   [IDX] Yahoo Chart failed for {idx['name']}: {e}")
+
+        # ── FALLBACK: TwelveData shim ──
+        if last_price is None or last_price <= 0:
+            try:
+                t = yf.Ticker(idx["symbol"])
                 try:
-                    t = yf.Ticker(idx["symbol"])
-                    hist = t.history(period='5d', interval='1d')
-                    if not hist.empty:
-                        import pandas as pd
-                        if isinstance(hist.columns, pd.MultiIndex):
-                            closes = hist['Close'].iloc[:, 0]
-                        else:
-                            closes = hist['Close']
-                        closes = closes.dropna()
-                        if len(closes) >= 2:
-                            if last_price is None:
-                                last_price = float(closes.iloc[-1])
-                            if prev_close is None:
-                                prev_close = float(closes.iloc[-2])
-                        elif len(closes) == 1:
-                            last_price = last_price or float(closes.iloc[-1])
-                            prev_close = prev_close or last_price
+                    fi = t.fast_info
+                    _lp_shim = fi.last_price
+                    _pc_shim = fi.previous_close
+                    if _lp_shim and float(_lp_shim) > 0:
+                        last_price = float(_lp_shim)
+                    if _pc_shim and float(_pc_shim) > 0 and prev_close is None:
+                        prev_close = float(_pc_shim)
                 except Exception:
                     pass
 
-            # ── Market OPEN: show live last price + real % change ──
-            if market_open:
-                display_price = last_price
-                if display_price and prev_close and prev_close > 0:
-                    change_pct = round(((display_price - prev_close) / prev_close) * 100, 2)
-                else:
-                    change_pct = 0.0
-            else:
-                # ── Market CLOSED: show today's (last) close with real day-over-day % change.
-                display_price = last_price if last_price and last_price > 0 else prev_close
-                if display_price and prev_close and prev_close > 0 and display_price != prev_close:
-                    change_pct = round(((display_price - prev_close) / prev_close) * 100, 2)
-                else:
-                    change_pct = 0.0
+                if last_price is None or last_price <= 0:
+                    hist = t.history(period='5d', interval='1d')
+                    if len(hist) >= 2:
+                        last_price = last_price or float(hist['Close'].iloc[-1])
+                        if prev_close is None:
+                            prev_close = float(hist['Close'].iloc[-2])
+                    elif len(hist) == 1:
+                        last_price = last_price or float(hist['Close'].iloc[-1])
+            except Exception as e:
+                print(f"   [IDX] TwelveData fallback failed for {idx['name']}: {e}")
 
-            result.append({
-                "name": idx["name"],
-                "price": round(display_price, 2) if display_price else None,
-                "change_pct": change_pct,
-                "is_live": market_open,
-                "price_label": price_label,
-                "market_status": market_status
-            })
-        except Exception as e:
-            # Last resort: try Yahoo chart API even in exception handler
-            gf_lp, gf_pc = _fetch_index_from_yahoo_chart(idx["symbol"])
-            display_price = gf_lp
+        # ── Compute % change ──
+        display_price = last_price
+        if last_price and last_price > 0 and prev_close and prev_close > 0:
+            change_pct = round(((last_price - prev_close) / prev_close) * 100, 2)
+        else:
             change_pct = 0.0
-            if gf_lp and gf_pc and gf_pc > 0:
-                change_pct = round(((gf_lp - gf_pc) / gf_pc) * 100, 2)
-            result.append({
-                "name": idx["name"],
-                "price": round(display_price, 2) if display_price else None,
-                "change_pct": change_pct,
-                "is_live": market_open,
-                "price_label": price_label,
-                "market_status": market_status
-            })
+
+        # When market closed: show the last available price (which IS the day's close)
+        if not market_open and not display_price:
+            display_price = prev_close
+
+        result.append({
+            "name": idx["name"],
+            "price": round(display_price, 2) if display_price else None,
+            "change_pct": change_pct,
+            "is_live": market_open,
+            "price_label": price_label,
+            "market_status": market_status
+        })
     
     # Cache the result
     _INDEX_CACHE = result
     _INDEX_CACHE_TIME = time.time()
     return jsonify(result)
+
 
 @app.route('/api/news/top', methods=['GET'])
 def get_top_news():
