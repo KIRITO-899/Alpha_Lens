@@ -1,3 +1,6 @@
+import sys, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 from flask import Flask, render_template, request, jsonify, session
 import sqlite3
 import secrets
@@ -19,13 +22,14 @@ from google import genai
 from google.genai import types
 from difflib import SequenceMatcher
 import requests
-import yfinance_twelvedata_shim as yf
+from bs4 import BeautifulSoup
+import concurrent.futures
+from collections import deque
+from openai import OpenAI as OpenAIClient
+import angelone_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
-yf.set_tz_cache_location("venv/yf_cache")
-logger = logging.getLogger('yfinance')
-logger.disabled = True
-logger.propagate = False
+yf.set_tz_cache_location("venv/yf_cache")  # no-op in Angel One shim
 
 # Global write lock — ensures only one thread writes to SQLite at a time.
 # Reads do NOT need this lock (WAL mode allows concurrent reads).
@@ -44,48 +48,30 @@ _TICKER_CACHE = {}
 _TICKER_CACHE_TIME = {}
 
 def get_robust_price(ticker, market_open=None):
-    """Fetches live/closing price with a 30-second in-memory cache.
-    - Market OPEN  : uses fast_info.last_price (live, instant)
-    - Market CLOSED: uses history(period='2d') last row (authoritative close, no CDN delay)
+    """
+    Fetches live/closing price with a 30-second in-memory cache.
+    Uses Angel One SmartAPI (exchange-sourced LTP) with Yahoo Finance fallback.
+    Caches both successes (real price) and failures (0.0 sentinel) for 30s.
     """
     global _TICKER_CACHE, _TICKER_CACHE_TIME
     now = time.time()
-    
+
     if market_open is None:
         market_open = is_market_open()
-    
+
     # Return cached value if still fresh (30s window)
     if ticker in _TICKER_CACHE and (now - _TICKER_CACHE_TIME.get(ticker, 0)) < 30:
         return _TICKER_CACHE[ticker]
-    
-    price = None
-    try:
-        tick = yf.Ticker(ticker)
-        if market_open:
-            # Live market: fast_info gives real-time last traded price
-            price = float(tick.fast_info.last_price)
-        else:
-            # Closed market: history gives the authoritative official closing price
-            # This avoids the ~1-2 hour CDN propagation delay in fast_info
-            hist = tick.history(period='2d', interval='1d')
-            if not hist.empty:
-                import pandas as pd
-                if isinstance(hist.columns, pd.MultiIndex):
-                    try:
-                        price = float(hist['Close'].iloc[:, 0].iloc[-1])
-                    except:
-                        price = float(hist['Close'].iloc[-1])
-                else:
-                    price = float(hist['Close'].iloc[-1])
-    except Exception:
-        pass
-    
-    if price is not None and price > 0:
-        _TICKER_CACHE[ticker] = price
-        _TICKER_CACHE_TIME[ticker] = now
-        return price
-    
-    return _TICKER_CACHE.get(ticker, 0.0)
+
+    lp, _ = yf.get_ltp(ticker)
+    price = round(float(lp), 2) if (lp and lp > 0) else 0.0
+
+    _TICKER_CACHE[ticker] = price
+    _TICKER_CACHE_TIME[ticker] = now
+    return price
+
+
+
 
 # NSE market holidays for 2026
 NSE_HOLIDAYS_2026 = {
@@ -124,7 +110,7 @@ app = Flask(__name__, template_folder='../frontend', static_folder='../frontend'
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super_secret_alpha_lens_key")
 
 # Minimum AI confidence to accept a prediction
-MIN_CONFIDENCE = 58
+MIN_CONFIDENCE = 50
 
 import performance_report
 
@@ -286,6 +272,36 @@ RSS_SOURCES = [
     "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=indian+economy+RBI+market+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
 ]
+
+# Global state for scraping optimizations
+RSS_CACHE = {url: {'etag': None, 'modified': None} for url in RSS_SOURCES}
+SEEN_HEADLINES = set()
+
+# ── Dedicated Quant AI Screener Client (sm-gemini key) ──
+SM_GEMINI_KEY = "sm-gemini-ea08894f35654029a9cada598a23fbd3"
+SM_GEMINI_MODEL = "google/gemini-2.5-flash"
+SM_GEMINI_CLIENT = OpenAIClient(
+    api_key=SM_GEMINI_KEY,
+    base_url="https://api.aimlapi.com/v1",
+)
+
+def scrape_article_text(url):
+    """Fetches the actual article body text (first 3 paragraphs) to give AI better context."""
+    if not url or "google.com" in url:
+        return ""
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        resp = requests.get(url, headers=headers, timeout=5)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            # Try to find main article body
+            paragraphs = soup.find_all('p')
+            text = " ".join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 50])
+            # Limit to ~1500 chars to avoid massive Gemini payloads
+            return text[:1500]
+    except Exception as e:
+        print(f"   [Scrape Error] {url}: {e}")
+    return ""
 
 def clean_json(raw_text):
     cleaned = raw_text.strip()
@@ -711,225 +727,472 @@ def _extract_scalar(val):
         return None
 
 
-def get_base_price_at_time(ticker, pub_dt):
+def get_base_price_at_time(ticker, pub_dt_ist):
     """
-    Returns the stock price at or just before pub_dt (IST-aware datetime).
-    Priority:
-      1. 1-minute bar within 45 minutes before pub_dt (most accurate)
-      2. Broadest 1-min bar before pub_dt in the 7-day dataset
-      3. Live fast_info.last_price (if news is from today)
-      4. Previous close from fast_info (absolute last resort)
-    NEVER returns yesterday's daily close for today's news.
+    Returns the stock price at the moment of news publication.
+    Uses Angel One 1-min candles (primary) -> Yahoo Finance 5d/1m (fallback).
+    pub_dt_ist must be an IST-aware datetime.
     """
-    import pandas as pd
     IST = timezone(timedelta(hours=5, minutes=30))
-    today = datetime.now(IST).date()
 
+    # -- PRIMARY: Angel One 1-min candles --
     try:
-        # ── Step 1: 1-minute intraday data (7-day history) ──
-        hist = yf.download(ticker, period='7d', interval='1m', progress=False, auto_adjust=True)
-        if not hist.empty:
-            hist.index = pd.to_datetime(hist.index).tz_convert(IST)
-
-            # Normalize column access: yfinance returns MultiIndex ('Close', 'TICKER')
-            if isinstance(hist.columns, pd.MultiIndex):
-                close_series = hist['Close'].iloc[:, 0]  # Always take first ticker
-            else:
-                close_series = hist['Close']
-
-            # Find the closest bar within 45-min BEFORE pub_dt
-            window_start = pub_dt - timedelta(minutes=45)
-            window = close_series[(close_series.index >= window_start) & (close_series.index <= pub_dt)]
-            if not window.empty:
-                price = _extract_scalar(window.iloc[-1])
-                if price and price > 0:
-                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: ₹{price:.2f} (1-min window ✓)")
-                    return round(price, 2)
-
-            # Broader: any bar before pub_dt
-            past = close_series[close_series.index <= pub_dt]
-            if not past.empty:
-                price = _extract_scalar(past.iloc[-1])
-                if price and price > 0:
-                    print(f"   [Price] {ticker} @ {pub_dt.strftime('%H:%M')}: ₹{price:.2f} (1-min broad ✓)")
-                    return round(price, 2)
-
+        exchange, token = yf._get_exchange_token(ticker)
+        if exchange and token:
+            from_dt = pub_dt_ist - timedelta(hours=1)
+            to_dt   = pub_dt_ist + timedelta(minutes=5)
+            df = yf._ao_get_candle(exchange, token, 'ONE_MINUTE', from_dt, to_dt)
+            if not df.empty:
+                df.index = df.index.tz_convert(IST)
+                past = df[df.index <= pub_dt_ist]
+                if not past.empty:
+                    price = float(past.iloc[-1]['Close'])
+                    if price > 0:
+                        print(f"   [Price] {ticker} @ {pub_dt_ist.strftime('%H:%M IST')}: {price:.2f} (AngelOne 1m)")
+                        return round(price, 2)
     except Exception as e:
-        print(f"   [Price] 1-min fetch error for {ticker}: {e}")
+        print(f"   [Price] AngelOne 1m error for {ticker}: {e}")
 
+    # -- FALLBACK: Yahoo Finance 5d/1m chart --
     try:
-        # ── Step 2: Use live price if news is from today ──
-        t_obj = yf.Ticker(ticker)
-        fi = t_obj.fast_info
-        if pub_dt.date() == today:
-            lp = _extract_scalar(fi.last_price)
-            if lp and lp > 0:
-                print(f"   [Price] {ticker}: ₹{lp:.2f} (live fast_info ✓)")
-                return round(lp, 2)
-        # ── Step 3: previous_close as absolute fallback ──
-        pc = _extract_scalar(fi.previous_close)
-        if pc and pc > 0:
-            print(f"   [Price] {ticker}: ₹{pc:.2f} (previous_close fallback ⚠)")
-            return round(pc, 2)
+        _h = {"User-Agent": "Mozilla/5.0"}
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1m"
+        resp = requests.get(url, headers=_h, timeout=10)
+        data = resp.json()
+        result   = data['chart']['result'][0]
+        tss      = result['timestamp']
+        closes   = result['indicators']['quote'][0]['close']
+        best_p, best_t = None, None
+        for ts, cl in zip(tss, closes):
+            if cl is None:
+                continue
+            bar_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
+            if bar_dt <= pub_dt_ist:
+                best_p = cl
+                best_t = bar_dt
+        if best_p and best_p > 0:
+            print(f"   [Price] {ticker} @ {best_t.strftime('%H:%M IST')}: {best_p:.2f} (Yahoo 1m)")
+            return round(best_p, 2)
     except Exception as e:
-        print(f"   [Price] fast_info fallback error for {ticker}: {e}")
+        print(f"   [Price] Yahoo 1m error for {ticker}: {e}")
+
+    # -- LAST RESORT: Angel One prev_close --
+    try:
+        ltp, prev, _, _ = yf._get_cached_quote(ticker)
+        if prev and prev > 0:
+            print(f"   [Price] {ticker}: {prev:.2f} (prev_close last resort)")
+            return round(prev, 2)
+    except Exception:
+        pass
 
     return 0.0
+
+
+def get_price_with_range(ticker, market_open=None):
+    """
+    Returns (current_price, eval_high, eval_low) for stop/target evaluation.
+    MARKET OPEN  : Angel One LTP + day high/low (live, real-time).
+    MARKET CLOSED: Yahoo Finance official 3:30 PM close (authoritative NSE close).
+                   Falls back to Angel One LTP if Yahoo fails.
+    """
+    if market_open is None:
+        market_open = is_market_open()
+
+    if market_open:
+        ltp, prev, dh, dl = yf._get_cached_quote(ticker)
+        if not ltp or ltp <= 0:
+            return None, None, None
+        current   = round(float(ltp), 2)
+        eval_high = round(float(dh), 2) if dh and dh > 0 else current
+        eval_low  = round(float(dl), 2) if dl and dl > 0 else current
+        return current, eval_high, eval_low
+    else:
+        # Market closed: authoritative NSE close from Yahoo
+        official_close = _get_yahoo_official_close(ticker)
+        if official_close and official_close > 0:
+            return official_close, official_close, official_close
+        # Fallback: Angel One LTP
+        ltp, prev, dh, dl = yf._get_cached_quote(ticker)
+        if not ltp or ltp <= 0:
+            return None, None, None
+        current = round(float(ltp), 2)
+        return current, current, current
+
+
+# Cache: ticker -> (close_price, fetched_at_timestamp)
+_YAHOO_CLOSE_CACHE = {}
+_YAHOO_CLOSE_CACHE_TTL = 300  # 5 minutes
+
+
+def _get_yahoo_official_close(ticker):
+    """
+    Fetch the most recent official closing price from Yahoo Finance 5d/1m data.
+    Finds the last 1-min candle in the 15:28-15:31 IST window of the most recent trading day.
+    Results cached for 5 minutes to avoid hammering Yahoo.
+    """
+    import time as _time
+    now_ts = _time.time()
+
+    cached = _YAHOO_CLOSE_CACHE.get(ticker)
+    if cached and (now_ts - cached[1]) < _YAHOO_CLOSE_CACHE_TTL:
+        return cached[0]
+
+    try:
+        _h = {"User-Agent": "Mozilla/5.0"}
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1m"
+        resp = requests.get(url, headers=_h, timeout=8)
+        data = resp.json()
+        IST = timezone(timedelta(hours=5, minutes=30))
+        result   = data['chart']['result'][0]
+        tss      = result['timestamp']
+        closes   = result['indicators']['quote'][0]['close']
+        best_price = None
+        best_dt    = None
+        for ts, cl in zip(tss, closes):
+            if cl is None:
+                continue
+            bar_dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(IST)
+            bar_t  = bar_dt.hour * 60 + bar_dt.minute
+            # 15:28-15:31 IST = official close window
+            if (15 * 60 + 28) <= bar_t <= (15 * 60 + 31):
+                best_price = round(float(cl), 2)
+                best_dt    = bar_dt
+        if best_price and best_price > 0:
+            _YAHOO_CLOSE_CACHE[ticker] = (best_price, now_ts)
+            return best_price
+
+    except Exception:
+        pass  # Silent fail — caller will use Angel One fallback
+
+    return None
 
 
 # ==========================================
 # V3 INSTANT NEWS ENGINE — Two-Phase Pipeline
 # ==========================================
 def ai_news_worker():
-    global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME
+    global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME, SEEN_HEADLINES
     print("[SYSTEM] Alpha Lens v6.0 AI ENSEMBLE Engine Started!")
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 7-Model Ensemble (>= 70 score & 5/7 vote)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = 1.5% stop : 3% target")
     
+    # Initialize SEEN_HEADLINES from DB on first run.
+    # CRITICAL: Only block re-processing of news that ALREADY HAS stock signals.
+    # News without signals (193 articles) must remain available for re-evaluation
+    # with the new lower threshold.
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT DISTINCT n.headline
+            FROM news n
+            JOIN stock_impact si ON n.id = si.news_id
+            ORDER BY n.created_at DESC
+        """)
+        for row in c.fetchall():
+            SEEN_HEADLINES.add(row[0].lower().strip())
+        print(f"   [SEEN_HEADLINES] Loaded {len(SEEN_HEADLINES)} headlines that already have signals.")
+        conn.close()
+    except Exception as e:
+        print(f"   [DB Init Error] {e}")
+
+    def fetch_feed(url):
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        articles = []
+        try:
+            cache = RSS_CACHE[url]
+            feed = feedparser.parse(url, etag=cache['etag'], modified=cache['modified'])
+            if feed.status == 304:
+                return [] # Not modified
+            
+            # Update cache
+            if hasattr(feed, 'etag'): RSS_CACHE[url]['etag'] = feed.etag
+            if hasattr(feed, 'modified'): RSS_CACHE[url]['modified'] = feed.modified
+            
+            for entry in feed.entries[:30]:
+                pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
+                if pub_time and pub_time != "Just Now":
+                    try:
+                        pub_dt = parsedate_to_datetime(pub_time)
+                        if pub_dt.tzinfo is None:
+                            pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+                        if pub_dt < stale_cutoff:
+                            continue
+                    except Exception:
+                        pass
+                link = entry.link if hasattr(entry, 'link') else None
+                articles.append({"headline": entry.title, "time": pub_time, "url": link})
+        except Exception as e:
+            print(f"   RSS Error for {url}: {e}")
+        return articles
+
     while True:
         # ============================================================
         # PHASE 1: INSTANT — Scrape, Filter, Save, Map (no API calls)
         # ============================================================
         raw_articles = []
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
-        for url in RSS_SOURCES:
-            try:
-                feed = feedparser.parse(url)
-                for entry in feed.entries[:30]:
-                    pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
-                    if pub_time and pub_time != "Just Now":
-                        try:
-                            pub_dt = parsedate_to_datetime(pub_time)
-                            if pub_dt.tzinfo is None:
-                                pub_dt = pub_dt.replace(tzinfo=timezone.utc)
-                            if pub_dt < stale_cutoff:
-                                continue
-                        except Exception:
-                            pass
-                    raw_articles.append({"headline": entry.title, "time": pub_time})
-            except Exception as e:
-                print(f"   RSS Error: {e}")
         
-        print(f"Scraped {len(raw_articles)} headlines from all sources")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(RSS_SOURCES)) as executor:
+            results = executor.map(fetch_feed, RSS_SOURCES)
+            for res in results:
+                raw_articles.extend(res)
         
-        # STEP 1: Keyword Filter
-        relevant = [a for a in raw_articles if is_finance_relevant(a['headline'])]
-        print(f"Keyword Filter: {len(relevant)}/{len(raw_articles)} finance-relevant")
+        if raw_articles:
+            print(f"Scraped {len(raw_articles)} headlines from all sources")
         
         # Get market regime for technical filters
         market_regime = get_market_regime()
+        
+        # STEP 1: Quant AI Screener — replaces blunt keyword filter
+        # Sends all headlines at once to a dedicated Gemini quant model.
+        # It returns ONLY articles that are material, with direct stock mappings.
+        def quant_ai_screener(articles_batch):
+            """
+            Sends a batch of raw headlines to the sm-gemini AI model.
+            The AI acts as a senior quant researcher:
+              - Filters out non-material/noise headlines (earnings fluff, general macro not affecting stocks).
+              - Maps each remaining headline to affected NSE tickers.
+              - Assigns a forward-looking direction bias per ticker.
+            Returns list of: {headline, time, url, ticker, direction}
+            """
+            if not articles_batch:
+                return []
+            
+            numbered = "\n".join(
+                [f"{i+1}. {a['headline']}" for i, a in enumerate(articles_batch)]
+            )
+            
+            prompt = f"""You are a senior quantitative researcher at a top Indian hedge fund. Your task is to screen a batch of news headlines and identify ONLY those that will cause a material, tradeable price movement of 2%+ in specific NSE-listed stocks within 1-5 trading sessions.
+
+Headlines to screen:
+{numbered}
+
+For EACH material headline, identify:
+1. The precise NSE tickers directly or indirectly affected (append .NS suffix, e.g. RELIANCE.NS).
+2. The forward-looking directional bias per ticker: BULLISH or BEARISH.
+3. The first-order and second-order reasoning (supply chain disruption, earnings beat, regulatory action, capex trigger, etc.).
+
+CRITICAL SCREENING RULES:
+- IGNORE: Generic macro commentary without a clear stock-level catalyst.
+- IGNORE: Analyst opinions that merely restate price targets without new fundamental information.
+- IGNORE: Scheduled events that are already fully priced in (e.g., regular FII/DII data).
+- INCLUDE: Earnings beats/misses, M&A, regulatory changes, order wins/cancellations, management changes, supply disruptions, macro shifts (RBI rate, Budget, INR moves) that have clear sector exposure.
+
+Return ONLY valid JSON. Format:
+[
+  {{
+    "index": 1,
+    "material": true,
+    "impacts": [
+      {{"ticker": "RELIANCE.NS", "direction": "BULLISH", "reason": "One-line quant rationale"}}
+    ]
+  }}
+]
+
+If a headline is not material, return: {{"index": N, "material": false, "impacts": []}}
+Return the full array covering all {len(articles_batch)} headlines."""
+
+            try:
+                resp = SM_GEMINI_CLIENT.chat.completions.create(
+                    model=SM_GEMINI_MODEL,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.1,
+                    response_format={"type": "json_object"} if False else None,
+                    timeout=30,
+                )
+                raw = resp.choices[0].message.content
+                # Strip markdown code fences
+                import re as _re, json as _json
+                raw = raw.strip()
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
+                # Handle both list and wrapped-in-object response
+                parsed = _json.loads(raw.strip())
+                if isinstance(parsed, dict):
+                    # e.g. {"results": [...]}
+                    for v in parsed.values():
+                        if isinstance(v, list):
+                            parsed = v
+                            break
+                
+                results = []
+                for item in parsed:
+                    if not item.get("material", False):
+                        continue
+                    idx = item.get("index", 0) - 1
+                    if 0 <= idx < len(articles_batch):
+                        article = articles_batch[idx]
+                        for impact in item.get("impacts", []):
+                            ticker = impact.get("ticker", "").upper().strip()
+                            direction = impact.get("direction", "").upper().strip()
+                            if ticker and direction in ("BULLISH", "BEARISH"):
+                                if not ticker.endswith(".NS") and not ticker.endswith(".BO"):
+                                    ticker += ".NS"
+                                results.append({
+                                    "headline": article["headline"],
+                                    "time": article["time"],
+                                    "url": article.get("url"),
+                                    "ticker": ticker,
+                                    "direction": direction,
+                                })
+                print(f"   [AI Screener] {len(results)} ticker-signals from {len(articles_batch)} headlines")
+                return results
+            except Exception as e:
+                print(f"   [AI Screener Error] {e} — falling back to keyword filter")
+                # Fallback: use keyword filter + get_candidate_stocks
+                fallback = []
+                for a in articles_batch:
+                    if is_finance_relevant(a['headline']):
+                        for ticker, direction in _fallback_get_candidate_stocks(a['headline']):
+                            fallback.append({
+                                "headline": a["headline"], "time": a["time"],
+                                "url": a.get("url"), "ticker": ticker, "direction": direction
+                            })
+                return fallback
+        
+        # Process in batches of 25 headlines per AI call
+        BATCH_SIZE = 25
+        screened_signals = []
+        for i in range(0, len(raw_articles), BATCH_SIZE):
+            batch = raw_articles[i:i + BATCH_SIZE]
+            screened_signals.extend(quant_ai_screener(batch))
+        
+        print(f"AI Screener Total: {len(screened_signals)} ticker-signals identified")
         
         # STEP 2: Duplicate Filter + Instant Save + Stock Mapping
         # NOTE: We open/close the DB connection atomically per article to avoid
         # long-held write locks that cause "database is locked" errors when other
         # threads (yfinance_worker, Flask routes) also need to write.
         new_article_ids = []
-        
-        for article in relevant:
-            headline = article['headline']
-            
-            # ── Duplicate check (check ALL existing headlines, with RETRY for lock handling) ──
-            is_dupe = False
-            for _retry in range(5):
+
+        for signal in screened_signals:
+            headline = signal['headline']
+            article_url = signal.get('url')
+            ticker = signal['ticker']
+            base_direction = signal['direction']
+
+            # ── Fast In-Memory Duplicate Check ──
+            h_lower = headline.lower().strip()
+            if h_lower in SEEN_HEADLINES:
+                # Headline already saved; still need to try this ticker signal
                 try:
-                    _conn_dup = connect_news_db()
-                    _c_dup = _conn_dup.cursor()
-                    # Exact match first (fast)
-                    _c_dup.execute("SELECT COUNT(*) FROM news WHERE headline = ?", (headline,))
-                    if _c_dup.fetchone()[0] > 0:
-                        is_dupe = True
-                    else:
-                        # Fuzzy match against recent headlines only (last 200)
-                        _c_dup.execute("SELECT headline FROM news ORDER BY created_at DESC LIMIT 200")
-                        for row in _c_dup.fetchall():
-                            if SequenceMatcher(None, headline.lower(), row[0].lower()).ratio() > 0.75:
-                                is_dupe = True
-                                break
-                    _conn_dup.close()
-                    break  # Success, exit retry loop
-                except Exception as _e:
-                    if 'locked' in str(_e).lower():
-                        time.sleep(0.5)
-                        continue
-                    else:
-                        print(f"   Dupe-check DB error: {_e}")
-                        break
-                
-            if is_dupe:
-                continue
-            
-            # Rule-based category
-            category = classify_category(headline)
-            
-            # ── INSTANT SAVE — commit immediately so other threads can read ──
-            news_id = None
-            def _insert_news(conn, c):
-                c.execute('''INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
-                    VALUES (?, ?, ?, ?, ?)''',
-                    (headline, article['time'], None, '[]', category))
-                return c.lastrowid
-            news_id = db_write(_insert_news)
+                    _c = connect_news_db()
+                    _cur = _c.cursor()
+                    _cur.execute("SELECT id FROM news WHERE headline = ? LIMIT 1", (headline,))
+                    _row = _cur.fetchone()
+                    _c.close()
+                    news_id = _row[0] if _row else None
+                except Exception:
+                    news_id = None
+            else:
+                SEEN_HEADLINES.add(h_lower)
+                category = classify_category(headline)
+                _hl = headline
+                _time = signal['time']
+                _cat = category
+                def _insert_news(conn, c, _hl=_hl, _time=_time, _cat=_cat):
+                    c.execute('''INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
+                        VALUES (?, ?, ?, ?, ?)''',
+                        (_hl, _time, None, '[]', _cat))
+                    return c.lastrowid
+                news_id = db_write(_insert_news)
+                if news_id:
+                    new_article_ids.append({'id': news_id, 'headline': headline})
+
             if news_id is None:
                 continue
-            
-            # ── 7-MODEL ENSEMBLE AI STOCK MAPPING & EXTRACTION ──
-            candidates = get_candidate_stocks(headline, client, MODEL_NAME)
+
+            # ── Full Text Scraping (Context Boost) ──
+            body_text = scrape_article_text(article_url)
+            ai_input = headline
+            if body_text:
+                ai_input = f"{headline}\nContext: {body_text}"
+
             ensemble = EnsemblePredictor()
-            approved_signals = []  # collect results before opening DB again
-            
+            approved_signals = []
             market_currently_open = is_market_open()
-            for ticker, base_direction in candidates:
-                # Fetch the stock price at the NEWS PUBLICATION TIME (not ingestion time).
-                # This is critical for backfilled news where pub time may be hours ago.
-                base_price = 0.0
-                current_price_now = 0.0
-                try:
-                    _ist = timezone(timedelta(hours=5, minutes=30))
-                    _pub_dt = parsedate_to_datetime(article['time']).astimezone(_ist)
-                    _pub_dt_utc_str = _pub_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-                    _is_trading = True
-                    if _pub_dt.weekday() >= 5 or (_pub_dt.month, _pub_dt.day) in NSE_HOLIDAYS_2026:
-                        _is_trading = False
-                    else:
-                        _t = _pub_dt.hour * 60 + _pub_dt.minute
-                        if not ((9 * 60 + 15) <= _t <= (15 * 60 + 30)):
-                            _is_trading = False
+            # ── Get base_price = ACTUAL PRICE at news publication time ──
+            # KEY RULE: When news arrives AFTER market hours, base_price AND
+            # current_price MUST be the SAME (today's closing price / LTP).
+            # The percentage change should be 0% until the market opens and
+            # actual price movement occurs.
+            _ist = timezone(timedelta(hours=5, minutes=30))
+            base_price = 0.0
+            current_price_now = 0.0
+            _pub_dt_utc_str = ""
+            try:
+                _pub_dt = parsedate_to_datetime(signal['time']).astimezone(_ist)
+                _pub_dt_utc_str = _pub_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 
-                    if _is_trading:
-                        # Bulletproof price fetcher — correctly handles yfinance MultiIndex columns
-                        base_price = get_base_price_at_time(ticker, _pub_dt)
-                    else:
-                        # Off-hours / weekend news: use history to get the proper previous session close.
-                        # Using market_open=False forces history(period='2d') which returns the
-                        # authoritative closing price — NOT fast_info.last_price (which can equal
-                        # current_price and produce the misleading 0.00% display).
-                        try:
-                            _lp = get_robust_price(ticker, market_open=False)
-                            base_price = round(float(_lp), 2) if _lp and _lp > 0 else 0.0
-                        except Exception:
-                            base_price = 0.0
+                # Check if news was published during trading hours
+                _news_during_market = True
+                if _pub_dt.weekday() >= 5 or (_pub_dt.month, _pub_dt.day) in NSE_HOLIDAYS_2026:
+                    _news_during_market = False
+                else:
+                    _t = _pub_dt.hour * 60 + _pub_dt.minute
+                    if not ((9 * 60 + 15) <= _t <= (15 * 60 + 30)):
+                        _news_during_market = False
 
-                except Exception as _e:
-                    print(f"   [!] Price fetch error for {ticker}: {_e}")
-                    base_price = 0.0
+                # Get current LTP + prev_close from Angel One
+                _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
+                _ltp_val = round(float(_ltp), 2) if (_ltp and _ltp > 0) else 0.0
+                _prev_val = round(float(_prev), 2) if (_prev and _prev > 0) else 0.0
 
-                # Get current price for comparison
-                # Get current price for comparison
-                try:
-                    _cp = get_robust_price(ticker, market_open=market_currently_open)
-                    if _cp > 0:
-                        current_price_now = round(float(_cp), 2)
-                except Exception:
-                    pass
-                
-                # Fallback: if intraday lookup completely failed, keep base_price as 0.0.
-                # Storing 0.0 means the frontend will show '—' for the change %,
-                # which is honest. NEVER set base_price = current_price — that
-                # produces a fake +0.00% move that misleads users.
-                if base_price <= 0:
-                    base_price = 0.0
+                if _news_during_market:
+                    # News during market hours: get exact price at publication time
+                    base_price = get_base_price_at_time(ticker, _pub_dt)
+                    current_price_now = _ltp_val if _ltp_val > 0 else _prev_val
+                    # If intraday price lookup failed, use prev_close as baseline
+                    if base_price <= 0:
+                        base_price = _prev_val if _prev_val > 0 else _ltp_val
+                else:
+                    # NEWS AFTER MARKET HOURS:
+                    # base_price = official NSE closing price of today's session (from Yahoo 3:28-3:31 PM)
+                    # Angel One LTP is the "last tick" — NOT the official close (NSE uses VWAP of last 30 min).
+                    # Using LTP causes base = wrong value → 0% even when stock actually changed.
+                    _official_close = _get_yahoo_official_close(ticker)
+                    if _official_close and _official_close > 0:
+                        base_price = _official_close
+                        current_price_now = _official_close
+                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (Yahoo official close, 0% until market opens)")
+                    elif _ltp_val > 0:
+                        # Fallback: Angel One LTP
+                        base_price = _ltp_val
+                        current_price_now = _ltp_val
+                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (AO LTP fallback, 0% until market opens)")
+                    elif _prev_val > 0:
+                        base_price = _prev_val
+                        current_price_now = _prev_val
+
+
+            except Exception as _e:
+                print(f"   [!] Price fetch error for {ticker}: {_e}")
+
+            # Get tech context
+            tech_data = get_stock_technical_context(ticker)
+            tech_context_str = json.dumps(tech_data) if tech_data else ""
+
+            # Predict using Ensemble
+            result = ensemble.predict(
+                headline=ai_input,
+                ticker=ticker,
+                direction=base_direction,
+                tech_data=tech_data,
+                market_regime=market_regime,
+                db_connect_fn=connect_news_db,
+                api_client=client,
+                model_name=MODEL_NAME,
+                min_score=MIN_CONFIDENCE
+            )
+
+            if result['approved']:
+                view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
+                reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). Expected directional breakout."
+                approved_signals.append((news_id, ticker, result['direction'], 2.5,
+                                         view, reason, base_price, current_price_now,
+                                         result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
 
                 # 2. Get tech context
                 tech_data = get_stock_technical_context(ticker)
@@ -963,18 +1226,22 @@ def ai_news_worker():
             
             # ── Save approved signals in one short atomic write ──
             if approved_signals:
-                _sigs = approved_signals  # capture for closure
-                def _insert_signals(conn, c):
-                    c.executemany('''INSERT INTO stock_impact 
-                        (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', _sigs)
-                result = db_write(_insert_signals)
-                if result is not None or True:  # always log
-                    print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({len(approved_signals)} alpha signals)")
-            
-            new_article_ids.append({'id': news_id, 'headline': headline})
+                _sigs = approved_signals
+                def _insert_signals(conn, c, _s=_sigs):
+                    for sig in _s:
+                        news_id_sig, ticker_sig = sig[0], sig[1]
+                        # Skip if this (news_id, ticker) already exists — prevents duplicates
+                        c.execute("SELECT 1 FROM stock_impact WHERE news_id=? AND ticker=?", (news_id_sig, ticker_sig))
+                        if c.fetchone():
+                            continue
+                        c.execute('''INSERT INTO stock_impact
+                            (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', sig)
+                db_write(_insert_signals)
+                print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({len(approved_signals)} alpha signals)")
         
         print(f"PHASE 1 DONE: {len(new_article_ids)} new headlines saved INSTANTLY to database!")
+
         
         # ============================================================
         # PHASE 2: BACKGROUND — Batch Gemini for explanations only
@@ -1086,81 +1353,90 @@ Output STRICT valid JSON array:
 def get_price_with_range(ticker, market_open=None):
     """
     Returns (current_price, eval_high, eval_low) for stop/target evaluation.
-
-    eval_high = highest price seen TODAY (intraday or closing)
-    eval_low  = lowest price seen TODAY (intraday or closing)
-
-    Uses fast_info.day_high / day_low which are real-time and require no extra
-    API call beyond what we already make. Falls back to current price if the
-    attribute is unavailable (market closed / index).
+    Uses the shim's 30-second quote cache — no extra API call needed.
     """
     if market_open is None:
         market_open = is_market_open()
 
-    current = get_robust_price(ticker, market_open=market_open)
-    if not current or current <= 0:
+    # Single cached call gets ltp + day_high + day_low
+    ltp, prev, dh, dl = yf._get_cached_quote(ticker)
+    if not ltp or ltp <= 0:
         return None, None, None
 
-    current = round(float(current), 2)
-    eval_high = current
-    eval_low  = current
+    current = round(float(ltp), 2)
 
-    try:
-        fi = yf.Ticker(ticker).fast_info
-        dh = getattr(fi, 'day_high', None)
-        dl = getattr(fi, 'day_low',  None)
-        if dh and float(dh) > 0:
-            eval_high = round(float(dh), 2)
-        if dl and float(dl) > 0:
-            eval_low = round(float(dl), 2)
-    except Exception:
-        pass
+    # Only use intraday high/low when market is OPEN
+    if market_open:
+        eval_high = round(float(dh), 2) if dh and dh > 0 else current
+        eval_low  = round(float(dl), 2) if dl and dl > 0 else current
+    else:
+        eval_high = current
+        eval_low  = current
 
     return current, eval_high, eval_low
 
 
-def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is_bullish):
+def _fetch_ohlc_direct(ticker, days=14):
     """
-    Checks chronological daily OHLC data from since_dt up to yesterday.
-    Returns (hit_status, diff_percent) if a target or stop was hit chronologically.
+    Fetch daily OHLC from Angel One SmartAPI (with Yahoo Finance fallback).
+    Returns list of (datetime_utc, high, low, close) tuples.
     """
-    import pandas as pd
+    # Yahoo Finance chart API is reliable for daily historical data.
+    # (Angel One's historical OHLC API is currently broken and only returns today's data,
+    # which breaks historical target/stop hit detection).
+    # Fallback: Yahoo Finance chart API
     try:
-        IST = timezone(timedelta(hours=5, minutes=30))
-        hist = yf.download(ticker, period='7d', interval='1d', progress=False, auto_adjust=True)
-        if hist.empty:
+        yf_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
+        resp = requests.get(url, headers=yf_headers, timeout=8)
+        result = resp.json()['chart']['result'][0]
+        timestamps = result.get('timestamp', [])
+        quote  = result['indicators']['quote'][0]
+        highs  = quote.get('high',  [None] * len(timestamps))
+        lows   = quote.get('low',   [None] * len(timestamps))
+        closes = quote.get('close', [None] * len(timestamps))
+        rows = []
+        for ts, h, l, c in zip(timestamps, highs, lows, closes):
+            if h is not None and l is not None:
+                rows.append((
+                    datetime.fromtimestamp(ts, tz=timezone.utc),
+                    float(h), float(l),
+                    float(c) if c else 0.0
+                ))
+        return rows
+    except Exception:
+        return []
+
+
+def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is_bullish,
+                           ohlc_rows=None):
+    """
+    Checks chronological daily OHLC data from since_dt up to (not including) today.
+    Returns (hit_status, diff_percent) or (None, None).
+    Pass ohlc_rows to avoid repeated downloads for the same ticker within a cycle.
+    """
+    try:
+        if ohlc_rows is None:
+            ohlc_rows = _fetch_ohlc_direct(ticker)
+        if not ohlc_rows:
             return None, None
 
-        hist.index = pd.to_datetime(hist.index)
-        if hist.index.tzinfo is None:
-            hist.index = hist.index.tz_localize('UTC')
-
-        if isinstance(hist.columns, pd.MultiIndex):
-            high_s = hist['High'].iloc[:, 0]
-            low_s  = hist['Low'].iloc[:, 0]
-        else:
-            high_s = hist['High']
-            low_s  = hist['Low']
-        since_utc = since_dt.astimezone(timezone.utc) if since_dt.tzinfo else since_dt.replace(tzinfo=timezone.utc)
-        
+        since_utc = since_dt.replace(tzinfo=timezone.utc) if not since_dt.tzinfo else since_dt.astimezone(timezone.utc)
+        IST = timezone(timedelta(hours=5, minutes=30))
+        since_date_ist = since_utc.astimezone(IST).date()
         today_ist = datetime.now(IST).date()
 
-        for date in hist.index:
-            date_ist = date.astimezone(IST).date()
-            if date >= pd.Timestamp(since_utc) and date_ist < today_ist:
-                h = float(high_s.loc[date])
-                l = float(low_s.loc[date])
+        for (bar_dt, h, l, _c) in ohlc_rows:
+            bar_date_ist = bar_dt.astimezone(IST).date()
+            if bar_date_ist >= since_date_ist and bar_date_ist <= today_ist:
                 h_pct = ((h - base_price) / base_price) * 100
                 l_pct = ((l - base_price) / base_price) * 100
-                
                 if is_bullish:
-                    # check stop loss conservatively first
-                    if l_pct <= -stop_pct: return 'Stop Loss Hit', l_pct
-                    if h_pct >= target_pct: return 'Predicted Target Hit', h_pct
+                    if l_pct <= -stop_pct:  return 'Stop Loss Hit',       round(l_pct, 2)
+                    if h_pct >= target_pct: return 'Predicted Target Hit', round(h_pct, 2)
                 else:
-                    if h_pct >= stop_pct: return 'Stop Loss Hit', h_pct
-                    if l_pct <= -target_pct: return 'Predicted Target Hit', l_pct
-
+                    if h_pct >= stop_pct:    return 'Stop Loss Hit',       round(h_pct, 2)
+                    if l_pct <= -target_pct: return 'Predicted Target Hit', round(l_pct, 2)
         return None, None
     except Exception:
         return None, None
@@ -1176,12 +1452,26 @@ def yfinance_worker():
             # ── PHASE A: Read active stocks ──
             conn = connect_news_db()
             c = conn.cursor()
-            # Fetch ALL stocks that we still want to evaluate or display
-            # Increased to 14 days because some signals (like April 8) were falling outside
-            # the 7-day evaluation window before their final status was checked.
+            # ALL non-expired signals within 14 days — for status evaluation
             fourteen_days_ago = (datetime.now(timezone.utc) - timedelta(days=14)).strftime('%Y-%m-%d %H:%M:%S')
             c.execute("SELECT id, news_id, ticker, base_price, impact, created_at, status FROM stock_impact WHERE status != 'Expired' AND created_at > ?", (fourteen_days_ago,))
             active_stocks = c.fetchall()
+
+            # ALSO fetch resolved rows where current_price still equals base_price
+            # These never got a live price update — refresh them now
+            c.execute("""
+                SELECT id, news_id, ticker, base_price, impact, created_at, status
+                FROM stock_impact
+                WHERE ABS(current_price - base_price) < 0.01
+                AND created_at > ?
+            """, (fourteen_days_ago,))
+            stale_price_rows = c.fetchall()
+            # Merge, deduplicating by id
+            seen_ids = {r[0] for r in active_stocks}
+            for r in stale_price_rows:
+                if r[0] not in seen_ids:
+                    active_stocks.append(r)
+                    seen_ids.add(r[0])
             conn.close()
 
             if not active_stocks:
@@ -1189,14 +1479,15 @@ def yfinance_worker():
                 time.sleep(60)
                 continue
 
-            # ── PHASE B: Fetch prices ──
-            updates = []       # (current_price, new_status, stock_id)
+            updates = []       # ('price_only'|'full', ...)
             patterns = []      # for historical_patterns logging
+            _ohlc_cache = {}   # ticker -> ohlc_rows, fetched once per cycle
+            print(f"   [YF] Processing {len(active_stocks)} signals...")
 
             for row in active_stocks:
                 stock_id, news_id, ticker, base_price, impact, created_at_str, status = row
 
-                # ── Fetch current price + today's intraday high/low ──
+                # ── Fetch current price (uses 30s _TICKER_CACHE — deduplicates same-ticker rows) ──
                 current_price, today_high, today_low = get_price_with_range(
                     ticker, market_open=market_currently_open
                 )
@@ -1206,15 +1497,54 @@ def yfinance_worker():
 
                 current_price = round(float(current_price), 2)
 
-                # If base_price is 0, initialize it now (first time seeing this signal)
+                # ── If base_price is 0, initialize it to current_price ──
                 if base_price == 0.0 or base_price is None:
                     base_price = current_price
-                    _sid_init, _cp_init = stock_id, current_price
-                    def _init_base(conn, c, _sid=_sid_init, _cp=_cp_init):
-                        c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_cp, _sid))
+                    _sid_init = stock_id
+                    _bp_init = base_price
+                    def _init_base(conn, c, _sid=_sid_init, _cp=_bp_init):
+                        c.execute("UPDATE stock_impact SET base_price=?, current_price=? WHERE id=?", (_cp, _cp, _sid))
                     db_write(_init_base)
+                    print(f"   [YF] Initialized base_price=current_price={base_price} for {ticker} (ID={_sid_init})")
 
-                diff_percent = ((current_price - base_price) / base_price) * 100
+                # ── KEY RULE: After-hours signals → force current_price = base_price (0%) ──
+                # When market is closed AND the signal's news was published after the last
+                # market close, no trading has happened since the news — show 0% until open.
+                # Market-hours signals keep their real base_price and show actual movement.
+                if not market_currently_open and status == 'Active View':
+                    try:
+                        _pub_ist = parsedate_to_datetime(created_at_str).astimezone(
+                            timezone(timedelta(hours=5, minutes=30))
+                        ) if '+' in created_at_str or 'GMT' in created_at_str else \
+                        datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(
+                            tzinfo=timezone.utc
+                        ).astimezone(timezone(timedelta(hours=5, minutes=30)))
+
+                        _IST = timezone(timedelta(hours=5, minutes=30))
+                        _now_ist = datetime.now(_IST)
+                        _last_close = _now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
+
+                        # Signal was created today after market close or on weekend
+                        _signal_ist_date = _pub_ist.date()
+                        _today_ist = _now_ist.date()
+                        _is_today_after_close = (_signal_ist_date == _today_ist and _pub_ist >= _last_close)
+                        _is_weekend = _now_ist.weekday() >= 5
+
+                        # Check if the signal's news was during market hours
+                        _t = _pub_ist.hour * 60 + _pub_ist.minute
+                        _news_was_market_hours = (
+                            _pub_ist.weekday() < 5 and
+                            (9 * 60 + 15) <= _t <= (15 * 60 + 30)
+                        )
+
+                        # Only force current=base for after-hours news signals
+                        if not _news_was_market_hours and (_is_today_after_close or _is_weekend):
+                            current_price = base_price  # 0% until next session
+                    except Exception:
+                        pass
+
+                # Always compute diff from the authoritative base_price
+                diff_percent = round(((current_price - base_price) / base_price) * 100, 2) if base_price and base_price > 0 else 0.0
                 new_status = status  # Keep the old status by default
 
                 # Evaluate target hit / stop loss ONLY IF it hasn't triggered yet
@@ -1229,17 +1559,20 @@ def yfinance_worker():
                         created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                         age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
                         if age_hours >= 12:  # old enough to have "yesterday"
-                            hist_status, hist_diff = check_historical_hits(ticker, created_dt, base_price, target_pct, stop_pct, is_bullish)
+                            # Fetch OHLC only once per ticker per cycle
+                            if ticker not in _ohlc_cache:
+                                _ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
+                            hist_status, hist_diff = check_historical_hits(
+                                ticker, created_dt, base_price, target_pct, stop_pct, is_bullish,
+                                ohlc_rows=_ohlc_cache[ticker]
+                            )
                             if hist_status:
                                 new_status = hist_status
                                 diff_percent = hist_diff
                     except Exception:
                         pass
 
-                    # ── 2. Today's intraday range evaluation (Only during MARKET HOURS) ──
-                    # When market is closed, day_high/day_low belong to the PREVIOUS session,
-                    # not the current one. Using them would give false target hits for
-                    # after-hours news that hasn't had a chance to trade yet.
+                    # ── 2. Intraday high/low evaluation (Only during MARKET HOURS) ──
                     if new_status == 'Active View' and market_currently_open:
                         eval_high = today_high if today_high else current_price
                         eval_low  = today_low  if today_low  else current_price
@@ -1262,6 +1595,23 @@ def yfinance_worker():
                                 new_status = 'Predicted Target Hit'
                                 diff_percent = low_pct
 
+                    # ── 3. Current price evaluation (MARKET HOURS ONLY) ──
+                    # Only evaluate SL/TP from current price during trading hours.
+                    # After hours, diff_percent is 0 for same-day signals, so this
+                    # would never trigger anyway. For older signals, historical
+                    # OHLC catch-up (section 1) handles it.
+                    if new_status == 'Active View' and market_currently_open and base_price > 0:
+                        if is_bullish:
+                            if diff_percent >= target_pct:
+                                new_status = 'Predicted Target Hit'
+                            elif diff_percent <= -stop_pct:
+                                new_status = 'Stop Loss Hit'
+                        else:  # BEARISH
+                            if diff_percent <= -target_pct:
+                                new_status = 'Predicted Target Hit'
+                            elif diff_percent >= stop_pct:
+                                new_status = 'Stop Loss Hit'
+
                     # Check expiry (always, regardless of market hours)
                     if new_status == 'Active View':
                         try:
@@ -1277,17 +1627,33 @@ def yfinance_worker():
                         is_bullish_flag = 'bullish' in impact.lower()
                         patterns.append((news_id, ticker, is_bullish_flag, diff_percent, new_status))
 
-                updates.append((current_price, new_status, stock_id))
+                # ── CRITICAL: Split updates by signal type ──
+                # Resolved signals: Only update current_price, NEVER touch estimated_change_percent.
+                # Active signals: Full update: current_price + status + estimated_change_percent
+                if status in ('Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction', 'Expired'):
+                    updates.append(('price_only', current_price, stock_id))
+                else:
+                    updates.append(('full', current_price, new_status, round(diff_percent, 2), stock_id))
 
             # ── PHASE C: Write all updates ──
             if updates:
                 _updates = updates
                 _patterns = patterns
                 def _write_prices(conn, c):
-                    c.executemany(
-                        "UPDATE stock_impact SET current_price = ?, status = ? WHERE id = ?",
-                        _updates
-                    )
+                    price_only = [(u[1], u[2]) for u in _updates if u[0] == 'price_only']
+                    full_upd   = [(u[1], u[2], u[3], u[4]) for u in _updates if u[0] == 'full']
+                    if price_only:
+                        c.executemany(
+                            "UPDATE stock_impact SET current_price = ? WHERE id = ?",
+                            price_only
+                        )
+                    if full_upd:
+                        c.executemany(
+                            """UPDATE stock_impact
+                               SET current_price = ?, status = ?, estimated_change_percent = ?
+                               WHERE id = ?""",
+                            full_upd
+                        )
                     for news_id, ticker, is_bullish, diff_percent, new_status in _patterns:
                         c.execute("SELECT headline FROM news WHERE id = ?", (news_id,))
                         row = c.fetchone()
@@ -1300,7 +1666,9 @@ def yfinance_worker():
                                 (row[0], ticker, direction, outcome, diff_percent)
                             )
                 db_write(_write_prices)
-                print(f"   [YF] Updated {len(updates)} stocks. Market {'Open' if market_currently_open else 'Closed'}.")
+                n_po = sum(1 for u in updates if u[0] == 'price_only')
+                n_fl = sum(1 for u in updates if u[0] == 'full')
+                print(f"   [YF] Updated {n_fl} active + {n_po} resolved prices. Market {'Open' if market_currently_open else 'Closed'}.")
 
         except Exception as e:
             print("YFinance Worker Error:", e)
@@ -1323,19 +1691,14 @@ def _fetch_index_from_yahoo_chart(symbol):
     No API key needed. Returns (last_price, prev_close) or (None, None).
     """
     try:
+        yf_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?range=5d&interval=1d"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        }
-        resp = requests.get(url, headers=headers, timeout=8)
+        resp = requests.get(url, headers=yf_headers, timeout=8)
         data = resp.json()
         result = data.get('chart', {}).get('result', [{}])[0]
         meta = result.get('meta', {})
-        
         last_price = meta.get('regularMarketPrice')
         prev_close = meta.get('chartPreviousClose') or meta.get('previousClose')
-        
-        # Fallback to close prices from the time series if meta is incomplete
         if not last_price or last_price <= 0:
             quotes = result.get('indicators', {}).get('quote', [{}])[0]
             closes = [c for c in quotes.get('close', []) if c is not None]
@@ -1343,12 +1706,10 @@ def _fetch_index_from_yahoo_chart(symbol):
                 last_price = closes[-1]
                 if len(closes) >= 2:
                     prev_close = prev_close or closes[-2]
-        
         if last_price and last_price > 0:
-            print(f"   [YF-CHART] Fetched {symbol}: ₹{last_price:.2f} (Yahoo chart fallback)")
             return float(last_price), float(prev_close) if prev_close else None
     except Exception as e:
-        print(f"   [YF-CHART] Yahoo chart fallback error for {symbol}: {e}")
+        print(f"   [Index Fallback] Yahoo error for {symbol}: {e}")
     return None, None
 
 
@@ -1510,7 +1871,25 @@ def get_top_news():
             news_item['macro_pathway'] = []
             
         c.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
-        stocks = [dict(s) for s in c.fetchall()]
+        raw_stocks = [dict(s) for s in c.fetchall()]
+        # Deduplicate by ticker — keep highest confidence score for each ticker
+        seen_tickers = {}
+        for s in raw_stocks:
+            t = s.get('ticker', '')
+            if t not in seen_tickers or (s.get('confidence_score') or 0) > (seen_tickers[t].get('confidence_score') or 0):
+                seen_tickers[t] = s
+        stocks = list(seen_tickers.values())
+        for s in stocks:
+            bp     = s.get('base_price') or 0
+            cp     = s.get('current_price') or 0
+            status = s.get('status', '')
+            resolved = status in ('Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction')
+            if resolved and s.get('estimated_change_percent') is not None:
+                s['diff_pct'] = round(float(s['estimated_change_percent']), 2)
+            elif bp > 0 and cp > 0:
+                s['diff_pct'] = round((cp - bp) / bp * 100, 2)
+            else:
+                s['diff_pct'] = None
         news_item['affected_stocks'] = stocks
         conn.close()
         return jsonify({"market_open": is_market_open(), "news": [news_item]})
@@ -1537,7 +1916,25 @@ def get_all_news():
             except:
                 news_item['macro_pathway'] = []
             c.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
-            stocks = [dict(s) for s in c.fetchall()]
+            raw_stocks = [dict(s) for s in c.fetchall()]
+            # Deduplicate by ticker — keep highest confidence score
+            seen_tickers = {}
+            for s in raw_stocks:
+                t = s.get('ticker', '')
+                if t not in seen_tickers or (s.get('confidence_score') or 0) > (seen_tickers[t].get('confidence_score') or 0):
+                    seen_tickers[t] = s
+            stocks = list(seen_tickers.values())
+            for s in stocks:
+                bp     = s.get('base_price') or 0
+                cp     = s.get('current_price') or 0
+                status = s.get('status', '')
+                resolved = status in ('Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction')
+                if resolved and s.get('estimated_change_percent') is not None:
+                    s['diff_pct'] = round(float(s['estimated_change_percent']), 2)
+                elif bp > 0 and cp > 0:
+                    s['diff_pct'] = round((cp - bp) / bp * 100, 2)
+                else:
+                    s['diff_pct'] = None
             news_item['affected_stocks'] = stocks
             all_news.append(news_item)
             
