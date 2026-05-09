@@ -1949,11 +1949,7 @@ def get_all_news():
             for s in stocks:
                 bp     = s.get('base_price') or 0
                 cp     = s.get('current_price') or 0
-                status = s.get('status', '')
-                resolved = status in ('Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction')
-                if resolved and s.get('estimated_change_percent') is not None:
-                    s['diff_pct'] = round(float(s['estimated_change_percent']), 2)
-                elif bp > 0 and cp > 0:
+                if bp > 0 and cp > 0:
                     s['diff_pct'] = round((cp - bp) / bp * 100, 2)
                 else:
                     s['diff_pct'] = None
