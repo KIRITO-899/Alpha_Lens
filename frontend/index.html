@@ -1418,6 +1418,7 @@
                     const data = await res.json();
                     if (!watchlistPrices[stock.ticker]) watchlistPrices[stock.ticker] = {};
                     watchlistPrices[stock.ticker].price = data.price;
+                    watchlistPrices[stock.ticker].change_pct = data.change_pct;
                 } catch(e) {}
             }
             renderWatchlistPanel();
@@ -1437,6 +1438,14 @@
                 const priceData = watchlistPrices[stock.ticker] || {};
                 const priceFmt = priceData.price ? '₹' + priceData.price.toFixed(2) : '...';
                 
+                let changeHtml = '';
+                if (priceData.change_pct !== undefined) {
+                    const pct = priceData.change_pct;
+                    const colorCls = pct >= 0 ? 'text-green-400' : 'text-red-400';
+                    const sign = pct > 0 ? '+' : '';
+                    changeHtml = `<div class="text-[10px] font-bold ${colorCls} mt-1">${sign}${pct.toFixed(2)}%</div>`;
+                }
+                
                 const card = document.createElement('div');
                 card.className = "flex items-center justify-between p-3 bg-black/40 border border-white/10 rounded-xl hover:border-cyan-500/30 transition-colors group";
                 card.innerHTML = `
@@ -1447,6 +1456,7 @@
                     <div class="flex items-center gap-4">
                         <div class="text-right">
                             <div class="font-mono text-sm font-bold text-white">${priceFmt}</div>
+                            ${changeHtml}
                         </div>
                         <button onclick="removeStockFromWatchlist('${stock.ticker}')" class="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>

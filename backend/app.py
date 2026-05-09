@@ -2090,8 +2090,22 @@ def search_stocks():
 
 @app.route('/api/stock-price/<ticker>', methods=['GET'])
 def get_stock_price(ticker):
-    price = get_robust_price(ticker)
-    return jsonify({"ticker": ticker, "price": price})
+    lp, prev = yf.get_ltp(ticker)
+    price = round(float(lp), 2) if (lp and lp > 0) else 0.0
+    prev_close = round(float(prev), 2) if (prev and prev > 0) else price
+    market_open = is_market_open()
+    
+    if market_open:
+        change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+    else:
+        change_pct = 0.0
+        
+    return jsonify({
+        "ticker": ticker, 
+        "price": price,
+        "change_pct": round(change_pct, 2),
+        "market_open": market_open
+    })
 
 if __name__ == '__main__':
     # Small delay so DB is fully ready before workers start writing
