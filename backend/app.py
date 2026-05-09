@@ -1821,7 +1821,7 @@ def get_indices():
 
         # ── Compute % change ──
         display_price = last_price
-        if last_price and last_price > 0 and prev_close and prev_close > 0:
+        if market_open and last_price and last_price > 0 and prev_close and prev_close > 0:
             change_pct = round(((last_price - prev_close) / prev_close) * 100, 2)
         else:
             change_pct = 0.0
