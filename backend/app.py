@@ -2043,6 +2043,56 @@ def logout():
     session.pop('user', None)
     return jsonify({"message": "Logged out"}), 200
 
+@app.route('/api/stock-search', methods=['GET'])
+def search_stocks():
+    query = request.args.get('q', '').lower().strip()
+    if not query:
+        return jsonify([])
+    
+    # Ensure scrip master is loaded
+    yf._load_scrip_master()
+    
+    results = []
+    seen_tickers = set()
+    
+    # 1. Search our curated STOCK_KEYWORD_MAP for popular friendly names
+    for name, ticker in STOCK_KEYWORD_MAP.items():
+        if query in name:
+            if ticker not in seen_tickers:
+                results.append({"name": name.title(), "ticker": ticker})
+                seen_tickers.add(ticker)
+                if len(results) >= 20:
+                    break
+                    
+    # 2. Search all NSE symbols from Angel One
+    if len(results) < 20:
+        for sym in yf._scrip_cache.keys():
+            if query in sym.lower():
+                ticker = f"{sym}.NS"
+                if ticker not in seen_tickers:
+                    results.append({"name": sym, "ticker": ticker})
+                    seen_tickers.add(ticker)
+                    if len(results) >= 20:
+                        break
+                        
+    # 3. Search all BSE symbols from Angel One
+    if len(results) < 20:
+        for sym in yf._bse_cache.keys():
+            if query in sym.lower():
+                ticker = f"{sym}.BO"
+                if ticker not in seen_tickers:
+                    results.append({"name": sym, "ticker": ticker})
+                    seen_tickers.add(ticker)
+                    if len(results) >= 20:
+                        break
+                        
+    return jsonify(results)
+
+@app.route('/api/stock-price/<ticker>', methods=['GET'])
+def get_stock_price(ticker):
+    price = get_robust_price(ticker)
+    return jsonify({"ticker": ticker, "price": price})
+
 if __name__ == '__main__':
     # Small delay so DB is fully ready before workers start writing
     time.sleep(2)

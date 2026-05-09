@@ -596,19 +596,52 @@
             <!-- ============================================== -->
             <!-- VIEW 3: NEWS AFFECTING PORTFOLIO              -->
             <!-- ============================================== -->
-            <div id="view-portfolio" class="hidden max-w-6xl mx-auto w-full stock-mode-element">
-                <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-8 mt-4">
-                    <h1
-                        class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">
-                        News Affecting Stocks</h1>
-                    <p
-                        class="text-sm text-cyan-400 font-mono uppercase tracking-widest relative z-10 flex justify-between items-center">
-                        <span>All news with direct stock impact — last 7 days</span>
-                        <span id="portfolio-count"
-                            class="text-slate-300 bg-black/40 px-3 py-1 rounded-full border border-white/10">Loading...</span>
-                    </p>
+            <!-- ============================================== -->
+            <!-- VIEW 3: NEWS AFFECTING PORTFOLIO              -->
+            <!-- ============================================== -->
+            <div id="view-portfolio" class="hidden max-w-7xl mx-auto w-full stock-mode-element">
+                <div class="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start mt-4">
+                    
+                    <!-- LEFT COLUMN: WATCHLIST -->
+                    <div class="col-span-1 xl:col-span-4 space-y-6 xl:sticky xl:top-24">
+                        <div class="glass-panel p-6 rounded-3xl relative overflow-visible">
+                            <h2 class="text-2xl font-display font-black text-white mb-4">My Portfolio</h2>
+                            
+                            <!-- Search Bar -->
+                            <div class="relative mb-6 z-50">
+                                <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                                </div>
+                                <input type="text" id="stock-search-input" oninput="handleStockSearch(event)" placeholder="Search NSE/BSE stocks..." 
+                                    class="w-full bg-black/40 border border-white/10 rounded-xl pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors placeholder-slate-500">
+                                <!-- Dropdown -->
+                                <div id="stock-search-dropdown" class="absolute left-0 right-0 mt-2 bg-slate-900 border border-white/10 rounded-xl shadow-2xl max-h-60 overflow-y-auto hidden z-50">
+                                </div>
+                            </div>
+                            
+                            <!-- Watchlist Cards -->
+                            <div id="watchlist-container" class="space-y-3">
+                                <!-- Cards injected here -->
+                                <div class="text-center py-6 text-slate-500 text-sm">Your watchlist is empty.<br>Search and add stocks above.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- RIGHT COLUMN: FILTERED NEWS -->
+                    <div class="col-span-1 xl:col-span-8">
+                        <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-6">
+                            <h1 class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">
+                                News Affecting My Portfolio</h1>
+                            <p class="text-sm text-cyan-400 font-mono uppercase tracking-widest relative z-10 flex justify-between items-center">
+                                <span>Filtered by your watchlist</span>
+                                <span id="portfolio-count" class="text-slate-300 bg-black/40 px-3 py-1 rounded-full border border-white/10">0 News Items</span>
+                            </p>
+                        </div>
+                        <div id="portfolio-news-list" class="space-y-4">
+                            <!-- News cards injected here -->
+                        </div>
+                    </div>
                 </div>
-                <div id="portfolio-news-list" class="space-y-4"></div>
             </div>
 
             <!-- ============================================== -->
@@ -1294,31 +1327,183 @@
             });
         }
 
+        // ==========================================
+        // WATCHLIST & PORTFOLIO LOGIC
+        // ==========================================
+        let watchlist = JSON.parse(localStorage.getItem('alpha_lens_watchlist') || '[]');
+        let watchlistPrices = {};
+        let searchTimeout = null;
+
+        function saveWatchlist() {
+            localStorage.setItem('alpha_lens_watchlist', JSON.stringify(watchlist));
+            renderWatchlistPanel();
+            renderPortfolioView();
+        }
+
+        async function handleStockSearch(e) {
+            const query = e.target.value;
+            const dropdown = document.getElementById('stock-search-dropdown');
+            
+            if (searchTimeout) clearTimeout(searchTimeout);
+            
+            if (!query || query.length < 2) {
+                dropdown.classList.add('hidden');
+                return;
+            }
+            
+            searchTimeout = setTimeout(async () => {
+                try {
+                    const res = await fetch('/api/stock-search?q=' + encodeURIComponent(query));
+                    const results = await res.json();
+                    
+                    dropdown.innerHTML = '';
+                    if (results.length === 0) {
+                        dropdown.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">No stocks found</div>';
+                    } else {
+                        results.forEach(stock => {
+                            const isAdded = watchlist.some(s => s.ticker === stock.ticker);
+                            const div = document.createElement('div');
+                            div.className = `px-4 py-3 hover:bg-white/10 cursor-pointer flex justify-between items-center border-b border-white/5 last:border-0 ${isAdded ? 'opacity-50' : ''}`;
+                            div.innerHTML = `
+                                <div>
+                                    <div class="text-sm font-bold text-white">${stock.ticker}</div>
+                                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">${stock.name}</div>
+                                </div>
+                                ${isAdded ? '<span class="text-[10px] text-green-400 font-bold border border-green-500/30 px-2 py-0.5 rounded">ADDED</span>' : ''}
+                            `;
+                            if (!isAdded) {
+                                div.onclick = () => {
+                                    addStockToWatchlist(stock.ticker, stock.name);
+                                    dropdown.classList.add('hidden');
+                                    e.target.value = '';
+                                };
+                            }
+                            dropdown.appendChild(div);
+                        });
+                    }
+                    dropdown.classList.remove('hidden');
+                } catch (err) {
+                    console.error("Search failed", err);
+                }
+            }, 300);
+        }
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.relative')) {
+                const dropdown = document.getElementById('stock-search-dropdown');
+                if (dropdown) dropdown.classList.add('hidden');
+            }
+        });
+
+        function addStockToWatchlist(ticker, name) {
+            if (!watchlist.some(s => s.ticker === ticker)) {
+                watchlist.push({ ticker, name });
+                saveWatchlist();
+                updateWatchlistPrices();
+            }
+        }
+
+        function removeStockFromWatchlist(ticker) {
+            watchlist = watchlist.filter(s => s.ticker !== ticker);
+            delete watchlistPrices[ticker];
+            saveWatchlist();
+        }
+
+        async function updateWatchlistPrices() {
+            if (watchlist.length === 0) return;
+            
+            for (const stock of watchlist) {
+                try {
+                    const res = await fetch('/api/stock-price/' + stock.ticker);
+                    const data = await res.json();
+                    if (!watchlistPrices[stock.ticker]) watchlistPrices[stock.ticker] = {};
+                    watchlistPrices[stock.ticker].price = data.price;
+                } catch(e) {}
+            }
+            renderWatchlistPanel();
+        }
+
+        function renderWatchlistPanel() {
+            const container = document.getElementById('watchlist-container');
+            if (!container) return;
+            
+            if (watchlist.length === 0) {
+                container.innerHTML = '<div class="text-center py-6 text-slate-500 text-sm border border-dashed border-white/20 rounded-xl bg-black/20">Your watchlist is empty.<br>Search and add stocks above.</div>';
+                return;
+            }
+            
+            container.innerHTML = '';
+            watchlist.forEach(stock => {
+                const priceData = watchlistPrices[stock.ticker] || {};
+                const priceFmt = priceData.price ? '₹' + priceData.price.toFixed(2) : '...';
+                
+                const card = document.createElement('div');
+                card.className = "flex items-center justify-between p-3 bg-black/40 border border-white/10 rounded-xl hover:border-cyan-500/30 transition-colors group";
+                card.innerHTML = `
+                    <div class="flex flex-col">
+                        <span class="font-bold font-display text-white tracking-widest text-sm">${stock.ticker}</span>
+                        <span class="text-[9px] text-slate-400 uppercase tracking-widest max-w-[150px] truncate">${stock.name}</span>
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <div class="text-right">
+                            <div class="font-mono text-sm font-bold text-white">${priceFmt}</div>
+                        </div>
+                        <button onclick="removeStockFromWatchlist('${stock.ticker}')" class="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                        </button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
         function renderPortfolioView() {
             const container = document.getElementById('portfolio-news-list');
             if (!container) return;
             container.innerHTML = '';
-            // Only show news that HAS stock impacts (filtered by DB insertion time)
-            const sevenDaysAgo = Date.now() - (168 * 60 * 60 * 1000);
-            const stockNews = globalNewsData.filter(n =>
-                parseSQLiteDate(n.created_at).getTime() >= sevenDaysAgo &&
-                n.affected_stocks && n.affected_stocks.length > 0
-            );
-            const countEl = document.getElementById('portfolio-count');
-            if (countEl) countEl.innerText = `${stockNews.length} News Items`;
-            if (stockNews.length === 0) {
-                container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">No stock-impacting news found yet. Check back shortly.</div>';
+            
+            if (watchlist.length === 0) {
+                const countEl = document.getElementById('portfolio-count');
+                if (countEl) countEl.innerText = '0 News Items';
+                container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">Add stocks to your watchlist to see relevant news here.</div>';
                 return;
             }
+
+            const watchlistTickers = new Set(watchlist.map(s => s.ticker));
+
+            // Only show news that HAS stock impacts matching our watchlist (filtered by DB insertion time)
+            const sevenDaysAgo = Date.now() - (168 * 60 * 60 * 1000);
+            const stockNews = globalNewsData.filter(n => {
+                if (parseSQLiteDate(n.created_at).getTime() < sevenDaysAgo) return false;
+                if (!n.affected_stocks || n.affected_stocks.length === 0) return false;
+                
+                // Keep news if AT LEAST ONE affected stock is in our watchlist
+                return n.affected_stocks.some(stock => {
+                    const tkKey = (stock.ticker || '').toUpperCase();
+                    return watchlistTickers.has(tkKey);
+                });
+            });
+            
+            const countEl = document.getElementById('portfolio-count');
+            if (countEl) countEl.innerText = `${stockNews.length} News Items`;
+            
+            if (stockNews.length === 0) {
+                container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">No recent news found for your watchlist stocks.</div>';
+                return;
+            }
+            
             stockNews.forEach(news => {
                 const dt = getNewsDate(news);
                 const dateStr = !isNaN(dt) ? dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
                 const timeStr = !isNaN(dt) ? dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
                 const card = document.createElement('div');
                 card.className = 'glass-panel p-6 rounded-2xl mb-4';
+                
                 const seenPortfolioTickers = new Set();
+                
                 let stockRowsHtml = news.affected_stocks.filter(stock => {
                     const tkKey = (stock.ticker || '').toUpperCase();
+                    if (!watchlistTickers.has(tkKey)) return false; // Hide stocks not in watchlist
                     if (seenPortfolioTickers.has(tkKey)) return false;
                     seenPortfolioTickers.add(tkKey);
                     return true;
@@ -1328,9 +1513,7 @@
                     const cp = parseFloat(stock.current_price);
                     const hasP = !isNaN(bp) && bp > 0;
                     const hasC = !isNaN(cp) && cp > 0;
-                    // Use server-computed diff_pct as primary source
-                    const diff = (stock.diff_pct != null) ? stock.diff_pct
-                        : (hasP && hasC ? ((cp - bp) / bp * 100) : null);
+                    const diff = (stock.diff_pct != null) ? stock.diff_pct : (hasP && hasC ? ((cp - bp) / bp * 100) : null);
                     const diffStr = diff !== null ? (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%' : '—';
                     const diffCls = diff === null ? 'text-slate-400' : diff >= 0 ? 'text-green-400' : 'text-red-400';
                     const statusBadge = getStatusBadge(stock.status);
@@ -1361,6 +1544,7 @@
                             </div>
                         </div>`;
                 }).join('');
+                
                 card.innerHTML = `
                     <div class="flex items-center gap-2 text-[9px] text-cyan-400 font-mono mb-3">
                         <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -1576,7 +1760,7 @@
                 const day = nowIST.getDay();
                 const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
                 const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-                setTimeout(() => { fetchIndices(); scheduleIndexPolling(); }, isOpen ? 30000 : 600000);
+                setTimeout(() => { fetchIndices(); updateWatchlistPrices(); scheduleIndexPolling(); }, isOpen ? 30000 : 600000);
             }
 
             // Kick off independent polling loops
@@ -1588,6 +1772,8 @@
             playInitialWelcome();
             checkAuthStatus();
             startSmartPolling();
+            renderWatchlistPanel();
+            updateWatchlistPrices();
         };
 
         // Three.js particle background
