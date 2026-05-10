@@ -1412,11 +1412,13 @@ def _fetch_ohlc_direct(ticker, days=14):
 
 
 def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is_bullish,
-                           ohlc_rows=None):
+                           ohlc_rows=None, start_date=None):
     """
-    Checks chronological daily OHLC data from since_dt up to (not including) today.
+    Checks chronological daily OHLC data starting from start_date (or since_dt if not given).
+    start_date allows after-hours signals to skip the signal day entirely and only
+    check from the NEXT trading session onward — preventing false Stop Loss Hits on
+    the opening gap of the next day.
     Returns (hit_status, diff_percent) or (None, None).
-    Pass ohlc_rows to avoid repeated downloads for the same ticker within a cycle.
     """
     try:
         if ohlc_rows is None:
@@ -1424,14 +1426,19 @@ def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is
         if not ohlc_rows:
             return None, None
 
-        since_utc = since_dt.replace(tzinfo=timezone.utc) if not since_dt.tzinfo else since_dt.astimezone(timezone.utc)
         IST = timezone(timedelta(hours=5, minutes=30))
-        since_date_ist = since_utc.astimezone(IST).date()
         today_ist = datetime.now(IST).date()
+
+        # Use explicitly passed start_date, otherwise fall back to since_dt
+        if start_date is not None:
+            check_from = start_date
+        else:
+            since_utc = since_dt.replace(tzinfo=timezone.utc) if not since_dt.tzinfo else since_dt.astimezone(timezone.utc)
+            check_from = since_utc.astimezone(IST).date()
 
         for (bar_dt, o, h, l, _c) in ohlc_rows:
             bar_date_ist = bar_dt.astimezone(IST).date()
-            if bar_date_ist >= since_date_ist and bar_date_ist <= today_ist:
+            if bar_date_ist >= check_from and bar_date_ist <= today_ist:
                 h_pct = ((h - base_price) / base_price) * 100
                 l_pct = ((l - base_price) / base_price) * 100
                 if is_bullish:
@@ -1511,47 +1518,51 @@ def yfinance_worker():
                     print(f"   [YF] Initialized base_price=current_price={base_price} for {ticker} (ID={_sid_init})")
 
                 # ── KEY RULE: After-hours signals → base_price = NEXT OPEN PRICE ──
+                # This MUST run before the historical hit check below.
+                _IST = timezone(timedelta(hours=5, minutes=30))
+                _hist_start_date = None  # Will be set to next session date for after-hours signals
+
                 if status == 'Active View':
                     try:
-                        _pub_ist = parsedate_to_datetime(created_at_str).astimezone(
-                            timezone(timedelta(hours=5, minutes=30))
-                        ) if '+' in created_at_str or 'GMT' in created_at_str else \
-                        datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(
-                            tzinfo=timezone.utc
-                        ).astimezone(timezone(timedelta(hours=5, minutes=30)))
+                        _pub_ist = parsedate_to_datetime(created_at_str).astimezone(_IST) \
+                            if ('+' in created_at_str or 'GMT' in created_at_str) else \
+                            datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(
+                                tzinfo=timezone.utc).astimezone(_IST)
 
-                        _IST = timezone(timedelta(hours=5, minutes=30))
                         _now_ist = datetime.now(_IST)
                         _last_close = _now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
-
                         _signal_ist_date = _pub_ist.date()
                         _today_ist = _now_ist.date()
-                        
                         _t = _pub_ist.hour * 60 + _pub_ist.minute
                         _news_was_market_hours = (
                             _pub_ist.weekday() < 5 and
                             (9 * 60 + 15) <= _t <= (15 * 60 + 30)
                         )
 
-                        # If news was after hours, lock base_price to next open price
                         if not _news_was_market_hours:
                             if ticker not in _ohlc_cache:
                                 _ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
-                                
+
                             _next_open_price = None
-                            for (bar_dt, o, h, l, c) in _ohlc_cache[ticker]:
+                            _next_session_date = None
+                            for (bar_dt, o, h, l, _bc) in _ohlc_cache[ticker]:
                                 bar_date_ist = bar_dt.astimezone(_IST).date()
-                                if bar_date_ist > _signal_ist_date or (bar_date_ist == _signal_ist_date and _t < 9 * 60 + 15):
+                                if bar_date_ist > _signal_ist_date or (
+                                        bar_date_ist == _signal_ist_date and _t < 9 * 60 + 15):
                                     _next_open_price = o
+                                    _next_session_date = bar_date_ist
                                     break
-                                    
-                            if _next_open_price and _next_open_price > 0 and abs(base_price - _next_open_price) > 0.01:
-                                base_price = _next_open_price
-                                def _update_base(conn, c, _sid=stock_id, _bp=base_price):
-                                    c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_bp, _sid))
-                                db_write(_update_base)
-                                
-                            # Also, if we haven't reached the next session yet, force 0% diff
+
+                            if _next_open_price and _next_open_price > 0:
+                                if abs(base_price - _next_open_price) > 0.01:
+                                    base_price = _next_open_price
+                                    def _update_base(conn, c, _sid=stock_id, _bp=base_price):
+                                        c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_bp, _sid))
+                                    db_write(_update_base)
+                                # Historical check must start from NEXT session, not signal day
+                                _hist_start_date = _next_session_date
+
+                            # If next session hasn't happened yet, keep diff at 0%
                             _is_today_after_close = (_signal_ist_date == _today_ist and _pub_ist >= _last_close)
                             _is_weekend = _now_ist.weekday() >= 5
                             if not market_currently_open and (_is_today_after_close or _is_weekend):
@@ -1570,17 +1581,17 @@ def yfinance_worker():
                     target_pct = 3.0   # Hit if stock moves 3% in predicted direction
                     stop_pct   = 1.5   # Stop loss if stock moves 1.5% against prediction
 
-                    # ── 1. Multi-day catch-up (History from creation up to yesterday) ──
+                    # ── 1. Multi-day catch-up (History from NEXT SESSION for after-hours signals) ──
                     try:
                         created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
                         age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
                         if age_hours >= 12:  # old enough to have "yesterday"
-                            # Fetch OHLC only once per ticker per cycle
                             if ticker not in _ohlc_cache:
                                 _ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
                             hist_status, hist_diff = check_historical_hits(
                                 ticker, created_dt, base_price, target_pct, stop_pct, is_bullish,
-                                ohlc_rows=_ohlc_cache[ticker]
+                                ohlc_rows=_ohlc_cache[ticker],
+                                start_date=_hist_start_date  # None for intraday; next session date for after-hours
                             )
                             if hist_status:
                                 new_status = hist_status
