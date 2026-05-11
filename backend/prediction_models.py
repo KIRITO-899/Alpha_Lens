@@ -549,7 +549,7 @@ class EnsemblePredictor:
 
         agree = sum(1 for s in valid_models if s > 50)
         veto = self.m3.has_veto(tech_data, direction)
-        approved = final >= min_score and agree >= 5 and not veto
+        approved = final >= min_score and agree >= 3 and not veto
 
         s7_str = s7 if s7 is not None else "FAIL"
         total_models = len(valid_models)
