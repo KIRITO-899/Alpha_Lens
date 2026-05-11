@@ -437,51 +437,77 @@ class IndianSentimentModel:
 # ==========================================
 class AILogicModel:
     """
-    Asks the AI: 'Is this stock BULLISH or BEARISH based on this news and technicals?'
-    Maps the AI's view + confidence to a 0-100 score. Carries 50% ensemble weight.
+    Asks the AI to score a potential trade setup 0-100.
+    Carries 50% ensemble weight. Uses Gemini (primary) or SM-Gemini (fallback).
     """
 
+    # SM-Gemini fallback client (hardcoded key for when .env Gemini keys are missing)
+    _sm_client = None
+    _SM_KEY = "sm-gemini-ea08894f35654029a9cada598a23fbd3"
+    _SM_MODEL = "google/gemini-2.5-flash"
+
+    @classmethod
+    def _get_sm_client(cls):
+        if cls._sm_client is None:
+            try:
+                from openai import OpenAI as _OAI
+                cls._sm_client = _OAI(api_key=cls._SM_KEY, base_url="https://api.aimlapi.com/v1")
+            except Exception:
+                pass
+        return cls._sm_client
+
     def score(self, headline, ticker, direction, tech_data, api_client, model_name):
-        if not api_client or not tech_data:
-            return 50
-            
-        from technical_analysis import format_technical_context_for_prompt
-        tech_str = format_technical_context_for_prompt(tech_data)
-        
-        prompt = f"""As an elite quantitative multi-strategy portfolio manager, evaluate this potential setup:
-News Headline: "{headline}"
-Target Ticker: {ticker}
-Direction Bias: {direction}
+        import re, json as _json
 
-Technical & Volatility Context:
-{tech_str}
+        prompt = (
+            f'As a quantitative portfolio manager, evaluate this trade setup.\n'
+            f'News: "{headline}"\n'
+            f'Stock: {ticker} | Direction: {direction}\n'
+            f'Does this news represent a high-probability move of 3%+ before a 1.5% stop?\n'
+            f'Return ONLY valid JSON: {{"score": <0-100>}}'
+        )
 
-Given the news catalyst and the precise technical context (EMA alignment, Volume Profile, Liquidity sweeps, ADX trend strength), does this represent a highly actionable, high-probability trade setup that will move 3% before hitting a 1.5% stop loss?
-Consider if the news is already priced into the technicals.
-Return ONLY a valid JSON object in this format: {{"score": <integer from 0 to 100>}}"""
+        raw_text = None
+
+        # --- PRIMARY: Gemini via google-genai SDK ---
+        if api_client:
+            try:
+                response = api_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+                raw_text = response.text
+            except Exception as e:
+                print(f"   [AILogicModel] Gemini error: {e}")
+
+        # --- FALLBACK: SM-Gemini via OpenAI-compat API ---
+        if raw_text is None:
+            try:
+                sm = self._get_sm_client()
+                if sm:
+                    resp = sm.chat.completions.create(
+                        model=self._SM_MODEL,
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.1,
+                        timeout=20,
+                    )
+                    raw_text = resp.choices[0].message.content
+            except Exception as e:
+                print(f"   [AILogicModel] SM-Gemini error: {e}")
+
+        if raw_text is None:
+            return None
 
         try:
-            response = api_client.models.generate_content(
-                model=model_name,
-                contents=prompt
-            )
-            text = response.text
-            import re, json
-            match = re.search(r'\{.*\}', text, re.DOTALL)
+            match = re.search(r'\{[^{}]*\}', raw_text, re.DOTALL)
             if match:
-                data = json.loads(match.group(0))
-                ai_view = data.get("view", "").upper()
-                confidence = max(10, min(95, int(data.get("confidence", 50))))
-                # If AI agrees with proposed direction → high score
-                # If AI disagrees → invert the score (penalize)
-                if ai_view == direction:
-                    return confidence
-                elif ai_view in ("BULLISH", "BEARISH"):
-                    return 100 - confidence  # Opposite view = inverted score
-            return None
+                data = _json.loads(match.group(0))
+                score = data.get("score")
+                if score is not None:
+                    return max(10, min(95, int(score)))
         except Exception as e:
-            print(f"   [AILogicModel Error] {e}")
-            return None
+            print(f"   [AILogicModel] JSON parse error: {e} | raw={raw_text[:80]}")
+        return None
 
 
 # ==========================================
@@ -525,19 +551,23 @@ class EnsemblePredictor:
         w_ai = self.WEIGHTS['ai_logic']
 
         valid_models = [s2, s3, s4, s6]
-        
+
         if s7 is None:
-            # Rebalance weights if API fails
-            total_remaining = w_hist + w_tech + w_ind + w_sec
+            # AI model unavailable — rebalance weights across remaining models
+            # Keep sector weight at 0 since it's intentionally disabled
+            total_remaining = w_hist + w_tech + w_ind  # 0.50
             if total_remaining > 0:
-                w_hist = w_hist / total_remaining
-                w_tech = w_tech / total_remaining
-                w_ind = w_ind / total_remaining
+                scale = (w_hist + w_tech + w_ind + w_ai) / total_remaining
+                w_hist *= scale
+                w_tech *= scale
+                w_ind  *= scale
             w_ai = 0
             s7_val = 0
+            min_agree = 2  # Only 4 models available — require 2/4 to agree
         else:
             s7_val = s7
             valid_models.append(s7)
+            min_agree = 3  # 5 models available — require 3/5 to agree
 
         final = int(
             s2 * w_hist +
@@ -549,7 +579,7 @@ class EnsemblePredictor:
 
         agree = sum(1 for s in valid_models if s > 50)
         veto = self.m3.has_veto(tech_data, direction)
-        approved = final >= min_score and agree >= 3 and not veto
+        approved = final >= min_score and agree >= min_agree and not veto
 
         s7_str = s7 if s7 is not None else "FAIL"
         total_models = len(valid_models)

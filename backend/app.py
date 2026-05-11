@@ -118,8 +118,13 @@ import performance_report
 OTP_STORE = {}
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
+# Use absolute paths so the server works from any working directory
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+_NEWS_DB  = os.path.join(_APP_DIR, 'news_cache.db')
+_USERS_DB = os.path.join(_APP_DIR, 'users.db')
+
 def init_db():
-    conn = sqlite3.connect('users.db')
+    conn = sqlite3.connect(_USERS_DB)
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -132,7 +137,7 @@ def init_db():
     conn.close()
 
 def connect_news_db():
-    conn = sqlite3.connect('news_cache.db', timeout=30.0,
+    conn = sqlite3.connect(_NEWS_DB, timeout=30.0,
                            check_same_thread=False)
     conn.execute('PRAGMA journal_mode=WAL;')
     conn.execute('PRAGMA synchronous=NORMAL;')  # faster WAL writes
@@ -277,13 +282,9 @@ RSS_SOURCES = [
 RSS_CACHE = {url: {'etag': None, 'modified': None} for url in RSS_SOURCES}
 SEEN_HEADLINES = set()
 
-# ── Dedicated Quant AI Screener Client (sm-gemini key) ──
-SM_GEMINI_KEY = "sm-gemini-ea08894f35654029a9cada598a23fbd3"
-SM_GEMINI_MODEL = "google/gemini-2.5-flash"
-SM_GEMINI_CLIENT = OpenAIClient(
-    api_key=SM_GEMINI_KEY,
-    base_url="https://api.aimlapi.com/v1",
-)
+# NOTE: SM_GEMINI_CLIENT (aimlapi.com) removed — key expired.
+# quant_ai_screener now uses the google-genai 'client' (same as Phase 2)
+# with pure rule-based fallback when no Gemini keys are available.
 
 def scrape_article_text(url):
     """Fetches the actual article body text (first 3 paragraphs) to give AI better context."""
@@ -949,108 +950,93 @@ def ai_news_worker():
         # It returns ONLY articles that are material, with direct stock mappings.
         def quant_ai_screener(articles_batch):
             """
-            Sends a batch of raw headlines to the sm-gemini AI model.
-            The AI acts as a senior quant researcher:
-              - Filters out non-material/noise headlines (earnings fluff, general macro not affecting stocks).
-              - Maps each remaining headline to affected NSE tickers.
-              - Assigns a forward-looking direction bias per ticker.
+            Screens a batch of headlines for material stock-level impacts.
+            Primary: google-genai Gemini SDK (uses same rotating API keys as Phase 2).
+            Fallback: Pure rule-based keyword + macro map (works with zero API keys).
             Returns list of: {headline, time, url, ticker, direction}
             """
             if not articles_batch:
                 return []
-            
-            numbered = "\n".join(
-                [f"{i+1}. {a['headline']}" for i, a in enumerate(articles_batch)]
-            )
-            
-            prompt = f"""You are a senior quantitative researcher at a top Indian hedge fund. Your task is to screen a batch of news headlines and identify ONLY those that will cause a material, tradeable price movement of 2%+ in specific NSE-listed stocks within 1-5 trading sessions.
 
-Headlines to screen:
+            # ── Try AI screening first (only if Gemini client is available) ──
+            if client:
+                numbered = "\n".join(
+                    [f"{i+1}. {a['headline']}" for i, a in enumerate(articles_batch)]
+                )
+                prompt = f"""You are a senior quantitative researcher at a top Indian hedge fund.
+Screen these headlines and return ONLY those that will cause a material, tradeable price move
+of 2%+ in specific NSE-listed stocks within 1-5 trading sessions.
+
+Headlines:
 {numbered}
 
 For EACH material headline, identify:
-1. The precise NSE tickers directly or indirectly affected (append .NS suffix, e.g. RELIANCE.NS).
-2. The forward-looking directional bias per ticker: BULLISH or BEARISH.
-3. The first-order and second-order reasoning (supply chain disruption, earnings beat, regulatory action, capex trigger, etc.).
+1. Precise NSE tickers affected (append .NS suffix, e.g. RELIANCE.NS, max 3 per headline)
+2. Forward-looking direction: BULLISH or BEARISH
 
-CRITICAL SCREENING RULES:
-- IGNORE: Generic macro commentary without a clear stock-level catalyst.
-- IGNORE: Analyst opinions that merely restate price targets without new fundamental information.
-- IGNORE: Scheduled events that are already fully priced in (e.g., regular FII/DII data).
-- INCLUDE: Earnings beats/misses, M&A, regulatory changes, order wins/cancellations, management changes, supply disruptions, macro shifts (RBI rate, Budget, INR moves) that have clear sector exposure.
+IGNORE: Generic market commentary, analyst opinions restating known targets, scheduled FII data.
+INCLUDE: Earnings beats/misses, M&A, regulatory changes, order wins, management changes, RBI/Budget moves.
 
-Return ONLY valid JSON. Format:
+Return ONLY valid JSON array:
 [
-  {{
-    "index": 1,
-    "material": true,
-    "impacts": [
-      {{"ticker": "RELIANCE.NS", "direction": "BULLISH", "reason": "One-line quant rationale"}}
-    ]
-  }}
+  {{"index": 1, "material": true, "impacts": [{{"ticker": "RELIANCE.NS", "direction": "BULLISH"}}]}},
+  {{"index": 2, "material": false, "impacts": []}}
 ]
-
-If a headline is not material, return: {{"index": N, "material": false, "impacts": []}}
 Return the full array covering all {len(articles_batch)} headlines."""
 
-            try:
-                resp = SM_GEMINI_CLIENT.chat.completions.create(
-                    model=SM_GEMINI_MODEL,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.1,
-                    response_format={"type": "json_object"} if False else None,
-                    timeout=30,
-                )
-                raw = resp.choices[0].message.content
-                # Strip markdown code fences
-                import re as _re, json as _json
-                raw = raw.strip()
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
-                # Handle both list and wrapped-in-object response
-                parsed = _json.loads(raw.strip())
-                if isinstance(parsed, dict):
-                    # e.g. {"results": [...]}
-                    for v in parsed.values():
-                        if isinstance(v, list):
-                            parsed = v
-                            break
-                
-                results = []
-                for item in parsed:
-                    if not item.get("material", False):
-                        continue
-                    idx = item.get("index", 0) - 1
-                    if 0 <= idx < len(articles_batch):
-                        article = articles_batch[idx]
-                        for impact in item.get("impacts", []):
-                            ticker = impact.get("ticker", "").upper().strip()
-                            direction = impact.get("direction", "").upper().strip()
-                            if ticker and direction in ("BULLISH", "BEARISH"):
-                                if not ticker.endswith(".NS") and not ticker.endswith(".BO"):
-                                    ticker += ".NS"
-                                results.append({
-                                    "headline": article["headline"],
-                                    "time": article["time"],
-                                    "url": article.get("url"),
-                                    "ticker": ticker,
-                                    "direction": direction,
-                                })
-                print(f"   [AI Screener] {len(results)} ticker-signals from {len(articles_batch)} headlines")
-                return results
-            except Exception as e:
-                print(f"   [AI Screener Error] {e} — falling back to keyword filter")
-                # Fallback: use keyword filter + get_candidate_stocks
-                fallback = []
-                for a in articles_batch:
-                    if is_finance_relevant(a['headline']):
-                        for ticker, direction in _fallback_get_candidate_stocks(a['headline']):
-                            fallback.append({
-                                "headline": a["headline"], "time": a["time"],
-                                "url": a.get("url"), "ticker": ticker, "direction": direction
-                            })
-                return fallback
-        
+                try:
+                    import re as _re, json as _json
+                    resp = client.models.generate_content(
+                        model=MODEL_NAME,
+                        contents=prompt,
+                    )
+                    raw = resp.text.strip()
+                    if raw.startswith("```"):
+                        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
+                    parsed = _json.loads(raw.strip())
+                    if isinstance(parsed, dict):
+                        for v in parsed.values():
+                            if isinstance(v, list):
+                                parsed = v
+                                break
+
+                    results = []
+                    for item in parsed:
+                        if not item.get("material", False):
+                            continue
+                        idx = item.get("index", 0) - 1
+                        if 0 <= idx < len(articles_batch):
+                            article = articles_batch[idx]
+                            for impact in item.get("impacts", []):
+                                ticker = impact.get("ticker", "").upper().strip()
+                                direction = impact.get("direction", "").upper().strip()
+                                if ticker and direction in ("BULLISH", "BEARISH"):
+                                    if not ticker.endswith(".NS") and not ticker.endswith(".BO"):
+                                        ticker += ".NS"
+                                    results.append({
+                                        "headline": article["headline"],
+                                        "time": article["time"],
+                                        "url": article.get("url"),
+                                        "ticker": ticker,
+                                        "direction": direction,
+                                    })
+                    print(f"   [AI Screener] {len(results)} ticker-signals from {len(articles_batch)} headlines")
+                    return results
+                except Exception as e:
+                    print(f"   [AI Screener Error] {e} -- falling back to rule-based")
+
+            # ── Pure rule-based fallback (no API key needed) ──
+            print("   [Screener] Using rule-based keyword + macro map (no API key)")
+            fallback = []
+            for a in articles_batch:
+                if is_finance_relevant(a['headline']):
+                    for ticker, direction in _fallback_get_candidate_stocks(a['headline']):
+                        fallback.append({
+                            "headline": a["headline"], "time": a["time"],
+                            "url": a.get("url"), "ticker": ticker, "direction": direction
+                        })
+            return fallback
+
         # Process in batches of 25 headlines per AI call
         BATCH_SIZE = 25
         screened_signals = []
@@ -1878,15 +1864,31 @@ def get_indices():
     return jsonify(result)
 
 
+@app.route('/api/debug/signals/<int:news_id>', methods=['GET'])
+def debug_signals(news_id):
+    try:
+        conn = connect_news_db()
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("SELECT ticker, impact, status, confidence_score FROM stock_impact WHERE news_id = ?", (news_id,))
+        rows = [dict(r) for r in c.fetchall()]
+        c.execute("SELECT id, headline, created_at FROM news WHERE id = ?", (news_id,))
+        news_row = c.fetchone()
+        conn.close()
+        return jsonify({"news": dict(news_row) if news_row else None, "signals": rows, "count": len(rows), "db": _NEWS_DB})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route('/api/news/top', methods=['GET'])
 def get_top_news():
     try:
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+        c2 = conn.cursor()  # separate cursor for inner queries
         c.execute("SELECT * FROM news ORDER BY created_at DESC LIMIT 1")
         news_row = c.fetchone()
-        
+
         if not news_row:
             conn.close()
             return jsonify({"market_open": is_market_open(), "news": [{
@@ -1896,15 +1898,15 @@ def get_top_news():
                 "macro_pathway": ["Scrape", "Filter", "Analyze", "Deploy"],
                 "affected_stocks": []
             }]})
-        
+
         news_item = dict(news_row)
         try:
             news_item['macro_pathway'] = json.loads(news_item['macro_pathway'])
         except:
             news_item['macro_pathway'] = []
-            
-        c.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
-        raw_stocks = [dict(s) for s in c.fetchall()]
+
+        c2.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
+        raw_stocks = [dict(s) for s in c2.fetchall()]
         # Deduplicate by ticker — keep highest confidence score for each ticker
         seen_tickers = {}
         for s in raw_stocks:
@@ -1925,7 +1927,8 @@ def get_top_news():
                 s['diff_pct'] = None
         news_item['affected_stocks'] = stocks
         conn.close()
-        return jsonify({"market_open": is_market_open(), "news": [news_item]})
+        return jsonify({"market_open": is_market_open(), "news": [news_item], "_debug_db": _NEWS_DB, "_debug_sig_count": len(raw_stocks)})
+
     except Exception as e:
         print("Error fetching top news", e)
         return jsonify({"market_open": is_market_open(), "news": []})
@@ -1935,12 +1938,13 @@ def get_all_news():
     try:
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
-        c = conn.cursor()
+        c  = conn.cursor()
+        c2 = conn.cursor()  # separate cursor for inner stock_impact queries
         # Only return news from the last 7 days (by DB insertion time, not RSS publish date)
         seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
         c.execute("SELECT * FROM news WHERE created_at >= ? ORDER BY created_at DESC", (seven_days_ago,))
         news_rows = c.fetchall()
-        
+
         all_news = []
         for row in news_rows:
             news_item = dict(row)
@@ -1948,8 +1952,9 @@ def get_all_news():
                 news_item['macro_pathway'] = json.loads(news_item['macro_pathway'])
             except:
                 news_item['macro_pathway'] = []
-            c.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
-            raw_stocks = [dict(s) for s in c.fetchall()]
+            # Use c2 so we don't clobber the outer result set in c
+            c2.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
+            raw_stocks = [dict(s) for s in c2.fetchall()]
             # Deduplicate by ticker — keep highest confidence score
             seen_tickers = {}
             for s in raw_stocks:
@@ -1958,17 +1963,17 @@ def get_all_news():
                     seen_tickers[t] = s
             stocks = list(seen_tickers.values())
             for s in stocks:
-                bp     = s.get('base_price') or 0
-                cp     = s.get('current_price') or 0
+                bp = s.get('base_price') or 0
+                cp = s.get('current_price') or 0
                 if bp > 0 and cp > 0:
                     s['diff_pct'] = round((cp - bp) / bp * 100, 2)
                 else:
                     s['diff_pct'] = None
             news_item['affected_stocks'] = stocks
             all_news.append(news_item)
-            
+
         conn.close()
-        
+
         mkt_open = is_market_open()
         return jsonify({"market_open": mkt_open, "news": all_news})
     except Exception as e:
@@ -2020,7 +2025,7 @@ def verify_otp():
     del OTP_STORE[email]
 
     try:
-        conn = sqlite3.connect('users.db')
+        conn = sqlite3.connect(_USERS_DB)
         c = conn.cursor()
         c.execute("SELECT email FROM users WHERE email = ?", (email,))
         user = c.fetchone()
@@ -2045,7 +2050,7 @@ def oauth_signin():
         return jsonify({"error": "Account ID required"}), 400
 
     try:
-        conn = sqlite3.connect('users.db')
+        conn = sqlite3.connect(_USERS_DB)
         c = conn.cursor()
         c.execute("SELECT email FROM users WHERE email = ?", (account_id,))
         user = c.fetchone()
