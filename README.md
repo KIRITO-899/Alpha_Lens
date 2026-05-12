@@ -146,32 +146,23 @@ This dual-gate approach ensures that only high-conviction, multi-perspective sig
 
 ```
 Alpha_Lens/
-├── app.py                    # Main Flask server — routes, AI news engine, yfinance worker
-├── prediction_models.py      # Multi-model ensemble engine (v4.0) — 5 independent models
-├── backtest.py               # Historical backtesting engine — replays news vs. candle data
-├── backfill_stocks.py        # Backfill utility — reprocesses existing DB headlines via ensemble
-├── technical_analysis.py     # RSI, SMA, Bollinger Bands, volume analysis, market regime
-├── performance_report.py     # Terminal-based performance reporting and win-rate analysis
-├── research.py               # Quick-analysis utility for targeted headline evaluation
-├── database.py               # User auth module — OTP, OAuth, SQLite session management
-├── view_users.py             # Admin utility to inspect registered users
-├── 1.py                      # Legacy/prototype version of the app (earlier iteration)
-├── index.html                # Main frontend dashboard (Alpha Lens | Next-Gen Macro AI)
-├── index-2.html              # Alternate/experimental frontend layout
-├── news_dataset.csv          # Historical headlines dataset for backtesting
-├── news_cache.db             # SQLite DB for cached news and AI analysis results
-├── users.db                  # SQLite DB for user accounts and sessions
-├── verification_log.json     # Log of OTP verifications
-├── backtest_results.txt      # Backtesting output results
-├── temp_report.txt           # Temporary performance report output
-├── status.txt                # Application status log
-├── test_genai.py             # Gemini API integration test (new SDK)
-├── test_old_genai.py         # Gemini API integration test (legacy SDK)
+├── backend/                  # Backend application files
+│   ├── app.py                # Main Flask server — routes, AI news engine, yfinance worker
+│   ├── prediction_models.py  # Multi-model ensemble engine (v4.0) — 5 independent models
+│   ├── backtest.py           # Historical backtesting engine — replays news vs. candle data
+│   ├── backfill_stocks.py    # Backfill utility — reprocesses existing DB headlines via ensemble
+│   ├── technical_analysis.py # RSI, SMA, Bollinger Bands, volume analysis, market regime
+│   ├── performance_report.py # Terminal-based performance reporting and win-rate analysis
+│   ├── database.py           # User auth module — OTP, OAuth, SQLite session management
+│   ├── news_cache.db         # SQLite DB for cached news and AI analysis results
+│   ├── users.db              # SQLite DB for user accounts and sessions
+│   └── venv/                 # Python virtual environment
+├── frontend/                 # Frontend application files
+│   └── index.html            # Main frontend dashboard (Alpha Lens | Next-Gen Macro AI)
 ├── scratch/                  # Development & debugging utilities
-│   ├── debug_mapping.py      # Debug utility for ticker/sector mapping
-│   ├── fix_base_prices.py    # Fixes historical base prices for stock impacts
-│   └── test_api.py           # API endpoint testing utility
-└── .gitignore                # Ignored files (DBs, cache, logs, venv)
+├── .env                      # Environment variables (API keys)
+├── .gitignore                # Ignored files (DBs, cache, logs, venv)
+└── README.md                 # Project documentation
 ```
 
 ---

@@ -29,7 +29,7 @@ from openai import OpenAI as OpenAIClient
 import angelone_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
-yf.set_tz_cache_location("venv/yf_cache")  # no-op in Angel One shim
+yf.set_tz_cache_location("yf_cache")  # no-op in Angel One shim
 
 # Global write lock — ensures only one thread writes to SQLite at a time.
 # Reads do NOT need this lock (WAL mode allows concurrent reads).
@@ -1471,11 +1471,11 @@ Return ONLY valid JSON matching this shape:
                     return results
                 except Exception as e:
                     print(f"   [AI Screener Error] {e} -- no keyword fallback used")
-                    return []
+                    return [_no_impact_row(article, 0, "AI_ERROR") for article in articles_batch]
 
             # AI-only stock selection: do not create keyword-based stock signals.
             print("   [AI Screener] Gemini client unavailable; no keyword stock mapping used")
-            return []
+            return [_no_impact_row(article, 0, "AI_UNAVAILABLE") for article in articles_batch]
 
         # Process in batches of 25 headlines per AI call
         BATCH_SIZE = 25
