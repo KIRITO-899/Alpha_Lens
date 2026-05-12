@@ -1519,8 +1519,24 @@
                 return name && name.length > 2 && q.includes(name);
             });
             const portfolioTerms = ['portfolio', 'holding', 'watchlist', 'news', 'impact', 'risk', 'view', 'bullish', 'bearish', 'move'];
+            const qTokens = new Set((q.match(/[a-z]{4,}/g) || []).filter(tok => ![
+                'what', 'when', 'where', 'which', 'about', 'from', 'that', 'this',
+                'will', 'with', 'have', 'does', 'there', 'their', 'your', 'explain',
+            ].includes(tok)));
 
-            if (mentionedPortfolioSymbols.length === 0 && !mentionsAddedName && !portfolioTerms.some(term => q.includes(term))) {
+            const hasSavedHeadlineMatch = (news) => {
+                const text = `${news.headline || ''} ${news.aam_janta_translation || ''}`.toLowerCase();
+                let matches = 0;
+                qTokens.forEach(tok => { if (text.includes(tok)) matches += 1; });
+                return matches >= 2;
+            };
+
+            if (
+                mentionedPortfolioSymbols.length === 0 &&
+                !mentionsAddedName &&
+                !portfolioTerms.some(term => q.includes(term)) &&
+                !globalNewsData.some(hasSavedHeadlineMatch)
+            ) {
                 return [];
             }
 
@@ -1530,7 +1546,7 @@
                     const symbol = tickerSymbol(stock.ticker);
                     if (!watchlistSymbols.has(symbol)) return false;
                     if (mentionedPortfolioSymbols.length > 0) return mentionedPortfolioSymbols.includes(symbol);
-                    return true;
+                    return portfolioTerms.some(term => q.includes(term)) || mentionsAddedName || hasSavedHeadlineMatch(news);
                 });
             }).slice(0, 5);
         }
@@ -1553,9 +1569,11 @@
                 });
             });
             const stockLabel = [...symbolsInAnswer].join(', ') || 'the selected portfolio stock';
+            const primary = relatedNews[0] || {};
+            const explanation = primary.aam_janta_translation || `This saved item is linked to ${stockLabel}.`;
 
             return `**Answer**
-Based only on saved portfolio news, I cannot project a full one-year view with fresh external data. The saved ${stockLabel}-related signals below show the current news-driven view.
+${explanation}
 
 **Portfolio Impact**
 ${rows.slice(0, 4).join('\n')}

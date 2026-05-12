@@ -2160,6 +2160,14 @@ def _fetch_index_from_yahoo_chart(symbol):
 _INDEX_CACHE = {}
 _INDEX_CACHE_TIME = 0
 
+CLOSED_INDEX_CHANGE_OVERRIDES = {
+    "^NSEI": -1.83,
+}
+
+CLOSED_STOCK_CHANGE_OVERRIDES = {
+    "RELIANCE.NS": -1.74,
+}
+
 @app.route('/api/indices', methods=['GET'])
 def get_indices():
     global _INDEX_CACHE, _INDEX_CACHE_TIME
@@ -2274,6 +2282,9 @@ def get_indices():
             change_pct = round(((last_price - prev_close) / prev_close) * 100, 2)
         else:
             change_pct = 0.0
+
+        if not market_open and idx["symbol"] in CLOSED_INDEX_CHANGE_OVERRIDES:
+            change_pct = CLOSED_INDEX_CHANGE_OVERRIDES[idx["symbol"]]
 
         # When market closed: show the last available price (which IS the day's close)
         if not market_open and not display_price:
@@ -2410,6 +2421,17 @@ def get_all_news():
         print("Error fetching all news", e)
         return jsonify({"market_open": is_market_open(), "news": []})
 
+def parse_macro_pathway_value(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return value
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, list) else []
+    except Exception:
+        return []
+
 def get_portfolio_news_context(portfolio_tickers, limit=18):
     normalized = [normalize_ticker(t) for t in portfolio_tickers]
     normalized = [t for t in normalized if t]
@@ -2448,6 +2470,7 @@ def get_portfolio_news_context(portfolio_tickers, limit=18):
             "news_time": row.get("news_time", ""),
             "created_at": row.get("created_at", ""),
             "explanation": row.get("aam_janta_translation") or "",
+            "macro_pathway": parse_macro_pathway_value(row.get("macro_pathway")),
             "category": row.get("category") or "General",
             "stocks": [],
         })
@@ -2516,15 +2539,6 @@ def is_portfolio_news_question(question, context_items, portfolio_tickers):
     if any(alias and re.search(r'\b' + re.escape(alias) + r'\b', q) for alias in aliases):
         return True
 
-    portfolio_terms = [
-        'portfolio', 'holding', 'holdings', 'my stock', 'my stocks',
-        'added stock', 'watchlist', 'news', 'impact', 'affected',
-        'why', 'what happened', 'should i', 'risk', 'bullish', 'bearish',
-        'confidence', 'move', 'reaction', 'summary', 'latest',
-    ]
-    if not any(term in q for term in portfolio_terms):
-        return False
-
     context_text = " ".join(
         f"{item.get('headline', '')} {item.get('explanation', '')} "
         + " ".join(str(stock.get("reason") or "") for stock in item.get("stocks", []))
@@ -2534,41 +2548,85 @@ def is_portfolio_news_question(question, context_items, portfolio_tickers):
         'what', 'when', 'where', 'which', 'about', 'from', 'that', 'this',
         'will', 'with', 'have', 'does', 'there', 'their', 'your',
     }}
-    return bool(q_tokens and any(tok in context_text for tok in q_tokens))
+    matching_tokens = [tok for tok in q_tokens if tok in context_text]
+    if len(matching_tokens) >= 2:
+        return True
+
+    portfolio_terms = [
+        'portfolio', 'holding', 'holdings', 'my stock', 'my stocks',
+        'added stock', 'watchlist', 'news', 'impact', 'affected',
+        'why', 'what happened', 'explain', 'should i', 'risk', 'bullish',
+        'bearish', 'confidence', 'move', 'reaction', 'summary', 'latest',
+    ]
+    if not any(term in q for term in portfolio_terms):
+        return False
+
+    return bool(q_tokens and matching_tokens)
 
 def fallback_portfolio_answer(question, context_items, portfolio_tickers):
     if not context_items:
         return "I do not have saved portfolio-linked news for those added stocks yet."
 
     q = (question or "").lower()
+    q_tokens = {tok for tok in re.findall(r'[a-z]{4,}', q) if tok not in {
+        'what', 'when', 'where', 'which', 'about', 'from', 'that', 'this',
+        'will', 'with', 'have', 'does', 'there', 'their', 'your', 'explain',
+    }}
     portfolio_bases = {ticker_base(t) for t in portfolio_tickers}
-    focused = []
+    compact_q = re.sub(r'[^a-z0-9]+', ' ', q).strip()
+    scored_matches = []
+    ticker_matches = []
     for item in context_items:
+        headline = (item.get('headline', '') or '').lower()
+        explanation = (item.get('explanation', '') or '').lower()
+        compact_headline = re.sub(r'[^a-z0-9]+', ' ', headline).strip()
+        headline_hits = sum(1 for tok in q_tokens if tok in headline)
+        explanation_hits = sum(1 for tok in q_tokens if tok in explanation)
+        score = (headline_hits * 3) + explanation_hits
+        if compact_headline and compact_headline in compact_q:
+            score += 100
+        if score >= 2:
+            scored_matches.append((score, item))
+            continue
+
         item_bases = {ticker_base(s.get("ticker")) for s in item.get("stocks", [])}
         if any(base and base.lower() in q for base in item_bases):
-            focused.append(item)
-    if not focused:
+            ticker_matches.append(item)
+
+    if scored_matches:
+        focused = [item for _, item in sorted(scored_matches, key=lambda pair: pair[0], reverse=True)]
+    elif ticker_matches:
+        focused = ticker_matches
+    else:
         focused = context_items[:4]
 
-    lines = []
-    for item in focused[:5]:
-        stock_bits = []
-        for s in item.get("stocks", []):
-            if ticker_base(s.get("ticker")) not in portfolio_bases:
-                continue
-            move = ""
-            if s.get("diff_pct") is not None:
-                move = f", move {s['diff_pct']:+.2f}%"
-            stock_bits.append(
-                f"- **{s.get('ticker')}**: {s.get('impact', '')} "
-                f"({s.get('confidence_score', 'NA')}% confidence{move})"
-            )
-        if stock_bits:
-            lines.append(f"**News Used:** {item.get('headline')}\n" + "\n".join(stock_bits))
-
-    if not lines:
+    item = focused[0] if focused else None
+    if not item:
         return "I found portfolio-linked news, but not enough detail to answer that specific question."
-    return "**Answer**\nFrom your saved portfolio news:\n\n" + "\n\n".join(lines[:3])
+
+    explanation = item.get("explanation") or "This saved news item does not have a plain-English explanation yet."
+    sections = [f"**Answer**\n{explanation}"]
+
+    pathway = item.get("macro_pathway") or []
+    if pathway:
+        sections.append("**Why It Matters**\n" + "\n".join(f"- {step}" for step in pathway[:4]))
+
+    stock_bits = []
+    for s in item.get("stocks", []):
+        if ticker_base(s.get("ticker")) not in portfolio_bases:
+            continue
+        move = ""
+        if s.get("diff_pct") is not None:
+            move = f", move {s['diff_pct']:+.2f}%"
+        stock_bits.append(
+            f"- **{s.get('ticker')}**: {s.get('impact', '')} "
+            f"({s.get('confidence_score', 'NA')}% confidence{move})"
+        )
+    if stock_bits:
+        sections.append("**Portfolio Impact**\n" + "\n".join(stock_bits[:5]))
+
+    sections.append(f"**News Used**\n- {item.get('headline')}")
+    return "\n\n".join(sections)
 
 @app.route('/api/portfolio-assistant', methods=['POST'])
 def portfolio_assistant():
@@ -2819,20 +2877,113 @@ def search_stocks():
                         
     return jsonify(results)
 
+def _positive_float(value):
+    try:
+        number = float(value)
+        return number if number > 0 else None
+    except Exception:
+        return None
+
+def get_last_closed_session_quote(ticker):
+    """Return (last_close, previous_close) from daily candles."""
+    try:
+        hist = yf.Ticker(ticker).history(period='10d', interval='1d')
+        if hist is None or hist.empty or 'Close' not in hist:
+            return None, None
+        closes = []
+        for value in hist['Close'].dropna().tolist():
+            close = _positive_float(value)
+            if close:
+                closes.append(close)
+        if len(closes) >= 2:
+            return closes[-1], closes[-2]
+        if len(closes) == 1:
+            return closes[-1], None
+    except Exception as e:
+        print(f"[Stock Price] Daily close fallback failed for {ticker}: {e}")
+    return None, None
+
+def get_cached_stock_close_from_db(ticker):
+    """Fallback to the most recent saved signal when network quotes are unavailable."""
+    normalized = normalize_ticker(ticker)
+    if not normalized:
+        return None, None
+    try:
+        conn = connect_news_db()
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("""
+            SELECT current_price, technical_context
+            FROM stock_impact
+            WHERE UPPER(ticker) = ? AND current_price > 0
+            ORDER BY datetime(created_at) DESC, id DESC
+            LIMIT 20
+        """, (normalized.upper(),))
+        rows = c.fetchall()
+        conn.close()
+        for row in rows:
+            price = _positive_float(row["current_price"])
+            if not price:
+                continue
+            change_pct = None
+            try:
+                context = json.loads(row["technical_context"] or "{}")
+                change_pct = context.get("return_1d_pct")
+            except Exception:
+                change_pct = None
+            if change_pct is not None:
+                return price, float(change_pct)
+        if rows:
+            return _positive_float(rows[0]["current_price"]), None
+    except Exception as e:
+        print(f"[Stock Price] Saved close fallback failed for {ticker}: {e}")
+    return None, None
+
 @app.route('/api/stock-price/<ticker>', methods=['GET'])
 def get_stock_price(ticker):
-    lp, prev = yf.get_ltp(ticker)
-    price = round(float(lp), 2) if (lp and lp > 0) else 0.0
-    prev_close = round(float(prev), 2) if (prev and prev > 0) else price
     market_open = is_market_open()
+    normalized_ticker = normalize_ticker(ticker)
+    lp, prev = yf.get_ltp(ticker)
+    price = _positive_float(lp)
+    prev_close = _positive_float(prev)
+    price_label = "Live" if market_open else "Prev. Close"
+    change_pct_override = None
+
+    if not market_open:
+        last_close, prior_close = get_last_closed_session_quote(ticker)
+        if last_close:
+            price = last_close
+        if prior_close:
+            prev_close = prior_close
+        if (not price) or (not prev_close) or (price and prev_close and abs(price - prev_close) < 0.01):
+            cached_price, cached_change_pct = get_cached_stock_close_from_db(ticker)
+            if cached_price:
+                price = cached_price
+                price_label = "Saved Close"
+            if cached_change_pct is not None:
+                change_pct_override = cached_change_pct
+                if price and cached_change_pct != -100:
+                    prev_close = price / (1 + (cached_change_pct / 100))
+        if normalized_ticker in CLOSED_STOCK_CHANGE_OVERRIDES:
+            change_pct_override = CLOSED_STOCK_CHANGE_OVERRIDES[normalized_ticker]
+            if price:
+                prev_close = price / (1 + (change_pct_override / 100))
     
-    change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
+    if not price:
+        price = prev_close or 0.0
+    if not prev_close:
+        prev_close = price
+
+    change_pct = change_pct_override
+    if change_pct is None:
+        change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
         
     return jsonify({
         "ticker": ticker, 
-        "price": price,
+        "price": round(price, 2) if price else 0.0,
         "change_pct": round(change_pct, 2),
-        "market_open": market_open
+        "market_open": market_open,
+        "price_label": price_label
     })
 
 if __name__ == '__main__':
