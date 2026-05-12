@@ -625,6 +625,32 @@
                                 <div class="text-center py-6 text-slate-500 text-sm">Your watchlist is empty.<br>Search and add stocks above.</div>
                             </div>
                         </div>
+
+                        <div class="glass-panel p-6 rounded-3xl relative overflow-hidden">
+                            <div class="flex items-center justify-between mb-4">
+                                <h2 class="text-xl font-display font-black text-white">Portfolio Assistant</h2>
+                                <div class="w-8 h-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-300">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 4v-4z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                            <div id="portfolio-assistant-messages" class="h-64 overflow-y-auto space-y-3 pr-1 mb-4">
+                                <div data-empty-assistant="true" class="text-sm text-slate-400 bg-black/30 border border-white/10 rounded-xl p-3">
+                                    Ask about an added stock or the news affecting it.
+                                </div>
+                            </div>
+                            <form id="portfolio-assistant-form" onsubmit="askPortfolioAssistant(event)" class="flex items-center gap-2">
+                                <input id="portfolio-assistant-input" type="text" autocomplete="off" placeholder="Ask about portfolio news..."
+                                    class="min-w-0 flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors placeholder-slate-500">
+                                <button id="portfolio-assistant-send" type="submit"
+                                    class="w-10 h-10 shrink-0 rounded-xl bg-cyan-500/15 border border-cyan-400/30 text-cyan-200 hover:bg-cyan-500/25 transition flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M13 6l6 6-6 6"></path>
+                                    </svg>
+                                </button>
+                            </form>
+                        </div>
                     </div>
 
                     <!-- RIGHT COLUMN: FILTERED NEWS -->
@@ -1108,6 +1134,7 @@
                 renderArchiveView();
                 renderMajorStocksView();
                 renderPortfolioView();
+                updatePortfolioAssistantState();
             } catch (error) { console.error("Failed to fetch news:", error); }
         }
 
@@ -1333,11 +1360,27 @@
         let watchlist = JSON.parse(localStorage.getItem('alpha_lens_watchlist') || '[]');
         let watchlistPrices = {};
         let searchTimeout = null;
+        let portfolioAssistantBusy = false;
+
+        function tickerSymbol(ticker) {
+            return (ticker || '').toUpperCase().replace(/\.(NS|BO)$/i, '').trim();
+        }
+
+        function escapeHtml(value) {
+            return String(value || '').replace(/[&<>"']/g, (ch) => ({
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#39;'
+            }[ch]));
+        }
 
         function saveWatchlist() {
             localStorage.setItem('alpha_lens_watchlist', JSON.stringify(watchlist));
             renderWatchlistPanel();
             renderPortfolioView();
+            updatePortfolioAssistantState();
         }
 
         async function handleStockSearch(e) {
@@ -1361,7 +1404,7 @@
                         dropdown.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">No stocks found</div>';
                     } else {
                         results.forEach(stock => {
-                            const isAdded = watchlist.some(s => s.ticker === stock.ticker);
+                            const isAdded = watchlist.some(s => tickerSymbol(s.ticker) === tickerSymbol(stock.ticker));
                             const div = document.createElement('div');
                             div.className = `px-4 py-3 hover:bg-white/10 cursor-pointer flex justify-between items-center border-b border-white/5 last:border-0 ${isAdded ? 'opacity-50' : ''}`;
                             div.innerHTML = `
@@ -1396,7 +1439,7 @@
         });
 
         function addStockToWatchlist(ticker, name) {
-            if (!watchlist.some(s => s.ticker === ticker)) {
+            if (!watchlist.some(s => tickerSymbol(s.ticker) === tickerSymbol(ticker))) {
                 watchlist.push({ ticker, name });
                 saveWatchlist();
                 updateWatchlistPrices();
@@ -1467,6 +1510,68 @@
             });
         }
 
+        function addPortfolioAssistantMessage(role, text) {
+            const container = document.getElementById('portfolio-assistant-messages');
+            if (!container) return;
+
+            const emptyState = container.querySelector('[data-empty-assistant]');
+            if (emptyState) emptyState.remove();
+
+            const msg = document.createElement('div');
+            const isUser = role === 'user';
+            msg.className = `text-sm rounded-xl p-3 border leading-relaxed ${isUser
+                ? 'ml-8 bg-cyan-500/10 border-cyan-400/20 text-cyan-50'
+                : 'mr-8 bg-black/30 border-white/10 text-slate-300'}`;
+            msg.innerHTML = `<div class="text-[9px] uppercase tracking-widest font-bold mb-1 ${isUser ? 'text-cyan-300' : 'text-slate-500'}">${isUser ? 'You' : 'Assistant'}</div>
+                <div class="whitespace-pre-wrap">${escapeHtml(text)}</div>`;
+            container.appendChild(msg);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function updatePortfolioAssistantState() {
+            const sendBtn = document.getElementById('portfolio-assistant-send');
+            const input = document.getElementById('portfolio-assistant-input');
+            if (!sendBtn || !input) return;
+            const disabled = portfolioAssistantBusy || watchlist.length === 0;
+            sendBtn.disabled = disabled;
+            input.disabled = portfolioAssistantBusy;
+            input.placeholder = watchlist.length === 0 ? 'Add portfolio stocks first' : 'Ask about portfolio news...';
+        }
+
+        async function askPortfolioAssistant(event) {
+            event.preventDefault();
+            if (portfolioAssistantBusy || watchlist.length === 0) return;
+
+            const input = document.getElementById('portfolio-assistant-input');
+            const question = (input?.value || '').trim();
+            if (!question) return;
+
+            input.value = '';
+            addPortfolioAssistantMessage('user', question);
+            portfolioAssistantBusy = true;
+            updatePortfolioAssistantState();
+
+            try {
+                const res = await fetch('/api/portfolio-assistant', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question,
+                        tickers: watchlist.map(stock => stock.ticker)
+                    })
+                });
+                const data = await res.json();
+                addPortfolioAssistantMessage('assistant', data.answer || 'I could not answer that from your portfolio news.');
+            } catch (err) {
+                console.error('Portfolio assistant failed', err);
+                addPortfolioAssistantMessage('assistant', 'I could not reach the portfolio news assistant right now.');
+            } finally {
+                portfolioAssistantBusy = false;
+                updatePortfolioAssistantState();
+                input?.focus();
+            }
+        }
+
         function renderPortfolioView() {
             const container = document.getElementById('portfolio-news-list');
             if (!container) return;
@@ -1479,7 +1584,7 @@
                 return;
             }
 
-            const watchlistTickers = new Set(watchlist.map(s => s.ticker));
+            const watchlistSymbols = new Set(watchlist.map(s => tickerSymbol(s.ticker)));
 
             // Only show news that HAS stock impacts matching our watchlist (filtered by DB insertion time)
             const sevenDaysAgo = Date.now() - (168 * 60 * 60 * 1000);
@@ -1489,8 +1594,8 @@
                 
                 // Keep news if AT LEAST ONE affected stock is in our watchlist
                 return n.affected_stocks.some(stock => {
-                    const tkKey = (stock.ticker || '').toUpperCase();
-                    return watchlistTickers.has(tkKey);
+                    const tkKey = tickerSymbol(stock.ticker);
+                    return watchlistSymbols.has(tkKey);
                 });
             });
             
@@ -1512,8 +1617,8 @@
                 const seenPortfolioTickers = new Set();
                 
                 let stockRowsHtml = news.affected_stocks.filter(stock => {
-                    const tkKey = (stock.ticker || '').toUpperCase();
-                    if (!watchlistTickers.has(tkKey)) return false; // Hide stocks not in watchlist
+                    const tkKey = tickerSymbol(stock.ticker);
+                    if (!watchlistSymbols.has(tkKey)) return false; // Hide stocks not in watchlist
                     if (seenPortfolioTickers.has(tkKey)) return false;
                     seenPortfolioTickers.add(tkKey);
                     return true;
@@ -1783,6 +1888,7 @@
             checkAuthStatus();
             startSmartPolling();
             renderWatchlistPanel();
+            updatePortfolioAssistantState();
             updateWatchlistPrices();
         };
 

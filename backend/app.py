@@ -310,6 +310,34 @@ def clean_json(raw_text):
         cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
     return json.loads(cleaned.strip())
 
+def strip_html(value):
+    if not value:
+        return ""
+    try:
+        return BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+    except Exception:
+        return str(value)
+
+def extract_json_from_text(raw_text):
+    """Best-effort JSON extraction for model responses wrapped in markdown/text."""
+    if not raw_text:
+        raise ValueError("empty model response")
+    cleaned = raw_text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    # Prefer arrays for batch screeners, then objects for single-response prompts.
+    for open_char, close_char in (("[", "]"), ("{", "}")):
+        start = cleaned.find(open_char)
+        end = cleaned.rfind(close_char)
+        if start != -1 and end != -1 and end > start:
+            return json.loads(cleaned[start:end + 1])
+    raise ValueError("no JSON payload found")
+
 # ==========================================
 # KEYWORD FILTER — fast relevance check
 # ==========================================
@@ -618,33 +646,243 @@ MACRO_IMPACT_MAP = {
     'gdp growth': [('HDFCBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH'), ('LT.NS', 'BULLISH')],
 }
 
+MATERIAL_EVENT_KEYWORDS = [
+    'earnings', 'result', 'results', 'profit', 'loss', 'revenue', 'margin',
+    'order win', 'wins order', 'contract', 'deal', 'merger', 'acquisition',
+    'stake sale', 'block deal', 'bulk deal', 'buyback', 'dividend', 'split',
+    'bonus', 'ipo', 'listing', 'approval', 'ban', 'penalty', 'fine', 'fraud',
+    'default', 'downgrade', 'upgrade', 'guidance', 'capex', 'expansion',
+    'plant', 'shutdown', 'launch', 'tariff', 'rbi', 'repo rate', 'budget',
+    'policy', 'export', 'import', 'crude', 'rupee', 'fii', 'fpi',
+]
 
-def _fallback_get_candidate_stocks(headline):
-    """Fallback method using static dictionaries if API fails."""
-    h = headline.lower()
-    candidates = {}
+LOW_SIGNAL_PHRASES = [
+    'analyst says', 'price target', 'target price', 'stocks to buy',
+    'should you buy', 'what should investors do', 'technical breakout',
+    'watch today', 'market live', 'sensex today', 'nifty today',
+]
 
+INDEX_LIKE_SYMBOLS = {
+    'NIFTY', 'NIFTY50', 'BANKNIFTY', 'FINNIFTY', 'MIDCPNIFTY',
+    'SENSEX', 'NSEI', 'BSESN', 'NSE', 'BSE',
+}
+
+COMMON_UPPERCASE_WORDS = {
+    'RBI', 'SEBI', 'FII', 'FIIS', 'FPI', 'FPIS', 'DII', 'DIIS', 'IPO',
+    'CEO', 'CFO', 'MD', 'QIP', 'GDP', 'GST', 'EV', 'AI', 'IT', 'US',
+    'UK', 'EU', 'Q1', 'Q2', 'Q3', 'Q4', 'PAT', 'EBITDA', 'NPA',
+}
+
+def normalize_ticker(ticker):
+    if not ticker:
+        return None
+    t = str(ticker).upper().strip()
+    t = t.replace("NSE:", "").replace("BSE:", "")
+    t = t.replace(".NSE", ".NS").replace(".BSE", ".BO")
+    t = re.sub(r'[^A-Z0-9&.\-]', '', t)
+    if not t or t.startswith("^"):
+        return None
+    if not (t.endswith(".NS") or t.endswith(".BO")):
+        if re.fullmatch(r'[A-Z0-9&\-]{2,16}', t):
+            t = f"{t}.NS"
+        else:
+            return None
+    base = t.rsplit(".", 1)[0]
+    if base in INDEX_LIKE_SYMBOLS:
+        return None
+    return t
+
+def ticker_base(ticker):
+    t = normalize_ticker(ticker)
+    return t.rsplit(".", 1)[0] if t else ""
+
+def is_supported_equity_ticker(ticker):
+    t = normalize_ticker(ticker)
+    if not t:
+        return False
+    known = {normalize_ticker(v) for v in STOCK_KEYWORD_MAP.values()}
+    if t in known:
+        return True
+    base = ticker_base(t)
+    try:
+        # If the Angel One scrip master is already loaded, use it as a guard
+        # against obvious AI hallucinations. If it is not loaded, stay permissive
+        # so the news worker does not block on a network call.
+        if getattr(yf, "_scrip_loaded", False):
+            if t.endswith(".NS"):
+                return base in getattr(yf, "_scrip_cache", {})
+            if t.endswith(".BO"):
+                return base in getattr(yf, "_bse_cache", {})
+    except Exception:
+        pass
+    return re.fullmatch(r'[A-Z0-9&\-]{2,16}\.(NS|BO)', t) is not None
+
+def _keyword_mentions_ticker(text, ticker):
+    if not text or not ticker:
+        return False
+    text_l = text.lower()
+    ticker_n = normalize_ticker(ticker)
+    for keyword, mapped_ticker in STOCK_KEYWORD_MAP.items():
+        if normalize_ticker(mapped_ticker) != ticker_n:
+            continue
+        pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+        if re.search(pattern, text_l):
+            return True
+    base = ticker_base(ticker_n).lower()
+    return bool(base and re.search(r'\b' + re.escape(base) + r'\b', text_l))
+
+def _macro_mentions(text):
+    text_l = (text or "").lower()
+    return [kw for kw in MACRO_IMPACT_MAP if kw in text_l]
+
+def _headline_direction(headline, context=""):
+    h = f"{headline or ''} {context or ''}".lower()
     bull_score = sum(1 for kw in BULLISH_KEYWORDS if kw in h)
     bear_score = sum(1 for kw in BEARISH_KEYWORDS if kw in h)
-    headline_sentiment = 'BULLISH' if bull_score >= bear_score else 'BEARISH'
+    return 'BULLISH' if bull_score >= bear_score else 'BEARISH'
+
+def candidate_quality_score(headline, context, ticker, source="rule", materiality_hint=65):
+    text = f"{headline or ''} {context or ''}"
+    text_l = text.lower()
+    try:
+        score = int(float(re.sub(r'[^0-9.]', '', str(materiality_hint or 65)) or 65))
+    except Exception:
+        score = 65
+    source_l = (source or "rule").lower()
+
+    if source_l == "llm":
+        score += 12
+    elif source_l == "macro":
+        score += 6
+    else:
+        score += 4
+
+    if _keyword_mentions_ticker(headline, ticker):
+        score += 22
+    elif _keyword_mentions_ticker(context, ticker):
+        score += 10
+
+    macro_hits = _macro_mentions(text_l)
+    if macro_hits:
+        score += min(14, len(macro_hits) * 5)
+
+    material_hits = sum(1 for kw in MATERIAL_EVENT_KEYWORDS if kw in text_l)
+    score += min(18, material_hits * 4)
+
+    low_signal_hits = sum(1 for phrase in LOW_SIGNAL_PHRASES if phrase in text_l)
+    score -= min(18, low_signal_hits * 6)
+
+    if not _keyword_mentions_ticker(text, ticker) and not macro_hits and source_l != "llm":
+        score -= 14
+
+    return max(10, min(99, score))
+
+def rank_signal_candidates(article, candidates, max_results=5):
+    headline = article.get("headline", "") if isinstance(article, dict) else ""
+    context = article.get("deep_context", "") or article.get("summary", "") if isinstance(article, dict) else ""
+    merged = {}
+
+    for item in candidates:
+        if isinstance(item, dict):
+            ticker = normalize_ticker(item.get("ticker"))
+            direction = (item.get("direction") or item.get("bias") or "").upper()
+            source = item.get("source", "llm")
+            materiality = item.get("materiality_score") or item.get("confidence") or 70
+            reason = item.get("reason", "")
+        else:
+            ticker = normalize_ticker(item[0] if len(item) > 0 else None)
+            direction = (item[1] if len(item) > 1 else _headline_direction(headline, context)).upper()
+            source = item[2] if len(item) > 2 else "rule"
+            materiality = 62
+            reason = ""
+
+        if not ticker or direction not in ("BULLISH", "BEARISH"):
+            continue
+        if not is_supported_equity_ticker(ticker):
+            continue
+
+        score = candidate_quality_score(headline, context, ticker, source, materiality)
+        existing = merged.get(ticker)
+        if not existing or score > existing["quality_score"]:
+            merged[ticker] = {
+                "ticker": ticker,
+                "direction": direction,
+                "quality_score": score,
+                "source": source,
+                "reason": reason,
+            }
+
+    ranked = sorted(merged.values(), key=lambda x: x["quality_score"], reverse=True)
+    return ranked[:max_results]
+
+def article_screening_context(article, max_chars=900):
+    """Use RSS summary first, then scrape article text for richer stock picking."""
+    if not isinstance(article, dict):
+        return ""
+    cached = article.get("deep_context")
+    if cached:
+        return cached
+
+    summary = strip_html(article.get("summary", ""))
+    context = summary[:max_chars]
+    headline = article.get("headline", "")
+    url = article.get("url")
+
+    should_scrape = (
+        url
+        and "google.com" not in url
+        and len(context) < 240
+        and is_finance_relevant(f"{headline} {context}")
+    )
+    if should_scrape:
+        scraped = scrape_article_text(url)
+        if scraped and len(scraped) > len(context):
+            context = scraped[:max_chars]
+
+    article["deep_context"] = context
+    return context
+
+def _fallback_get_candidate_stocks(headline, context=""):
+    """Fallback method using static dictionaries if API fails."""
+    h = f"{headline or ''} {context or ''}".lower()
+    candidates = {}
+
+    headline_sentiment = _headline_direction(headline, context)
 
     for keyword, ticker in sorted(STOCK_KEYWORD_MAP.items(), key=lambda x: -len(x[0])):
-        if ticker in candidates:
+        ticker = normalize_ticker(ticker)
+        if not ticker or ticker in candidates:
             continue
         pattern = r'\b' + re.escape(keyword) + r'\b'
         if re.search(pattern, h):
             candidates[ticker] = headline_sentiment
 
+    # Catch explicit exchange symbols already present in uppercase headlines.
+    original_text = f"{headline or ''} {context or ''}"
+    for token in re.findall(r'\b[A-Z][A-Z0-9&\-]{2,15}\b', original_text):
+        if token in COMMON_UPPERCASE_WORDS:
+            continue
+        ticker = normalize_ticker(token)
+        if ticker and ticker not in candidates and is_supported_equity_ticker(ticker):
+            candidates[ticker] = headline_sentiment
+
     for macro_kw, effects in MACRO_IMPACT_MAP.items():
         if macro_kw in h:
             for ticker, impact in effects:
-                if ticker not in candidates:
+                ticker = normalize_ticker(ticker)
+                if ticker and ticker not in candidates:
                     candidates[ticker] = impact
 
-    return list(candidates.items())[:10]
+    article = {"headline": headline or "", "summary": context or "", "deep_context": context or ""}
+    ranked = rank_signal_candidates(
+        article,
+        [{"ticker": t, "direction": d, "source": "macro" if _macro_mentions(h) else "rule"} for t, d in candidates.items()],
+        max_results=10,
+    )
+    return [(item["ticker"], item["direction"]) for item in ranked]
 
 
-def get_candidate_stocks(headline, api_client, model_name):
+def get_candidate_stocks(headline, api_client, model_name, context=""):
     """
     HYBRID approach: Runs BOTH Gemini LLM AND rule-based keyword/macro map,
     then unions the results. This ensures:
@@ -654,22 +892,25 @@ def get_candidate_stocks(headline, api_client, model_name):
     Returns list of tuples: [(ticker, impact_direction)]
     """
     # Step 1: Always run rule-based (instant, no API call)
-    rule_based = _fallback_get_candidate_stocks(headline)
-    rule_tickers = {t for t, _ in rule_based}
+    rule_based = _fallback_get_candidate_stocks(headline, context)
 
     # Step 2: Try LLM extraction if client available
     llm_results = []
     if api_client:
         prompt = (
-            "As a quantitative researcher in the Indian equities market, evaluate this headline: '" + headline + "'. \n"
-            "1) Identify the direct primary NSE/BSE stock tickers explicitly impacted by this news (append .NS to the ticker, e.g., RELIANCE.NS). Limit to a maximum of 3 most relevant stocks. If no specific stock is mentioned, infer the most likely major index component affected.\n"
-            "2) Determine the forward-looking bias for each (BULLISH/BEARISH). If neutral, still pick a slight directional bias based on market context.\n"
-            "3) Classify the overall materiality as MATERIAL. Only use IGNORE if it is completely unrelated to finance or business.\n"
+            "As a quantitative researcher in the Indian equities market, evaluate this news.\n"
+            f"Headline: {headline}\n"
+            f"Article context: {context[:1000] if context else 'Not available'}\n\n"
+            "1) Identify only NSE/BSE listed equities with a direct or clearly traceable second-order impact. Append .NS or .BO.\n"
+            "2) Prefer the company named in the news. Use sector beneficiaries only for macro/policy/commodity news with a clear pathway.\n"
+            "3) Limit to the 1-3 highest quality tickers. Do not invent tickers. Ignore generic analyst target lists and broad market commentary.\n"
+            "4) Determine the forward-looking bias for each (BULLISH/BEARISH).\n"
+            "5) Classify materiality as MATERIAL only if the move could plausibly matter over 1-5 sessions.\n"
             "Return exactly formatted JSON like this:\n"
             "{\n"
             '  "materiality": "MATERIAL",\n'
             '  "impacts": [\n'
-            '    {"ticker": "TCS.NS", "bias": "BULLISH"}\n'
+            '    {"ticker": "TCS.NS", "bias": "BULLISH", "confidence": 82, "reason": "earnings beat"}\n'
             "  ]\n"
             "}\n"
         )
@@ -678,31 +919,31 @@ def get_candidate_stocks(headline, api_client, model_name):
                 model=model_name,
                 contents=prompt,
             )
-            import re, json
-            match = re.search(r'\{.*\}', response.text, re.DOTALL)
-            if match:
-                data = json.loads(match.group(0))
+            data = extract_json_from_text(response.text)
+            if isinstance(data, dict):
                 if data.get("materiality") != "IGNORE":
                     for item in data.get("impacts", []):
-                        ticker = item.get("ticker", "").upper()
+                        ticker = normalize_ticker(item.get("ticker", ""))
                         bias = item.get("bias", "NEUTRAL").upper()
                         if ticker and bias in ("BULLISH", "BEARISH"):
-                            if not ticker.endswith('.NS') and not ticker.endswith('.BO'):
-                                ticker += '.NS'
-                            llm_results.append((ticker, bias))
+                            llm_results.append({
+                                "ticker": ticker,
+                                "direction": bias,
+                                "source": "llm",
+                                "confidence": item.get("confidence", 75),
+                                "reason": item.get("reason", ""),
+                            })
         except Exception as e:
             print(f"   [!] LLM Target Extraction Error (using rule-based only): {e}")
 
     # Step 3: Union — LLM results first (higher priority), then rule-based additions
-    merged = {}
-    for ticker, direction in llm_results:
-        merged[ticker] = direction
-    for ticker, direction in rule_based:
-        if ticker not in merged:
-            merged[ticker] = direction
-
-    # Return up to 5 candidates (LLM usually gives 1-3, rule-based may add macro stocks)
-    candidates = list(merged.items())[:5]
+    article = {"headline": headline, "summary": context, "deep_context": context}
+    ranked = rank_signal_candidates(
+        article,
+        llm_results + [{"ticker": t, "direction": d, "source": "rule"} for t, d in rule_based],
+        max_results=5,
+    )
+    candidates = [(item["ticker"], item["direction"]) for item in ranked]
     
     # If still empty (very generic headline), use rule-based alone
     if not candidates:
@@ -923,7 +1164,18 @@ def ai_news_worker():
                     except Exception:
                         pass
                 link = entry.link if hasattr(entry, 'link') else None
-                articles.append({"headline": entry.title, "time": pub_time, "url": link})
+                summary = ""
+                if hasattr(entry, 'summary'):
+                    summary = strip_html(entry.summary)
+                elif hasattr(entry, 'description'):
+                    summary = strip_html(entry.description)
+                articles.append({
+                    "headline": entry.title,
+                    "time": pub_time,
+                    "url": link,
+                    "summary": summary[:900],
+                    "source": getattr(feed.feed, "title", "")
+                })
         except Exception as e:
             print(f"   RSS Error for {url}: {e}")
         return articles
@@ -958,42 +1210,50 @@ def ai_news_worker():
             if not articles_batch:
                 return []
 
+            for article in articles_batch:
+                article_screening_context(article)
+
             # ── Try AI screening first (only if Gemini client is available) ──
             if client:
                 numbered = "\n".join(
-                    [f"{i+1}. {a['headline']}" for i, a in enumerate(articles_batch)]
+                    [
+                        f"{i+1}. Headline: {a['headline']}\n"
+                        f"   Context: {(a.get('deep_context') or a.get('summary') or 'Not available')[:700]}"
+                        for i, a in enumerate(articles_batch)
+                    ]
                 )
                 prompt = f"""You are a senior quantitative researcher at a top Indian hedge fund.
-Screen these headlines and return ONLY those that will cause a material, tradeable price move
+Screen these news items and return ONLY those that will cause a material, tradeable price move
 of 2%+ in specific NSE-listed stocks within 1-5 trading sessions.
 
-Headlines:
+News items:
 {numbered}
 
 For EACH material headline, identify:
-1. Precise NSE tickers affected (append .NS suffix, e.g. RELIANCE.NS, max 3 per headline)
+1. Precise NSE/BSE equity tickers affected (append .NS or .BO, e.g. RELIANCE.NS, max 3 per headline)
 2. Forward-looking direction: BULLISH or BEARISH
+3. Confidence from 0-100 and a short reason
 
-IGNORE: Generic market commentary, analyst opinions restating known targets, scheduled FII data.
-INCLUDE: Earnings beats/misses, M&A, regulatory changes, order wins, management changes, RBI/Budget moves.
+Prefer direct company impacts. Use sector or macro beneficiaries only when the pathway is clear
+(policy, rates, commodity prices, currency, order books, regulation).
+IGNORE: Generic market commentary, analyst opinions restating known targets, scheduled FII data,
+pure technical-watchlist stories, and broad index-only moves.
+INCLUDE: Earnings beats/misses, M&A, regulatory changes, order wins, management changes,
+RBI/Budget moves, penalties, approvals, defaults, large capex, and commodity/currency shocks.
 
 Return ONLY valid JSON array:
 [
-  {{"index": 1, "material": true, "impacts": [{{"ticker": "RELIANCE.NS", "direction": "BULLISH"}}]}},
+  {{"index": 1, "material": true, "materiality_score": 84, "impacts": [{{"ticker": "RELIANCE.NS", "direction": "BULLISH", "confidence": 82, "reason": "refining margin tailwind"}}]}},
   {{"index": 2, "material": false, "impacts": []}}
 ]
 Return the full array covering all {len(articles_batch)} headlines."""
 
                 try:
-                    import re as _re, json as _json
                     resp = client.models.generate_content(
                         model=MODEL_NAME,
                         contents=prompt,
                     )
-                    raw = resp.text.strip()
-                    if raw.startswith("```"):
-                        raw = raw.split("\n", 1)[-1].rsplit("```", 1)[0]
-                    parsed = _json.loads(raw.strip())
+                    parsed = extract_json_from_text(resp.text)
                     if isinstance(parsed, dict):
                         for v in parsed.values():
                             if isinstance(v, list):
@@ -1007,19 +1267,37 @@ Return the full array covering all {len(articles_batch)} headlines."""
                         idx = item.get("index", 0) - 1
                         if 0 <= idx < len(articles_batch):
                             article = articles_batch[idx]
+                            impact_candidates = []
                             for impact in item.get("impacts", []):
-                                ticker = impact.get("ticker", "").upper().strip()
+                                ticker = normalize_ticker(impact.get("ticker", ""))
                                 direction = impact.get("direction", "").upper().strip()
                                 if ticker and direction in ("BULLISH", "BEARISH"):
-                                    if not ticker.endswith(".NS") and not ticker.endswith(".BO"):
-                                        ticker += ".NS"
-                                    results.append({
+                                    impact_candidates.append({
+                                        "ticker": ticker,
+                                        "direction": direction,
+                                        "source": "llm",
+                                        "confidence": impact.get("confidence", item.get("materiality_score", 75)),
+                                        "reason": impact.get("reason", ""),
+                                    })
+                            impact_candidates.extend([
+                                {"ticker": t, "direction": d, "source": "rule"}
+                                for t, d in _fallback_get_candidate_stocks(
+                                    article["headline"],
+                                    article.get("deep_context") or article.get("summary", "")
+                                )
+                            ])
+                            for ranked in rank_signal_candidates(article, impact_candidates, max_results=5):
+                                results.append({
                                         "headline": article["headline"],
                                         "time": article["time"],
                                         "url": article.get("url"),
-                                        "ticker": ticker,
-                                        "direction": direction,
-                                    })
+                                        "summary": article.get("summary", ""),
+                                        "deep_context": article.get("deep_context", ""),
+                                        "ticker": ranked["ticker"],
+                                        "direction": ranked["direction"],
+                                        "quality_score": ranked["quality_score"],
+                                        "reason": ranked.get("reason", ""),
+                                })
                     print(f"   [AI Screener] {len(results)} ticker-signals from {len(articles_batch)} headlines")
                     return results
                 except Exception as e:
@@ -1029,11 +1307,19 @@ Return the full array covering all {len(articles_batch)} headlines."""
             print("   [Screener] Using rule-based keyword + macro map (no API key)")
             fallback = []
             for a in articles_batch:
-                if is_finance_relevant(a['headline']):
-                    for ticker, direction in _fallback_get_candidate_stocks(a['headline']):
+                context = a.get("deep_context") or a.get("summary", "")
+                if is_finance_relevant(f"{a['headline']} {context}"):
+                    candidates = [
+                        {"ticker": t, "direction": d, "source": "rule"}
+                        for t, d in _fallback_get_candidate_stocks(a['headline'], context)
+                    ]
+                    for ranked in rank_signal_candidates(a, candidates, max_results=5):
                         fallback.append({
                             "headline": a["headline"], "time": a["time"],
-                            "url": a.get("url"), "ticker": ticker, "direction": direction
+                            "url": a.get("url"), "summary": a.get("summary", ""),
+                            "deep_context": context, "ticker": ranked["ticker"],
+                            "direction": ranked["direction"],
+                            "quality_score": ranked["quality_score"],
                         })
             return fallback
 
@@ -1055,7 +1341,9 @@ Return the full array covering all {len(articles_batch)} headlines."""
         for signal in screened_signals:
             headline = signal['headline']
             article_url = signal.get('url')
-            ticker = signal['ticker']
+            ticker = normalize_ticker(signal['ticker'])
+            if not ticker:
+                continue
             base_direction = signal['direction']
 
             # ── Fast In-Memory Duplicate Check ──
@@ -1090,7 +1378,9 @@ Return the full array covering all {len(articles_batch)} headlines."""
                 continue
 
             # ── Full Text Scraping (Context Boost) ──
-            body_text = scrape_article_text(article_url)
+            body_text = signal.get("deep_context") or signal.get("summary") or ""
+            if not body_text:
+                body_text = scrape_article_text(article_url)
             ai_input = headline
             if body_text:
                 ai_input = f"{headline}\nContext: {body_text}"
@@ -1177,37 +1467,9 @@ Return the full array covering all {len(articles_batch)} headlines."""
 
             if result['approved']:
                 view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
-                reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). Expected directional breakout."
-                approved_signals.append((news_id, ticker, result['direction'], 2.5,
-                                         view, reason, base_price, current_price_now,
-                                         result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
-
-                # 2. Get tech context
-                tech_data = get_stock_technical_context(ticker)
-                tech_context_str = json.dumps(tech_data) if tech_data else ""
-                
-                # 3. Predict using 7-Model Ensemble
-                result = ensemble.predict(
-                    headline=headline,
-                    ticker=ticker,
-                    direction=base_direction,
-                    tech_data=tech_data,
-                    market_regime=market_regime,
-                    db_connect_fn=connect_news_db,
-                    api_client=client,
-                    model_name=MODEL_NAME,
-                    min_score=MIN_CONFIDENCE
-                )
-                
-                # 4. Collect ALL predictions to ensure coverage for every news item
-                if result['final_score'] >= 85:
-                    view = 'High Conviction'
-                elif result['final_score'] >= 65:
-                    view = 'Moderate Conviction'
-                else:
-                    view = 'Speculative'
-                
-                reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/7 models agree). {'Expected directional breakout.' if result['final_score'] >= 65 else 'Speculative directional bias.'}"
+                quality = signal.get("quality_score")
+                quality_note = f" Stock-pick quality: {quality}/100." if quality else ""
+                reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). Expected directional breakout.{quality_note}"
                 approved_signals.append((news_id, ticker, result['direction'], 2.5,
                                          view, reason, base_price, current_price_now,
                                          result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
@@ -1979,6 +2241,211 @@ def get_all_news():
     except Exception as e:
         print("Error fetching all news", e)
         return jsonify({"market_open": is_market_open(), "news": []})
+
+def get_portfolio_news_context(portfolio_tickers, limit=18):
+    normalized = [normalize_ticker(t) for t in portfolio_tickers]
+    normalized = [t for t in normalized if t]
+    portfolio_bases = {ticker_base(t) for t in normalized}
+    if not portfolio_bases:
+        return [], []
+
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+    conn = connect_news_db()
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT
+            n.id AS news_id, n.headline, n.news_time, n.created_at,
+            n.aam_janta_translation, n.macro_pathway, n.category,
+            si.ticker, si.impact, si.estimated_change_percent, si.view,
+            si.reason, si.base_price, si.current_price, si.status,
+            si.confidence_score, si.ensemble_detail
+        FROM news n
+        JOIN stock_impact si ON n.id = si.news_id
+        WHERE n.created_at >= ?
+        ORDER BY n.created_at DESC
+        LIMIT 500
+    """, (cutoff,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+
+    grouped = {}
+    for row in rows:
+        if ticker_base(row.get("ticker")) not in portfolio_bases:
+            continue
+        news_id = row["news_id"]
+        item = grouped.setdefault(news_id, {
+            "id": news_id,
+            "headline": row.get("headline", ""),
+            "news_time": row.get("news_time", ""),
+            "created_at": row.get("created_at", ""),
+            "explanation": row.get("aam_janta_translation") or "",
+            "category": row.get("category") or "General",
+            "stocks": [],
+        })
+        bp = row.get("base_price") or 0
+        cp = row.get("current_price") or 0
+        diff_pct = None
+        try:
+            if bp and cp:
+                diff_pct = round((float(cp) - float(bp)) / float(bp) * 100, 2)
+        except Exception:
+            diff_pct = None
+        item["stocks"].append({
+            "ticker": normalize_ticker(row.get("ticker")),
+            "impact": row.get("impact"),
+            "status": row.get("status"),
+            "confidence_score": row.get("confidence_score"),
+            "view": row.get("view"),
+            "reason": row.get("reason"),
+            "diff_pct": diff_pct,
+        })
+
+    items = list(grouped.values())[:limit]
+    return items, sorted(normalized)
+
+def known_ticker_bases():
+    bases = {ticker_base(t) for t in STOCK_KEYWORD_MAP.values() if ticker_base(t)}
+    try:
+        if getattr(yf, "_scrip_loaded", False):
+            bases.update(getattr(yf, "_scrip_cache", {}).keys())
+            bases.update(getattr(yf, "_bse_cache", {}).keys())
+    except Exception:
+        pass
+    return bases
+
+def detect_external_tickers(question, portfolio_tickers):
+    portfolio_bases = {ticker_base(t) for t in portfolio_tickers if ticker_base(t)}
+    known_bases = known_ticker_bases()
+    mentioned = set()
+    for token in re.findall(r'\b[A-Z][A-Z0-9&\-]{2,15}(?:\.(?:NS|BO))?\b', question.upper()):
+        base = token.split(".", 1)[0]
+        if base in COMMON_UPPERCASE_WORDS or base in INDEX_LIKE_SYMBOLS:
+            continue
+        if base in known_bases:
+            mentioned.add(base)
+    return sorted(mentioned - portfolio_bases)
+
+def fallback_portfolio_answer(question, context_items, portfolio_tickers):
+    if not context_items:
+        return "I do not have saved portfolio-linked news for those added stocks yet."
+
+    q = (question or "").lower()
+    portfolio_bases = {ticker_base(t) for t in portfolio_tickers}
+    focused = []
+    for item in context_items:
+        item_bases = {ticker_base(s.get("ticker")) for s in item.get("stocks", [])}
+        if any(base and base.lower() in q for base in item_bases):
+            focused.append(item)
+    if not focused:
+        focused = context_items[:4]
+
+    lines = []
+    for item in focused[:5]:
+        stock_bits = []
+        for s in item.get("stocks", []):
+            if ticker_base(s.get("ticker")) not in portfolio_bases:
+                continue
+            move = ""
+            if s.get("diff_pct") is not None:
+                move = f", move {s['diff_pct']:+.2f}%"
+            stock_bits.append(
+                f"{s.get('ticker')} {s.get('impact', '')}"
+                f" ({s.get('confidence_score', 'NA')}%{move})"
+            )
+        if stock_bits:
+            lines.append(f"{item.get('headline')} -> " + "; ".join(stock_bits))
+
+    if not lines:
+        return "I found portfolio-linked news, but not enough detail to answer that specific question."
+    return "From your saved portfolio news: " + " | ".join(lines[:3])
+
+@app.route('/api/portfolio-assistant', methods=['POST'])
+def portfolio_assistant():
+    data = request.get_json(silent=True) or {}
+    question = str(data.get("question", "")).strip()
+    raw_tickers = data.get("tickers") or []
+    if isinstance(raw_tickers, str):
+        raw_tickers = [raw_tickers]
+
+    portfolio_tickers = []
+    for ticker in raw_tickers[:50]:
+        normalized = normalize_ticker(ticker)
+        if normalized and normalized not in portfolio_tickers:
+            portfolio_tickers.append(normalized)
+
+    if not question:
+        return jsonify({"answer": "Ask a question about your added portfolio stocks or their saved news.", "context_count": 0})
+    if not portfolio_tickers:
+        return jsonify({"answer": "Add stocks to your portfolio first, then I can answer from their saved news.", "context_count": 0})
+
+    external = detect_external_tickers(question, portfolio_tickers)
+    if external:
+        return jsonify({
+            "answer": "I can only answer from your added portfolio stocks and their saved news.",
+            "context_count": 0,
+            "blocked_tickers": external,
+        })
+
+    context_items, normalized_tickers = get_portfolio_news_context(portfolio_tickers)
+    if not context_items:
+        return jsonify({
+            "answer": "I do not have saved portfolio-linked news for those added stocks yet.",
+            "context_count": 0,
+            "tickers": normalized_tickers,
+        })
+
+    context_lines = []
+    for item in context_items:
+        stock_lines = []
+        for stock in item.get("stocks", []):
+            move = ""
+            if stock.get("diff_pct") is not None:
+                move = f", move={stock['diff_pct']:+.2f}%"
+            stock_lines.append(
+                f"{stock.get('ticker')} {stock.get('impact')} confidence={stock.get('confidence_score')} "
+                f"status={stock.get('status')}{move}; reason={stock.get('reason') or 'NA'}"
+            )
+        context_lines.append(
+            f"News ID {item['id']} | {item.get('news_time') or item.get('created_at')} | "
+            f"{item.get('headline')} | Portfolio stocks: {' || '.join(stock_lines)} | "
+            f"Explanation: {(item.get('explanation') or '')[:500]}"
+        )
+
+    if client:
+        prompt = f"""You are Alpha Lens Portfolio Assistant.
+You may answer ONLY using the user's added portfolio tickers and the saved news context below.
+If the question is outside these portfolio tickers or outside this news context, say exactly:
+"I can only answer from your added portfolio stocks and their saved news."
+Do not invent facts, prices, targets, or news. Keep the answer concise and answer only the question asked.
+
+Portfolio tickers: {', '.join(normalized_tickers)}
+
+Saved portfolio news context:
+{chr(10).join(context_lines)}
+
+Question: {question}
+"""
+        try:
+            response = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+            )
+            answer = (response.text or "").strip()
+            if answer:
+                return jsonify({
+                    "answer": answer,
+                    "context_count": len(context_items),
+                    "tickers": normalized_tickers,
+                })
+        except Exception as e:
+            print(f"Portfolio assistant AI error: {e}")
+
+    return jsonify({
+        "answer": fallback_portfolio_answer(question, context_items, normalized_tickers),
+        "context_count": len(context_items),
+        "tickers": normalized_tickers,
+    })
 
 @app.route('/api/send-otp', methods=['POST'])
 def send_otp():
