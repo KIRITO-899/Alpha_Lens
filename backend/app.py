@@ -2128,7 +2128,7 @@ def yfinance_worker():
 def home():
     return render_template('index.html')
 
-def _fetch_index_from_yahoo_chart(symbol):
+def _fetch_index_from_yahoo_chart(symbol, market_open=None, now_ist=None):
     """
     Fallback: fetch index price from Yahoo Finance free chart API.
     No API key needed. Returns (last_price, prev_close) or (None, None).
@@ -2140,15 +2140,43 @@ def _fetch_index_from_yahoo_chart(symbol):
         data = resp.json()
         result = data.get('chart', {}).get('result', [{}])[0]
         meta = result.get('meta', {})
+        if market_open is None:
+            market_open = is_market_open()
+        if now_ist is None:
+            now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
         last_price = meta.get('regularMarketPrice')
-        prev_close = meta.get('chartPreviousClose') or meta.get('previousClose')
-        if not last_price or last_price <= 0:
-            quotes = result.get('indicators', {}).get('quote', [{}])[0]
-            closes = [c for c in quotes.get('close', []) if c is not None]
+        quotes = result.get('indicators', {}).get('quote', [{}])[0]
+        timestamps = result.get('timestamp', [])
+        close_pairs = []
+        for ts, close in zip(timestamps, quotes.get('close', [])):
+            close_value = _market_quote_float(close)
+            if close_value is not None:
+                close_pairs.append((ts, close_value))
+        closes = [close for _, close in close_pairs]
+
+        latest_close_is_current_session = None
+        if close_pairs:
+            latest_close_date = datetime.fromtimestamp(
+                close_pairs[-1][0], tz=timezone.utc
+            ).astimezone(now_ist.tzinfo).date()
+            latest_close_is_current_session = latest_close_date == now_ist.date()
+
+        if not market_open and closes:
+            last_price = closes[-1]
+        elif not last_price or last_price <= 0:
             if closes:
                 last_price = closes[-1]
-                if len(closes) >= 2:
-                    prev_close = prev_close or closes[-2]
+
+        prev_close = _derive_previous_close(
+            closes, last_price, market_open, latest_close_is_current_session
+        )
+        if not prev_close:
+            prev_close = (
+                meta.get('previousClose')
+                or meta.get('regularMarketPreviousClose')
+                or meta.get('chartPreviousClose')
+            )
         if last_price and last_price > 0:
             return float(last_price), float(prev_close) if prev_close else None
     except Exception as e:
@@ -2160,13 +2188,57 @@ def _fetch_index_from_yahoo_chart(symbol):
 _INDEX_CACHE = {}
 _INDEX_CACHE_TIME = 0
 
-CLOSED_INDEX_CHANGE_OVERRIDES = {
-    "^NSEI": -1.83,
-}
+_STOCK_MARKET_CHANGE_CACHE = {}
 
-CLOSED_STOCK_CHANGE_OVERRIDES = {
-    "RELIANCE.NS": -1.74,
-}
+
+def _market_quote_float(value):
+    try:
+        number = float(value)
+        return number if number > 0 else None
+    except Exception:
+        return None
+
+
+def calculate_market_change_pct(current_value, previous_close):
+    current = _market_quote_float(current_value)
+    previous = _market_quote_float(previous_close)
+    if current is None or previous is None:
+        return 0.0
+    return round(((current - previous) / previous) * 100, 2)
+
+
+def _derive_previous_close(closes, current_value, market_open, latest_close_is_current_session=None):
+    clean_closes = []
+    for close in closes or []:
+        close_value = _market_quote_float(close)
+        if close_value is not None:
+            clean_closes.append(close_value)
+
+    if not clean_closes:
+        return None
+    if len(clean_closes) == 1:
+        return clean_closes[0] if market_open else None
+
+    current = _market_quote_float(current_value)
+    latest_close = clean_closes[-1]
+
+    if market_open and latest_close_is_current_session is False:
+        return latest_close
+    if latest_close_is_current_session is True:
+        return clean_closes[-2]
+
+    # During live sessions some feeds expose yesterday's close as the final
+    # daily candle while regularMarketPrice carries the live value.
+    if market_open and current is not None:
+        tolerance = max(0.01, current * 0.0001)
+        if abs(latest_close - current) > tolerance:
+            return latest_close
+
+    return clean_closes[-2]
+
+
+def _index_result_has_quotes(items):
+    return bool(items) and all(item.get("price") is not None for item in items)
 
 @app.route('/api/indices', methods=['GET'])
 def get_indices():
@@ -2182,7 +2254,7 @@ def get_indices():
         price_label = "Live"
         market_status = "Market Open"
     else:
-        price_label = "Prev. Close"
+        price_label = "Last Close"
         if weekday >= 5:
             market_status = "Market Closed · Opens Mon 9:15 AM IST"
         elif hour < 9 or (hour == 9 and minute < 15):
@@ -2192,7 +2264,7 @@ def get_indices():
 
     # Return cached data if fresh (60s during market hours, 5min when closed)
     cache_ttl = 60 if market_open else 300
-    if _INDEX_CACHE and (time.time() - _INDEX_CACHE_TIME) < cache_ttl:
+    if _index_result_has_quotes(_INDEX_CACHE) and (time.time() - _INDEX_CACHE_TIME) < cache_ttl:
         for item in _INDEX_CACHE:
             item['is_live'] = market_open
             item['price_label'] = price_label
@@ -2222,25 +2294,42 @@ def get_indices():
             chart_result = data.get('chart', {}).get('result', [{}])[0]
             meta = chart_result.get('meta', {})
 
-            # regularMarketPrice = current live/last price
+            # regularMarketPrice = current live/last price.
             _lp = meta.get('regularMarketPrice')
-            
-            # chartPreviousClose is BROKEN for range=5d (returns close before the 5d period)
-            # We must get the previous close from the actual closes array
+
             quotes = chart_result.get('indicators', {}).get('quote', [{}])[0]
-            closes = [c for c in quotes.get('close', []) if c is not None]
-            
-            _pc = None
-            if closes:
-                # If market is open, the last close might be yesterday's. 
-                # But Yahoo's array includes today's candle. 
-                # Actually, the safest way is to just take closes[-2] if available
-                if len(closes) >= 2:
-                    _pc = closes[-2]
-                    
-            if not _lp or _lp <= 0:
+            timestamps = chart_result.get('timestamp', [])
+            close_pairs = []
+            for ts, close in zip(timestamps, quotes.get('close', [])):
+                close_value = _market_quote_float(close)
+                if close_value is not None:
+                    close_pairs.append((ts, close_value))
+            closes = [close for _, close in close_pairs]
+            latest_close_is_current_session = None
+            if close_pairs:
+                try:
+                    latest_close_date = datetime.fromtimestamp(
+                        close_pairs[-1][0], tz=timezone.utc
+                    ).astimezone(ist).date()
+                    latest_close_is_current_session = latest_close_date == now_ist.date()
+                except Exception:
+                    latest_close_is_current_session = None
+
+            if not market_open and closes:
+                _lp = closes[-1]
+            elif not _lp or _lp <= 0:
                 if closes:
                     _lp = closes[-1]
+
+            _pc = _derive_previous_close(
+                closes, _lp, market_open, latest_close_is_current_session
+            )
+            if not _pc:
+                _pc = (
+                    meta.get('previousClose')
+                    or meta.get('regularMarketPreviousClose')
+                    or meta.get('chartPreviousClose')
+                )
 
             if _lp and _lp > 0:
                 last_price = float(_lp)
@@ -2251,7 +2340,7 @@ def get_indices():
             print(f"   [IDX] Yahoo Chart failed for {idx['name']}: {e}")
 
         # ── FALLBACK: TwelveData shim ──
-        if last_price is None or last_price <= 0:
+        if last_price is None or last_price <= 0 or prev_close is None or prev_close <= 0:
             try:
                 t = yf.Ticker(idx["symbol"])
                 try:
@@ -2260,7 +2349,7 @@ def get_indices():
                     _pc_shim = fi.previous_close
                     if _lp_shim and float(_lp_shim) > 0:
                         last_price = float(_lp_shim)
-                    if _pc_shim and float(_pc_shim) > 0 and prev_close is None:
+                    if _pc_shim and float(_pc_shim) > 0 and not prev_close:
                         prev_close = float(_pc_shim)
                 except Exception:
                     pass
@@ -2269,7 +2358,7 @@ def get_indices():
                     hist = t.history(period='5d', interval='1d')
                     if len(hist) >= 2:
                         last_price = last_price or float(hist['Close'].iloc[-1])
-                        if prev_close is None:
+                        if not prev_close:
                             prev_close = float(hist['Close'].iloc[-2])
                     elif len(hist) == 1:
                         last_price = last_price or float(hist['Close'].iloc[-1])
@@ -2277,14 +2366,18 @@ def get_indices():
                 print(f"   [IDX] TwelveData fallback failed for {idx['name']}: {e}")
 
         # ── Compute % change ──
-        display_price = last_price
-        if last_price and last_price > 0 and prev_close and prev_close > 0:
-            change_pct = round(((last_price - prev_close) / prev_close) * 100, 2)
-        else:
-            change_pct = 0.0
+        if last_price is None or last_price <= 0 or prev_close is None or prev_close <= 0:
+            fallback_price, fallback_prev = _fetch_index_from_yahoo_chart(
+                idx["symbol"], market_open=market_open, now_ist=now_ist
+            )
+            if fallback_price and fallback_price > 0:
+                last_price = fallback_price
+            if fallback_prev and fallback_prev > 0:
+                prev_close = fallback_prev
 
-        if not market_open and idx["symbol"] in CLOSED_INDEX_CHANGE_OVERRIDES:
-            change_pct = CLOSED_INDEX_CHANGE_OVERRIDES[idx["symbol"]]
+        display_price = last_price
+        has_index_quote = bool(last_price and last_price > 0 and prev_close and prev_close > 0)
+        change_pct = calculate_market_change_pct(last_price, prev_close) if has_index_quote else None
 
         # When market closed: show the last available price (which IS the day's close)
         if not market_open and not display_price:
@@ -2299,9 +2392,14 @@ def get_indices():
             "market_status": market_status
         })
     
-    # Cache the result
-    _INDEX_CACHE = result
-    _INDEX_CACHE_TIME = time.time()
+    # Cache only complete quote sets. Empty quote sets should recover as soon
+    # as the next request can reach the data provider.
+    if _index_result_has_quotes(result):
+        _INDEX_CACHE = result
+        _INDEX_CACHE_TIME = time.time()
+    else:
+        _INDEX_CACHE = []
+        _INDEX_CACHE_TIME = 0
     return jsonify(result)
 
 
@@ -2319,6 +2417,31 @@ def debug_signals(news_id):
         return jsonify({"news": dict(news_row) if news_row else None, "signals": rows, "count": len(rows), "db": _NEWS_DB})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+def attach_market_change_percentages(stocks, market_open=None, quote_cache=None):
+    if market_open is None:
+        market_open = is_market_open()
+    if quote_cache is None:
+        quote_cache = {}
+
+    for stock in stocks:
+        ticker = normalize_ticker(stock.get('ticker')) or stock.get('ticker')
+        if not ticker:
+            stock['market_change_pct'] = None
+            continue
+        try:
+            if ticker not in quote_cache:
+                quote_cache[ticker] = get_stock_market_change_quote(ticker, market_open=market_open)
+            quote = quote_cache.get(ticker) or {}
+            price = _positive_float(quote.get("price"))
+            previous_close = _positive_float(quote.get("previous_close"))
+            stock['previous_close'] = previous_close
+            stock['market_change_pct'] = quote.get("change_pct")
+            if price:
+                stock['current_price'] = price
+        except Exception:
+            stock['market_change_pct'] = None
+    return stocks
 
 @app.route('/api/news/top', methods=['GET'])
 def get_top_news():
@@ -2366,9 +2489,11 @@ def get_top_news():
                 s['diff_pct'] = round((cp - bp) / bp * 100, 2)
             else:
                 s['diff_pct'] = None
+        mkt_open = is_market_open()
+        attach_market_change_percentages(stocks, market_open=mkt_open)
         news_item['affected_stocks'] = stocks
         conn.close()
-        return jsonify({"market_open": is_market_open(), "news": [news_item], "_debug_db": _NEWS_DB, "_debug_sig_count": len(raw_stocks)})
+        return jsonify({"market_open": mkt_open, "news": [news_item], "_debug_db": _NEWS_DB, "_debug_sig_count": len(raw_stocks)})
 
     except Exception as e:
         print("Error fetching top news", e)
@@ -2387,6 +2512,8 @@ def get_all_news():
         news_rows = c.fetchall()
 
         all_news = []
+        mkt_open = is_market_open()
+        quote_cache = {}
         for row in news_rows:
             news_item = dict(row)
             try:
@@ -2410,12 +2537,12 @@ def get_all_news():
                     s['diff_pct'] = round((cp - bp) / bp * 100, 2)
                 else:
                     s['diff_pct'] = None
+            attach_market_change_percentages(stocks, market_open=mkt_open, quote_cache=quote_cache)
             news_item['affected_stocks'] = stocks
             all_news.append(news_item)
 
         conn.close()
 
-        mkt_open = is_market_open()
         return jsonify({"market_open": mkt_open, "news": all_news})
     except Exception as e:
         print("Error fetching all news", e)
@@ -2460,6 +2587,8 @@ def get_portfolio_news_context(portfolio_tickers, limit=18):
     conn.close()
 
     grouped = {}
+    market_open = is_market_open()
+    quote_cache = {}
     for row in rows:
         if ticker_base(row.get("ticker")) not in portfolio_bases:
             continue
@@ -2476,12 +2605,21 @@ def get_portfolio_news_context(portfolio_tickers, limit=18):
         })
         bp = row.get("base_price") or 0
         cp = row.get("current_price") or 0
-        diff_pct = None
+        signal_diff_pct = None
         try:
             if bp and cp:
-                diff_pct = round((float(cp) - float(bp)) / float(bp) * 100, 2)
+                signal_diff_pct = round((float(cp) - float(bp)) / float(bp) * 100, 2)
         except Exception:
-            diff_pct = None
+            signal_diff_pct = None
+        market_change_pct = None
+        try:
+            ticker = normalize_ticker(row.get("ticker"))
+            if ticker:
+                if ticker not in quote_cache:
+                    quote_cache[ticker] = get_stock_market_change_quote(ticker, market_open=market_open)
+                market_change_pct = quote_cache[ticker].get("change_pct")
+        except Exception:
+            market_change_pct = None
         item["stocks"].append({
             "ticker": normalize_ticker(row.get("ticker")),
             "impact": row.get("impact"),
@@ -2489,7 +2627,9 @@ def get_portfolio_news_context(portfolio_tickers, limit=18):
             "confidence_score": row.get("confidence_score"),
             "view": row.get("view"),
             "reason": row.get("reason"),
-            "diff_pct": diff_pct,
+            "diff_pct": market_change_pct if market_change_pct is not None else signal_diff_pct,
+            "signal_diff_pct": signal_diff_pct,
+            "market_change_pct": market_change_pct,
         })
 
     items = list(grouped.values())[:limit]
@@ -2878,11 +3018,7 @@ def search_stocks():
     return jsonify(results)
 
 def _positive_float(value):
-    try:
-        number = float(value)
-        return number if number > 0 else None
-    except Exception:
-        return None
+    return _market_quote_float(value)
 
 def get_last_closed_session_quote(ticker):
     """Return (last_close, previous_close) from daily candles."""
@@ -2932,59 +3068,77 @@ def get_cached_stock_close_from_db(ticker):
             except Exception:
                 change_pct = None
             if change_pct is not None:
-                return price, float(change_pct)
+                try:
+                    change_pct = float(change_pct)
+                    if change_pct != -100:
+                        previous_close = price / (1 + (change_pct / 100))
+                        previous_close = _positive_float(previous_close)
+                        if previous_close:
+                            return price, previous_close
+                except Exception:
+                    pass
         if rows:
             return _positive_float(rows[0]["current_price"]), None
     except Exception as e:
         print(f"[Stock Price] Saved close fallback failed for {ticker}: {e}")
     return None, None
 
-@app.route('/api/stock-price/<ticker>', methods=['GET'])
-def get_stock_price(ticker):
-    market_open = is_market_open()
-    normalized_ticker = normalize_ticker(ticker)
+def get_stock_market_change_quote(ticker, market_open=None):
+    if market_open is None:
+        market_open = is_market_open()
+
+    normalized_ticker = normalize_ticker(ticker) or str(ticker).upper().strip()
+    cache_key = (normalized_ticker, bool(market_open))
+    now_ts = time.time()
+    cache_ttl = 30 if market_open else 300
+    cached = _STOCK_MARKET_CHANGE_CACHE.get(cache_key)
+    if cached and (now_ts - cached.get("ts", 0)) < cache_ttl:
+        return dict(cached["quote"])
+
     lp, prev = yf.get_ltp(ticker)
     price = _positive_float(lp)
     prev_close = _positive_float(prev)
-    price_label = "Live" if market_open else "Prev. Close"
-    change_pct_override = None
+    price_label = "Live" if market_open else "Last Close"
 
-    if not market_open:
-        last_close, prior_close = get_last_closed_session_quote(ticker)
-        if last_close:
-            price = last_close
-        if prior_close:
-            prev_close = prior_close
+    if market_open:
+        if not prev_close:
+            last_close, _ = get_last_closed_session_quote(ticker)
+            prev_close = _positive_float(last_close)
+    else:
         if (not price) or (not prev_close) or (price and prev_close and abs(price - prev_close) < 0.01):
-            cached_price, cached_change_pct = get_cached_stock_close_from_db(ticker)
-            if cached_price:
-                price = cached_price
-                price_label = "Saved Close"
-            if cached_change_pct is not None:
-                change_pct_override = cached_change_pct
-                if price and cached_change_pct != -100:
-                    prev_close = price / (1 + (cached_change_pct / 100))
-        if normalized_ticker in CLOSED_STOCK_CHANGE_OVERRIDES:
-            change_pct_override = CLOSED_STOCK_CHANGE_OVERRIDES[normalized_ticker]
-            if price:
-                prev_close = price / (1 + (change_pct_override / 100))
-    
+            last_close, prior_close = get_last_closed_session_quote(ticker)
+            if last_close:
+                price = last_close
+            if prior_close:
+                prev_close = prior_close
+
+    if (not price) or (not prev_close):
+        cached_price, cached_prev_close = get_cached_stock_close_from_db(ticker)
+        if not price and cached_price:
+            price = cached_price
+            price_label = "Saved Close"
+        if not prev_close and cached_prev_close:
+            prev_close = cached_prev_close
+
     if not price:
         price = prev_close or 0.0
     if not prev_close:
         prev_close = price
 
-    change_pct = change_pct_override
-    if change_pct is None:
-        change_pct = ((price - prev_close) / prev_close * 100) if prev_close > 0 else 0.0
-        
-    return jsonify({
-        "ticker": ticker, 
+    quote = {
+        "ticker": ticker,
         "price": round(price, 2) if price else 0.0,
-        "change_pct": round(change_pct, 2),
+        "previous_close": round(prev_close, 2) if prev_close else 0.0,
+        "change_pct": calculate_market_change_pct(price, prev_close),
         "market_open": market_open,
-        "price_label": price_label
-    })
+        "price_label": price_label,
+    }
+    _STOCK_MARKET_CHANGE_CACHE[cache_key] = {"quote": quote, "ts": now_ts}
+    return dict(quote)
+
+@app.route('/api/stock-price/<ticker>', methods=['GET'])
+def get_stock_price(ticker):
+    return jsonify(get_stock_market_change_quote(ticker))
 
 if __name__ == '__main__':
     # Small delay so DB is fully ready before workers start writing

@@ -14,6 +14,10 @@ import time
 import threading
 import os
 import socket
+import base64
+import hashlib
+import hmac
+import struct
 from datetime import datetime, timedelta, timezone
 from dotenv import load_dotenv
 
@@ -162,12 +166,34 @@ def _ao_base_headers():
     }
 
 
+def _totp_now(secret, interval=30, digits=6):
+    """Generate a TOTP code without requiring the optional pyotp package."""
+    try:
+        key = base64.b32decode(secret.upper().replace(" ", ""), casefold=True)
+        counter = int(time.time() // interval)
+        msg = struct.pack(">Q", counter)
+        digest = hmac.new(key, msg, hashlib.sha1).digest()
+        offset = digest[-1] & 0x0F
+        code = struct.unpack(">I", digest[offset:offset + 4])[0] & 0x7FFFFFFF
+        return str(code % (10 ** digits)).zfill(digits)
+    except Exception:
+        return ""
+
+
 def _ao_login():
-    """Authenticate with Angel One SmartAPI using pyotp TOTP."""
+    """Authenticate with Angel One SmartAPI using TOTP."""
     global _jwt_token, _session_date
     try:
-        import pyotp
-        totp_code = pyotp.TOTP(AO_TOTP_SECRET).now()
+        try:
+            import pyotp
+            totp_code = pyotp.TOTP(AO_TOTP_SECRET).now()
+        except Exception:
+            totp_code = _totp_now(AO_TOTP_SECRET)
+
+        if not totp_code:
+            print("[AngelOne] Login failed: could not generate TOTP")
+            return False
+
         payload = {
             "clientcode": AO_CLIENT_ID,
             "password":   AO_PIN,

@@ -1175,9 +1175,9 @@
                 const isExpired = stock.status === 'Expired';
                 const isClosed = isResolved || isExpired;
 
-                // Δ% for resolved signals: always use estimated_change_percent (resolution %)
-                // Δ% for active signals: use live (current - base) / base
-                const diffPct = (stock.diff_pct != null) ? stock.diff_pct
+                // Market change is always current value vs previous close.
+                const diffPct = (stock.market_change_pct != null) ? stock.market_change_pct
+                    : (stock.diff_pct != null) ? stock.diff_pct
                     : (hasPrice && hasCurrent ? ((currentPrice - basePrice) / basePrice * 100) : null);
                 const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
                 const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
@@ -1672,7 +1672,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                     const cp = parseFloat(stock.current_price);
                     const hasP = !isNaN(bp) && bp > 0;
                     const hasC = !isNaN(cp) && cp > 0;
-                    const diff = (stock.diff_pct != null) ? stock.diff_pct : (hasP && hasC ? ((cp - bp) / bp * 100) : null);
+                    const diff = (stock.market_change_pct != null) ? stock.market_change_pct
+                        : (stock.diff_pct != null) ? stock.diff_pct
+                        : (hasP && hasC ? ((cp - bp) / bp * 100) : null);
                     const diffStr = diff !== null ? (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%' : '—';
                     const diffCls = diff === null ? 'text-slate-400' : diff >= 0 ? 'text-green-400' : 'text-red-400';
                     const statusBadge = getStatusBadge(stock.status);
@@ -1766,8 +1768,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 const cp = parseFloat(stock.current_price);
                 const hasPrice = !isNaN(bp) && bp > 0;
                 const hasCurrent = !isNaN(cp) && cp > 0;
-                // Use server-computed diff_pct as primary source
-                const diffPct = (stock.diff_pct != null) ? stock.diff_pct
+                // Market change is always current value vs previous close.
+                const diffPct = (stock.market_change_pct != null) ? stock.market_change_pct
+                    : (stock.diff_pct != null) ? stock.diff_pct
                     : (hasPrice && hasCurrent ? ((cp - bp) / bp * 100) : null);
                 const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
                 const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
@@ -1847,14 +1850,17 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 const marketStatus = data[0]?.market_status ?? 'Market Open';
 
                 container.innerHTML = data.map((idx, i) => {
-                    const up = idx.change_pct >= 0;
+                    const hasQuote = idx.price !== null && idx.price !== undefined && idx.change_pct !== null && idx.change_pct !== undefined;
+                    const up = hasQuote && idx.change_pct >= 0;
                     const accentColor = accents[i];
                     const bgGrad = `linear-gradient(135deg, ${accentColor}08 0%, transparent 60%)`;
                     // Always use real change_pct from backend (backend now computes it even when closed)
-                    const changeVal = idx.change_pct ?? 0.0;
-                    const pctText = (changeVal > 0 ? '+' : '') + changeVal.toFixed(2) + '%';
+                    const changeVal = hasQuote ? idx.change_pct : null;
+                    const pctText = changeVal !== null ? (changeVal > 0 ? '+' : '') + changeVal.toFixed(2) + '%' : '—';
                     // Color: green if up, red if down, amber only if exactly 0
-                    const pctBg = changeVal >= 0
+                    const pctBg = changeVal === null
+                        ? 'background:rgba(148,163,184,0.12);color:#94a3b8;border:1px solid rgba(148,163,184,0.3)'
+                        : changeVal >= 0
                         ? 'background:rgba(74,222,128,0.12);color:#4ade80;border:1px solid rgba(74,222,128,0.3)'
                         : 'background:rgba(248,113,113,0.12);color:#f87171;border:1px solid rgba(248,113,113,0.3)';
 
@@ -1877,7 +1883,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                             <div class="text-xl font-display font-black text-white tracking-tight mb-2">${priceFmt}</div>
                             <div class="flex items-center justify-between">
                                 <div class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold" style="${pctBg}">
-                                    ${changeVal > 0 ? '&#9650;' : changeVal < 0 ? '&#9660;' : '&mdash;'} ${pctText}
+                                    ${changeVal === null ? '&mdash;' : changeVal > 0 ? '&#9650;' : changeVal < 0 ? '&#9660;' : '&mdash;'} ${pctText}
                                 </div>
                                 <div class="text-[8px] font-mono text-slate-500 uppercase">${!isLive ? marketStatus : ''}</div>
                             </div>
