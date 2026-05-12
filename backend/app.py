@@ -120,7 +120,22 @@ SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
 
 # Use absolute paths so the server works from any working directory
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
-_NEWS_DB  = os.path.join(_APP_DIR, 'news_cache.db')
+def choose_news_db_path():
+    candidates = [
+        os.path.join(_APP_DIR, 'news_cache.db'),
+        os.path.abspath(os.path.join(_APP_DIR, '..', 'news_cache.db')),
+    ]
+    for path in candidates:
+        try:
+            conn = sqlite3.connect(path, timeout=5.0)
+            conn.execute("SELECT 1")
+            conn.close()
+            return path
+        except Exception as e:
+            print(f"   [DB] Cannot open {path}: {e}")
+    return candidates[0]
+
+_NEWS_DB  = choose_news_db_path()
 _USERS_DB = os.path.join(_APP_DIR, 'users.db')
 
 def init_db():
@@ -2479,6 +2494,48 @@ def detect_external_tickers(question, portfolio_tickers):
             mentioned.add(base)
     return sorted(mentioned - portfolio_bases)
 
+def portfolio_aliases(portfolio_tickers):
+    aliases = set()
+    normalized = {normalize_ticker(t) for t in portfolio_tickers if normalize_ticker(t)}
+    for ticker in normalized:
+        base = ticker_base(ticker)
+        if base:
+            aliases.add(base.lower())
+            aliases.add(ticker.lower())
+    for name, ticker in STOCK_KEYWORD_MAP.items():
+        if normalize_ticker(ticker) in normalized:
+            aliases.add(name.lower())
+    return aliases
+
+def is_portfolio_news_question(question, context_items, portfolio_tickers):
+    q = (question or "").lower().strip()
+    if not q:
+        return False
+
+    aliases = portfolio_aliases(portfolio_tickers)
+    if any(alias and re.search(r'\b' + re.escape(alias) + r'\b', q) for alias in aliases):
+        return True
+
+    portfolio_terms = [
+        'portfolio', 'holding', 'holdings', 'my stock', 'my stocks',
+        'added stock', 'watchlist', 'news', 'impact', 'affected',
+        'why', 'what happened', 'should i', 'risk', 'bullish', 'bearish',
+        'confidence', 'move', 'reaction', 'summary', 'latest',
+    ]
+    if not any(term in q for term in portfolio_terms):
+        return False
+
+    context_text = " ".join(
+        f"{item.get('headline', '')} {item.get('explanation', '')} "
+        + " ".join(str(stock.get("reason") or "") for stock in item.get("stocks", []))
+        for item in context_items
+    ).lower()
+    q_tokens = {tok for tok in re.findall(r'[a-z]{4,}', q) if tok not in {
+        'what', 'when', 'where', 'which', 'about', 'from', 'that', 'this',
+        'will', 'with', 'have', 'does', 'there', 'their', 'your',
+    }}
+    return bool(q_tokens and any(tok in context_text for tok in q_tokens))
+
 def fallback_portfolio_answer(question, context_items, portfolio_tickers):
     if not context_items:
         return "I do not have saved portfolio-linked news for those added stocks yet."
@@ -2503,15 +2560,15 @@ def fallback_portfolio_answer(question, context_items, portfolio_tickers):
             if s.get("diff_pct") is not None:
                 move = f", move {s['diff_pct']:+.2f}%"
             stock_bits.append(
-                f"{s.get('ticker')} {s.get('impact', '')}"
-                f" ({s.get('confidence_score', 'NA')}%{move})"
+                f"- **{s.get('ticker')}**: {s.get('impact', '')} "
+                f"({s.get('confidence_score', 'NA')}% confidence{move})"
             )
         if stock_bits:
-            lines.append(f"{item.get('headline')} -> " + "; ".join(stock_bits))
+            lines.append(f"**News Used:** {item.get('headline')}\n" + "\n".join(stock_bits))
 
     if not lines:
         return "I found portfolio-linked news, but not enough detail to answer that specific question."
-    return "From your saved portfolio news: " + " | ".join(lines[:3])
+    return "**Answer**\nFrom your saved portfolio news:\n\n" + "\n\n".join(lines[:3])
 
 @app.route('/api/portfolio-assistant', methods=['POST'])
 def portfolio_assistant():
@@ -2548,6 +2605,14 @@ def portfolio_assistant():
             "tickers": normalized_tickers,
         })
 
+    if not is_portfolio_news_question(question, context_items, normalized_tickers):
+        return jsonify({
+            "answer": "I can only answer from your added portfolio stocks and their saved news.",
+            "context_count": len(context_items),
+            "tickers": normalized_tickers,
+            "skipped_ai": True,
+        })
+
     context_lines = []
     for item in context_items:
         stock_lines = []
@@ -2570,7 +2635,19 @@ def portfolio_assistant():
 You may answer ONLY using the user's added portfolio tickers and the saved news context below.
 If the question is outside these portfolio tickers or outside this news context, say exactly:
 "I can only answer from your added portfolio stocks and their saved news."
-Do not invent facts, prices, targets, or news. Keep the answer concise and answer only the question asked.
+Do not invent facts, prices, targets, or news. Answer only the question asked.
+
+Format the answer in clean Markdown:
+**Answer**
+1-3 short sentences.
+
+**Portfolio Impact**
+- TICKER: direction, confidence, and what the saved news implies.
+
+**News Used**
+- The exact saved headline(s) used.
+
+If there is not enough saved context, say that clearly instead of guessing.
 
 Portfolio tickers: {', '.join(normalized_tickers)}
 
@@ -2762,12 +2839,17 @@ if __name__ == '__main__':
     # Small delay so DB is fully ready before workers start writing
     time.sleep(2)
 
-    # Start background threads
-    engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
-    engine_thread.start()
+    run_workers = os.environ.get("ALPHA_LENS_SKIP_WORKERS", "").lower() not in ("1", "true", "yes")
 
-    yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
-    yf_thread.start()
+    if run_workers:
+        # Start background threads
+        engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
+        engine_thread.start()
+
+        yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
+        yf_thread.start()
+    else:
+        print("[SYSTEM] Background workers skipped for local UI server.")
 
     # Threaded=True allows the background AI loop to run alongside the website
     # use_reloader=False prevents double execution of our background threads on restart

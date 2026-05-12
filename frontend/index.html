@@ -1331,6 +1331,23 @@
             }[ch]));
         }
 
+        function formatAssistantAnswer(text) {
+            const safe = escapeHtml(text)
+                .replace(/\*\*([^*]+)\*\*/g, '<strong class="text-white font-bold">$1</strong>');
+
+            return safe.split('\n').map(line => {
+                const trimmed = line.trim();
+                if (!trimmed) return '<div class="h-2"></div>';
+                if (trimmed.startsWith('- ')) {
+                    return `<div class="flex gap-2"><span class="text-cyan-400">•</span><span>${trimmed.slice(2)}</span></div>`;
+                }
+                if (/^\d+\.\s/.test(trimmed)) {
+                    return `<div>${trimmed}</div>`;
+                }
+                return `<div>${trimmed}</div>`;
+            }).join('');
+        }
+
         function saveWatchlist() {
             localStorage.setItem('alpha_lens_watchlist', JSON.stringify(watchlist));
             renderWatchlistPanel();
@@ -1478,7 +1495,7 @@
                 ? 'ml-8 bg-cyan-500/10 border-cyan-400/20 text-cyan-50'
                 : 'mr-8 bg-black/30 border-white/10 text-slate-300'}`;
             msg.innerHTML = `<div class="text-[9px] uppercase tracking-widest font-bold mb-1 ${isUser ? 'text-cyan-300' : 'text-slate-500'}">${isUser ? 'You' : 'Assistant'}</div>
-                <div class="whitespace-pre-wrap">${escapeHtml(text)}</div>`;
+                <div class="${isUser ? 'whitespace-pre-wrap' : 'space-y-1'}">${isUser ? escapeHtml(text) : formatAssistantAnswer(text)}</div>`;
             container.appendChild(msg);
             container.scrollTop = container.scrollHeight;
         }
@@ -1491,6 +1508,60 @@
             sendBtn.disabled = disabled;
             input.disabled = portfolioAssistantBusy;
             input.placeholder = watchlist.length === 0 ? 'Add portfolio stocks first' : 'Ask about portfolio news...';
+        }
+
+        function getPortfolioNewsForQuestion(question) {
+            const q = (question || '').toLowerCase();
+            const watchlistSymbols = new Set(watchlist.map(s => tickerSymbol(s.ticker)));
+            const mentionedPortfolioSymbols = [...watchlistSymbols].filter(sym => q.includes(sym.toLowerCase()));
+            const mentionsAddedName = watchlist.some(stock => {
+                const name = (stock.name || '').toLowerCase();
+                return name && name.length > 2 && q.includes(name);
+            });
+            const portfolioTerms = ['portfolio', 'holding', 'watchlist', 'news', 'impact', 'risk', 'view', 'bullish', 'bearish', 'move'];
+
+            if (mentionedPortfolioSymbols.length === 0 && !mentionsAddedName && !portfolioTerms.some(term => q.includes(term))) {
+                return [];
+            }
+
+            return globalNewsData.filter(news => {
+                if (!news.affected_stocks || news.affected_stocks.length === 0) return false;
+                return news.affected_stocks.some(stock => {
+                    const symbol = tickerSymbol(stock.ticker);
+                    if (!watchlistSymbols.has(symbol)) return false;
+                    if (mentionedPortfolioSymbols.length > 0) return mentionedPortfolioSymbols.includes(symbol);
+                    return true;
+                });
+            }).slice(0, 5);
+        }
+
+        function buildLocalPortfolioAnswer(question) {
+            const relatedNews = getPortfolioNewsForQuestion(question);
+            if (relatedNews.length === 0) {
+                return 'I can only answer from your added portfolio stocks and their saved news.';
+            }
+
+            const watchlistSymbols = new Set(watchlist.map(s => tickerSymbol(s.ticker)));
+            const symbolsInAnswer = new Set();
+            const rows = [];
+            relatedNews.forEach(news => {
+                const stocks = (news.affected_stocks || []).filter(stock => watchlistSymbols.has(tickerSymbol(stock.ticker)));
+                stocks.forEach(stock => {
+                    symbolsInAnswer.add(stock.ticker);
+                    const confidence = stock.confidence_score || 'NA';
+                    rows.push(`- **${stock.ticker}**: ${stock.impact || 'Impact pending'} (${confidence}% confidence) from "${news.headline}"`);
+                });
+            });
+            const stockLabel = [...symbolsInAnswer].join(', ') || 'the selected portfolio stock';
+
+            return `**Answer**
+Based only on saved portfolio news, I cannot project a full one-year view with fresh external data. The saved ${stockLabel}-related signals below show the current news-driven view.
+
+**Portfolio Impact**
+${rows.slice(0, 4).join('\n')}
+
+**News Used**
+${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         }
 
         async function askPortfolioAssistant(event) {
@@ -1519,7 +1590,7 @@
                 addPortfolioAssistantMessage('assistant', data.answer || 'I could not answer that from your portfolio news.');
             } catch (err) {
                 console.error('Portfolio assistant failed', err);
-                addPortfolioAssistantMessage('assistant', 'I could not reach the portfolio news assistant right now.');
+                addPortfolioAssistantMessage('assistant', buildLocalPortfolioAnswer(question));
             } finally {
                 portfolioAssistantBusy = false;
                 updatePortfolioAssistantState();
