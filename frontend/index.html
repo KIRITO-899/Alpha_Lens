@@ -334,8 +334,6 @@
                 <a href="#" id="nav-portfolio" onclick="switchTab('portfolio'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">News Affecting
                     Portfolio</a>
-                <a href="#" id="nav-flow" onclick="switchTab('flow'); return false;"
-                    class="nav-link text-slate-300 hover:text-white transition">News Flow</a>
                 <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Major Stocks
                     Affected</a>
@@ -497,28 +495,6 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- SYNC PORTFOLIO — sticky top right -->
-                <div id="sync-portfolio-panel"
-                    class="col-span-1 xl:col-span-4 space-y-8 xl:sticky xl:top-24 stock-mode-element">
-                    <div
-                        class="glass-panel tilt-card p-8 rounded-3xl relative overflow-hidden border border-blue-500/20 shadow-[0_0_30px_rgba(59,130,246,0.05)] text-center">
-                        <div
-                            class="w-14 h-14 bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-5 border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.2)]">
-                            <svg class="w-7 h-7 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z">
-                                </path>
-                            </svg>
-                        </div>
-                        <h2 class="text-xl font-display font-bold text-white mb-2">Sync Portfolio</h2>
-                        <p class="text-xs text-slate-400 mb-6 leading-relaxed">Connect your broker to scan live
-                            institutional news flow against your exact holdings.</p>
-                        <button onclick="switchTab('portfolio')"
-                            class="btn-glow px-6 py-2.5 w-full rounded-xl text-xs font-display font-bold text-white tracking-widest shadow-lg hover:scale-[1.02] transition-transform">CONNECT
-                            BROKER</button>
-                    </div>
-                </div>
             </div>
 
             <!-- ============================================== -->
@@ -671,27 +647,6 @@
             </div>
 
             <!-- ============================================== -->
-            <!-- VIEW 4: NEWS FLOW                             -->
-            <!-- ============================================== -->
-            <div id="view-flow" class="hidden max-w-5xl mx-auto w-full">
-                <div class="glass-panel p-6 md:p-8 rounded-3xl relative overflow-hidden mb-8 mt-4">
-                    <h1
-                        class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">
-                        Macro Sector Flow</h1>
-                    <p class="text-sm text-cyan-400 font-mono uppercase tracking-widest">Tracking how capital moves
-                        between sectors</p>
-                </div>
-                <div class="glass-panel p-10 rounded-3xl text-center border border-dashed border-white/20 bg-black/20">
-                    <div class="animate-pulse">
-                        <div class="h-2 bg-slate-700 rounded w-1/4 mx-auto mb-4"></div>
-                        <div class="h-2 bg-slate-700 rounded w-1/2 mx-auto mb-4"></div>
-                        <div class="h-2 bg-slate-700 rounded w-1/3 mx-auto"></div>
-                    </div>
-                    <p class="text-slate-500 mt-6 text-sm">Visual flow-map engine is currently initializing...</p>
-                </div>
-            </div>
-
-            <!-- ============================================== -->
             <!-- VIEW 5: MAJOR STOCKS AFFECTED                 -->
             <!-- ============================================== -->
             <div id="view-stocks" class="hidden max-w-6xl mx-auto w-full stock-mode-element">
@@ -725,7 +680,7 @@
         let currentUser = null;
         let currentArchiveFilter = 'all';
         let marketOpen = true;  // Updated from API — controls whether stock changes are shown
-        const tabs = ['top-news', 'all-news', 'portfolio', 'flow', 'stocks'];
+        const tabs = ['top-news', 'all-news', 'portfolio', 'stocks'];
 
         function setArchiveFilter(filter) {
             currentArchiveFilter = filter;
