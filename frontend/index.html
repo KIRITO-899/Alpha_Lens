@@ -722,13 +722,15 @@
         }
 
         async function handleGoogleResponse(response) {
-            const payload = JSON.parse(atob(response.credential.split('.')[1]));
-            const email = payload.email;
+            if (!response.credential) {
+                alert("Google did not return a credential.");
+                return;
+            }
             try {
                 const res = await fetch('/api/oauth-signin', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ account_id: email })
+                    body: JSON.stringify({ credential: response.credential })
                 });
                 const data = await res.json();
                 if (res.ok) {
