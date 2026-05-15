@@ -1,0 +1,13 @@
+flask
+requests
+google-genai
+google-auth>=2.0.0
+yfinance
+sendgrid
+feedparser
+pytz
+python-dotenv
+beautifulsoup4
+openai
+pandas
+werkzeug

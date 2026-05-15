@@ -29,7 +29,7 @@ from openai import OpenAI as OpenAIClient
 import angelone_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
-yf.set_tz_cache_location("venv/yf_cache")  # no-op in Angel One shim
+yf.set_tz_cache_location("yf_cache")  # no-op in Angel One shim
 
 # Shared HTTP session for network calls to reduce connection overhead.
 HTTP_SESSION = requests.Session()
@@ -47,7 +47,6 @@ from technical_analysis import (
     get_market_regime
 )
 from prediction_models import EnsemblePredictor
-import time
 
 _TICKER_CACHE = {}
 _TICKER_CACHE_TIME = {}
@@ -122,6 +121,8 @@ import performance_report
 # In-memory store for OTPs
 OTP_STORE = {}
 SENDGRID_API_KEY = os.environ.get("SENDGRID_API_KEY")
+SENDGRID_FROM_EMAIL = os.environ.get("SENDGRID_FROM_EMAIL")
+GOOGLE_OAUTH_CLIENT_ID = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
 
 # Use absolute paths so the server works from any working directory
 _APP_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -1490,11 +1491,11 @@ Return ONLY valid JSON matching this shape:
                     return results
                 except Exception as e:
                     print(f"   [AI Screener Error] {e} -- no keyword fallback used")
-                    return []
+                    return [_no_impact_row(article, 0, "AI_ERROR") for article in articles_batch]
 
             # AI-only stock selection: do not create keyword-based stock signals.
             print("   [AI Screener] Gemini client unavailable; no keyword stock mapping used")
-            return []
+            return [_no_impact_row(article, 0, "AI_UNAVAILABLE") for article in articles_batch]
 
         # Process in batches of 25 headlines per AI call
         BATCH_SIZE = 25
@@ -2889,6 +2890,24 @@ Question: {question}
         "tickers": normalized_tickers,
     })
 
+def _verify_google_id_token(credential_jwt):
+    """Returns dict with at least 'email' on success, or raises ValueError."""
+    try:
+        from google.oauth2 import id_token
+        from google.auth.transport import requests as google_auth_requests
+    except ImportError as e:
+        raise ValueError(
+            "Install google-auth: pip install google-auth"
+        ) from e
+    if not GOOGLE_OAUTH_CLIENT_ID:
+        raise ValueError("GOOGLE_OAUTH_CLIENT_ID is not configured")
+    return id_token.verify_oauth2_token(
+        credential_jwt,
+        google_auth_requests.Request(),
+        GOOGLE_OAUTH_CLIENT_ID,
+    )
+
+
 @app.route('/api/send-otp', methods=['POST'])
 def send_otp():
     data = request.json
@@ -2897,11 +2916,16 @@ def send_otp():
     if not email:
         return jsonify({"error": "Email is required"}), 400
 
+    if not SENDGRID_API_KEY:
+        return jsonify({"error": "Email service is not configured (SENDGRID_API_KEY)."}), 503
+    if not SENDGRID_FROM_EMAIL:
+        return jsonify({"error": "Email sender is not configured (SENDGRID_FROM_EMAIL)."}), 503
+
     otp = str(random.randint(100000, 999999))
     OTP_STORE[email] = otp
 
     message = Mail(
-        from_email='verified_sender@yourdomain.com',  # <--- CHANGE THIS TO YOUR VERIFIED SENDGRID EMAIL
+        from_email=SENDGRID_FROM_EMAIL,
         to_emails=email,
         subject='Alpha Lens - Your Authentication Code',
         html_content=f'''
@@ -2952,27 +2976,41 @@ def verify_otp():
 
 @app.route('/api/oauth-signin', methods=['POST'])
 def oauth_signin():
-    data = request.json
-    account_id = data.get('account_id') 
+    data = request.json or {}
+    credential = data.get('credential')
 
-    if not account_id:
-        return jsonify({"error": "Account ID required"}), 400
+    if not credential:
+        return jsonify({"error": "Google credential token is required."}), 400
+    if not GOOGLE_OAUTH_CLIENT_ID:
+        return jsonify({"error": "Google sign-in is not configured (GOOGLE_OAUTH_CLIENT_ID)."}), 503
+
+    try:
+        idinfo = _verify_google_id_token(credential)
+    except ValueError as e:
+        return jsonify({"error": f"Invalid Google token: {e!s}"}), 401
+    except Exception as e:
+        print(f"Google OAuth verify error: {e}")
+        return jsonify({"error": "Could not verify Google sign-in."}), 401
+
+    email = idinfo.get('email')
+    if not email or not idinfo.get('email_verified', True):
+        return jsonify({"error": "Google account email is missing or unverified."}), 400
 
     try:
         conn = sqlite3.connect(_USERS_DB)
         c = conn.cursor()
-        c.execute("SELECT email FROM users WHERE email = ?", (account_id,))
+        c.execute("SELECT email FROM users WHERE email = ?", (email,))
         user = c.fetchone()
-        
+
         if not user:
             dummy_password = generate_password_hash(secrets.token_hex(16))
-            c.execute("INSERT INTO users (email, password) VALUES (?, ?)", (account_id, dummy_password))
+            c.execute("INSERT INTO users (email, password) VALUES (?, ?)", (email, dummy_password))
             conn.commit()
-        
+
         conn.close()
-        session['user'] = account_id
-        return jsonify({"message": "Authentication successful", "user": account_id}), 200
-    except Exception as e:
+        session['user'] = email
+        return jsonify({"message": "Authentication successful", "user": email}), 200
+    except Exception:
         return jsonify({"error": "Database error occurred."}), 500
 
 @app.route('/api/me', methods=['GET'])

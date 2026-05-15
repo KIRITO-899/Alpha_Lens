@@ -10,6 +10,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Space+Grotesk:wght@500;700;900&display=swap"
         rel="stylesheet">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📈</text></svg>">
 
     <!-- OFFICIAL GOOGLE AUTHENTICATION SCRIPT -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
@@ -721,13 +722,15 @@
         }
 
         async function handleGoogleResponse(response) {
-            const payload = JSON.parse(atob(response.credential.split('.')[1]));
-            const email = payload.email;
+            if (!response.credential) {
+                alert("Google did not return a credential.");
+                return;
+            }
             try {
                 const res = await fetch('/api/oauth-signin', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ account_id: email })
+                    body: JSON.stringify({ credential: response.credential })
                 });
                 const data = await res.json();
                 if (res.ok) {

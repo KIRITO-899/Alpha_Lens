@@ -27,11 +27,15 @@ logger.propagate = False
 
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
-# ── Credentials ────────────────────────────────────────────────────────────────
-AO_API_KEY     = os.environ.get("ANGELONE_API_KEY",     "Q3NL2DKd")
-AO_CLIENT_ID   = os.environ.get("ANGELONE_CLIENT_ID",  "V60419002")
-AO_PIN         = os.environ.get("ANGELONE_PIN",         "1729")
-AO_TOTP_SECRET = os.environ.get("ANGELONE_TOTP_SECRET","IPDPRMRWSHYLQTMF7Y4MQLTXE4")
+# ── Credentials (no defaults — set all four in .env or only Yahoo fallback is used) ──
+AO_API_KEY     = os.environ.get("ANGELONE_API_KEY", "").strip()
+AO_CLIENT_ID   = os.environ.get("ANGELONE_CLIENT_ID", "").strip()
+AO_PIN         = os.environ.get("ANGELONE_PIN", "").strip()
+AO_TOTP_SECRET = os.environ.get("ANGELONE_TOTP_SECRET", "").strip()
+
+
+def _angel_one_configured():
+    return bool(AO_API_KEY and AO_CLIENT_ID and AO_PIN and AO_TOTP_SECRET)
 
 AO_BASE_URL = "https://apiconnect.angelone.in"
 
@@ -183,6 +187,8 @@ def _totp_now(secret, interval=30, digits=6):
 def _ao_login():
     """Authenticate with Angel One SmartAPI using TOTP."""
     global _jwt_token, _session_date
+    if not _angel_one_configured():
+        return False
     try:
         try:
             import pyotp
@@ -222,6 +228,8 @@ def _ao_login():
 def _ensure_session():
     """Ensure a valid Angel One session, re-authenticating daily."""
     global _jwt_token, _session_date
+    if not _angel_one_configured():
+        return False
     with _session_lock:
         today = datetime.now(timezone.utc).date()
         if _jwt_token is None or _session_date != today:
@@ -529,6 +537,7 @@ def download(tickers, period="7d", interval="1m", progress=False, auto_adjust=Tr
 def _bg_init():
     """Boot Angel One session and scrip master in background thread."""
     _load_scrip_master()
-    _ensure_session()
+    if _angel_one_configured():
+        _ensure_session()
 
 threading.Thread(target=_bg_init, daemon=True).start()
