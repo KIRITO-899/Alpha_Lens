@@ -229,6 +229,31 @@ python app.py
 This starts the Flask server along with two background worker threads:
 
 - **AI News Engine** — Continuously scrapes RSS feeds, analyzes headlines with Gemini, runs them through the multi-model ensemble predictor, applies technical confirmation, and stores results in `news_cache.db`. Fuzzy duplicate detection prevents near-identical headlines from generating redundant signals.
+
+### Running the background workers automatically on Windows
+
+A worker-only mode is available so the data collector can run without the web UI.
+
+1. Create the startup shortcut by running the PowerShell helper from the repo root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File setup_windows_startup.ps1
+```
+
+2. The helper creates a shortcut in your Windows Startup folder that runs:
+
+```bat
+run_alpha_lens_workers.bat
+```
+
+3. This starts the Alpha Lens background workers automatically when you sign in.
+
+If you want to run the workers manually instead of using startup automation:
+
+```bash
+python backend/app.py --workers-only
+```
+
 - **yfinance Price Worker** — Monitors all active trade positions every 10 seconds, checking if targets or stop-losses have been hit.
 
 Open your browser and navigate to `http://127.0.0.1:5000`.
