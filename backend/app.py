@@ -31,6 +31,11 @@ import logging
 from email.utils import parsedate_to_datetime
 yf.set_tz_cache_location("venv/yf_cache")  # no-op in Angel One shim
 
+# Shared HTTP session for network calls to reduce connection overhead.
+HTTP_SESSION = requests.Session()
+HTTP_SESSION.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+ARTICLE_TEXT_CACHE = {}
+
 # Global write lock — ensures only one thread writes to SQLite at a time.
 # Reads do NOT need this lock (WAL mode allows concurrent reads).
 DB_WRITE_LOCK = threading.Lock()
@@ -246,6 +251,16 @@ def init_news_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_headline ON news(headline)")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_stockimpact_news_ticker ON stock_impact(news_id, ticker)")
+    except sqlite3.OperationalError:
+        pass
+    c.execute("CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_stockimpact_news_id ON stock_impact(news_id)")
     conn.commit()
     conn.close()
 
@@ -305,18 +320,22 @@ def scrape_article_text(url):
     """Fetches the actual article body text (first 3 paragraphs) to give AI better context."""
     if not url or "google.com" in url:
         return ""
+    cached = ARTICLE_TEXT_CACHE.get(url)
+    if cached is not None:
+        return cached
+
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        resp = requests.get(url, headers=headers, timeout=5)
+        resp = HTTP_SESSION.get(url, timeout=5)
         if resp.status_code == 200:
             soup = BeautifulSoup(resp.text, 'html.parser')
-            # Try to find main article body
             paragraphs = soup.find_all('p')
             text = " ".join([p.get_text().strip() for p in paragraphs if len(p.get_text().strip()) > 50])
-            # Limit to ~1500 chars to avoid massive Gemini payloads
-            return text[:1500]
+            result = text[:1500]
+            ARTICLE_TEXT_CACHE[url] = result
+            return result
     except Exception as e:
         print(f"   [Scrape Error] {url}: {e}")
+    ARTICLE_TEXT_CACHE[url] = ""
     return ""
 
 def clean_json(raw_text):
@@ -1012,9 +1031,8 @@ def get_base_price_at_time(ticker, pub_dt_ist):
 
     # -- FALLBACK: Yahoo Finance 5d/1m chart --
     try:
-        _h = {"User-Agent": "Mozilla/5.0"}
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1m"
-        resp = requests.get(url, headers=_h, timeout=10)
+        resp = HTTP_SESSION.get(url, timeout=10)
         data = resp.json()
         result   = data['chart']['result'][0]
         tss      = result['timestamp']
@@ -1133,6 +1151,7 @@ def ai_news_worker():
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 7-Model Ensemble (>= 70 score & 5/7 vote)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = 1.5% stop : 3% target")
+    ensemble = EnsemblePredictor()
     
     # Initialize SEEN_HEADLINES from DB on first run.
     # CRITICAL: Only block re-processing of news that ALREADY HAS stock signals.
@@ -1531,10 +1550,14 @@ Return ONLY valid JSON matching this shape:
                     _time = signal['time']
                     _cat = category
                     def _insert_news(conn, c, _hl=_hl, _time=_time, _cat=_cat):
-                        c.execute('''INSERT INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
+                        c.execute('''INSERT OR IGNORE INTO news (headline, news_time, aam_janta_translation, macro_pathway, category)
                             VALUES (?, ?, ?, ?, ?)''',
                             (_hl, _time, None, '[]', _cat))
-                        return c.lastrowid
+                        if c.lastrowid:
+                            return c.lastrowid
+                        c.execute("SELECT id FROM news WHERE headline = ? LIMIT 1", (_hl,))
+                        row = c.fetchone()
+                        return row[0] if row else None
                     news_id = db_write(_insert_news)
                     if news_id:
                         new_article_ids.append({'id': news_id, 'headline': headline})
@@ -1553,7 +1576,6 @@ Return ONLY valid JSON matching this shape:
             if body_text:
                 ai_input = f"{headline}\nContext: {body_text}"
 
-            ensemble = EnsemblePredictor()
             approved_signals = []
             market_currently_open = is_market_open()
 
@@ -1641,23 +1663,16 @@ Return ONLY valid JSON matching this shape:
                 approved_signals.append((news_id, ticker, result['direction'], 2.5,
                                          view, reason, base_price, current_price_now,
                                          result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
-            
+
             # ── Save approved signals in one short atomic write ──
             if approved_signals:
                 _sigs = approved_signals
                 def _insert_signals(conn, c, _s=_sigs):
-                    for sig in _s:
-                        news_id_sig, ticker_sig = sig[0], sig[1]
-                        # Skip if this (news_id, ticker) already exists — prevents duplicates
-                        c.execute("SELECT 1 FROM stock_impact WHERE news_id=? AND ticker=?", (news_id_sig, ticker_sig))
-                        if c.fetchone():
-                            continue
-                        c.execute('''INSERT INTO stock_impact
-                            (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', sig)
+                    c.executemany('''INSERT OR IGNORE INTO stock_impact
+                        (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', _s)
                 db_write(_insert_signals)
                 print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({len(approved_signals)} alpha signals)")
-        
         print(f"PHASE 1 DONE: {len(new_article_ids)} new headlines saved INSTANTLY to database!")
 
         
@@ -1804,9 +1819,8 @@ def _fetch_ohlc_direct(ticker, days=14):
     # which breaks historical target/stop hit detection).
     # Fallback: Yahoo Finance chart API
     try:
-        yf_headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range={days}d&interval=1d"
-        resp = requests.get(url, headers=yf_headers, timeout=8)
+        resp = HTTP_SESSION.get(url, timeout=8)
         result = resp.json()['chart']['result'][0]
         timestamps = result.get('timestamp', [])
         quote  = result['indicators']['quote'][0]
