@@ -10,6 +10,7 @@ import time
 import json
 from werkzeug.security import generate_password_hash
 import os
+import argparse
 from dotenv import load_dotenv
 
 # Load environment variables from parent directory
@@ -3192,22 +3193,40 @@ def get_stock_market_change_quote(ticker, market_open=None):
 def get_stock_price(ticker):
     return jsonify(get_stock_market_change_quote(ticker))
 
+def start_background_workers():
+    engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
+    engine_thread.start()
+
+    yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
+    yf_thread.start()
+    return engine_thread, yf_thread
+
 if __name__ == '__main__':
     # Small delay so DB is fully ready before workers start writing
     time.sleep(2)
 
-    run_workers = os.environ.get("ALPHA_LENS_SKIP_WORKERS", "").lower() not in ("1", "true", "yes")
+    parser = argparse.ArgumentParser(description='Alpha Lens backend startup mode')
+    parser.add_argument('--workers-only', action='store_true', help='Run background workers without launching the Flask UI')
+    parser.add_argument('--skip-workers', action='store_true', help='Do not start background workers')
+    parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', 5000)), help='Port for the Flask UI')
+    args = parser.parse_args()
 
+    run_workers = not args.skip_workers and os.environ.get("ALPHA_LENS_SKIP_WORKERS", "").lower() not in ("1", "true", "yes")
+    if args.workers_only:
+        run_workers = True
+
+    engine_thread = None
+    yf_thread = None
     if run_workers:
-        # Start background threads
-        engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
-        engine_thread.start()
-
-        yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
-        yf_thread.start()
+        engine_thread, yf_thread = start_background_workers()
     else:
         print("[SYSTEM] Background workers skipped for local UI server.")
 
-    # Threaded=True allows the background AI loop to run alongside the website
-    # use_reloader=False prevents double execution of our background threads on restart
-    app.run(debug=True, port=5000, threaded=True, use_reloader=False)
+    if args.workers_only:
+        print("[SYSTEM] Worker-only mode active. Flask UI is disabled.")
+        engine_thread.join()
+        yf_thread.join()
+    else:
+        # Threaded=True allows the background AI loop to run alongside the website
+        # use_reloader=False prevents double execution of our background threads on restart
+        app.run(debug=True, port=args.port, threaded=True, use_reloader=False)
