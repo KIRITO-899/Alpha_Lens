@@ -1179,8 +1179,8 @@
                 const isClosed = isResolved || isExpired;
 
                 // Market change is always current value vs previous close.
-                const diffPct = (stock.market_change_pct != null) ? stock.market_change_pct
-                    : (stock.diff_pct != null) ? stock.diff_pct
+                const diffPct = (stock.diff_pct != null) ? stock.diff_pct
+                    : (stock.market_change_pct != null) ? stock.market_change_pct
                     : (hasPrice && hasCurrent ? ((currentPrice - basePrice) / basePrice * 100) : null);
                 const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
                 const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
@@ -1675,8 +1675,8 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                     const cp = parseFloat(stock.current_price);
                     const hasP = !isNaN(bp) && bp > 0;
                     const hasC = !isNaN(cp) && cp > 0;
-                    const diff = (stock.market_change_pct != null) ? stock.market_change_pct
-                        : (stock.diff_pct != null) ? stock.diff_pct
+                    const diff = (stock.diff_pct != null) ? stock.diff_pct
+                        : (stock.market_change_pct != null) ? stock.market_change_pct
                         : (hasP && hasC ? ((cp - bp) / bp * 100) : null);
                     const diffStr = diff !== null ? (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%' : '—';
                     const diffCls = diff === null ? 'text-slate-400' : diff >= 0 ? 'text-green-400' : 'text-red-400';
@@ -1771,9 +1771,10 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 const cp = parseFloat(stock.current_price);
                 const hasPrice = !isNaN(bp) && bp > 0;
                 const hasCurrent = !isNaN(cp) && cp > 0;
-                // Market change is always current value vs previous close.
-                const diffPct = (stock.market_change_pct != null) ? stock.market_change_pct
-                    : (stock.diff_pct != null) ? stock.diff_pct
+                // Stock signal change is based on news-time base price first;
+                // fallback to market change only if signal diff is unavailable.
+                const diffPct = (stock.diff_pct != null) ? stock.diff_pct
+                    : (stock.market_change_pct != null) ? stock.market_change_pct
                     : (hasPrice && hasCurrent ? ((cp - bp) / bp * 100) : null);
                 const diffPctStr = diffPct !== null ? (diffPct >= 0 ? '+' : '') + diffPct.toFixed(2) + '%' : '—';
                 const diffColorCls = diffPct === null ? 'text-slate-400' : diffPct >= 0 ? 'text-green-400' : 'text-red-400';
