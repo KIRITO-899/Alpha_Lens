@@ -1889,6 +1889,136 @@ def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is
         return None, None
 
 
+def _parse_created_at(created_at_str):
+    try:
+        if '+' in created_at_str or 'GMT' in created_at_str:
+            dt = parsedate_to_datetime(created_at_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt
+        return datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+    except Exception:
+        try:
+            return datetime.fromisoformat(created_at_str)
+        except Exception:
+            return None
+
+
+def _published_during_nse_hours(created_dt_utc):
+    IST = timezone(timedelta(hours=5, minutes=30))
+    dt_ist = created_dt_utc.astimezone(IST)
+    if dt_ist.weekday() >= 5:
+        return False
+    minutes = dt_ist.hour * 60 + dt_ist.minute
+    return (9 * 60 + 15) <= minutes <= (15 * 60 + 30)
+
+
+def _next_session_open_price(ticker, signal_dt_utc, ohlc_rows):
+    if not ohlc_rows:
+        return None, None
+    IST = timezone(timedelta(hours=5, minutes=30))
+    signal_date_ist = signal_dt_utc.astimezone(IST).date()
+    for (bar_dt, o, h, l, c) in ohlc_rows:
+        bar_date_ist = bar_dt.astimezone(IST).date()
+        if bar_date_ist > signal_date_ist:
+            return o, bar_date_ist
+    return None, None
+
+
+def repair_existing_signal_statuses(days=14):
+    print("[REPAIR] Reconciling recent signals against 2%/1% rules...")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+    conn = connect_news_db()
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, ticker, impact, base_price, current_price, status, created_at
+        FROM stock_impact
+        WHERE created_at > ?
+    """, (cutoff,))
+    rows = c.fetchall()
+    if not rows:
+        conn.close()
+        print("[REPAIR] No recent signals found to reconcile.")
+        return
+
+    ohlc_cache = {}
+    updates = []
+    fixed = 0
+
+    for row in rows:
+        stock_id = row['id']
+        ticker = row['ticker']
+        impact = row['impact'] or ''
+        base_price = row['base_price'] or 0.0
+        current_price = row['current_price'] or 0.0
+        status = row['status'] or 'Active View'
+        created_at_str = row['created_at']
+
+        created_dt = _parse_created_at(created_at_str)
+        if not created_dt:
+            continue
+
+        if current_price <= 0:
+            current_price = get_robust_price(ticker)
+            if current_price <= 0:
+                continue
+
+        if base_price <= 0:
+            base_price = current_price
+
+        signal_market_hours = _published_during_nse_hours(created_dt)
+        start_date = None
+
+        if not signal_market_hours:
+            if ticker not in ohlc_cache:
+                ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
+            next_open, next_session_date = _next_session_open_price(ticker, created_dt, ohlc_cache[ticker])
+            if next_open and next_open > 0:
+                if abs(base_price - next_open) > 0.01:
+                    base_price = next_open
+                start_date = next_session_date
+
+        if start_date is None:
+            start_date = created_dt.astimezone(timezone(timedelta(hours=5, minutes=30))).date()
+
+        is_bullish = 'bullish' in impact.lower()
+        target_pct = 2.0
+        stop_pct = 1.0
+        if ticker not in ohlc_cache:
+            ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
+
+        hist_status, hist_diff = check_historical_hits(
+            ticker, created_dt, base_price, target_pct, stop_pct, is_bullish,
+            ohlc_rows=ohlc_cache.get(ticker), start_date=start_date
+        )
+
+        if hist_status:
+            new_status = hist_status
+            diff_percent = hist_diff
+        else:
+            age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
+            diff_percent = round(((current_price - base_price) / base_price) * 100, 2) if base_price > 0 else 0.0
+            new_status = 'Expired' if age_hours >= 72 else 'Active View'
+
+        if abs(base_price - (row['base_price'] or 0.0)) > 0.01 or new_status != status or abs(diff_percent - (row['estimated_change_percent'] or 0.0)) > 0.1:
+            updates.append((current_price, base_price, new_status, diff_percent, stock_id))
+            fixed += 1
+
+    if updates:
+        def _apply_repair(conn_inner, c_inner):
+            c_inner.executemany(
+                """UPDATE stock_impact
+                   SET current_price = ?, base_price = ?, status = ?, estimated_change_percent = ?
+                   WHERE id = ?""",
+                updates
+            )
+        db_write(_apply_repair)
+
+    conn.close()
+    print(f"[REPAIR] Completed. Fixed {fixed} signal rows out of {len(rows)} reviewed.")
+
+
 def yfinance_worker():
     print("YFinance Live Price Engine v2.4 Started. Always-Update + Market-Aware Evaluation...")
 
@@ -2015,8 +2145,8 @@ def yfinance_worker():
                 if status == 'Active View':
                     impact_lower = impact.lower()
                     is_bullish = 'bullish' in impact_lower
-                    target_pct = 3.0   # Hit if stock moves 3% in predicted direction
-                    stop_pct   = 1.5   # Stop loss if stock moves 1.5% against prediction
+                    target_pct = 2.0   # Hit if stock moves 2% in predicted direction
+                    stop_pct   = 1.0   # Stop loss if stock moves 1% against prediction
 
                     # ── 1. Multi-day catch-up (History from NEXT SESSION for after-hours signals) ──
                     try:
@@ -3219,6 +3349,9 @@ if __name__ == '__main__':
     run_workers = not args.skip_workers and os.environ.get("ALPHA_LENS_SKIP_WORKERS", "").lower() not in ("1", "true", "yes")
     if args.workers_only:
         run_workers = True
+
+    if os.environ.get("ALPHA_LENS_SKIP_AUTO_REPAIR", "").lower() not in ("1", "true", "yes"):
+        repair_existing_signal_statuses(days=14)
 
     engine_thread = None
     yf_thread = None

@@ -61,7 +61,7 @@ def get_next_open_price(ohlc_rows, signal_date_ist, was_during_market):
                 return o, bar_date
     return None, None
 
-def evaluate_outcome(ohlc_rows, base_price, next_session_date, is_bullish, target_pct=3.0, stop_pct=1.5):
+def evaluate_outcome(ohlc_rows, base_price, next_session_date, is_bullish, target_pct=2.0, stop_pct=1.0):
     """Check OHLC bars from next_session_date onwards for target/stop hits."""
     if not base_price or base_price <= 0:
         return None, None
