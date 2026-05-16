@@ -1116,7 +1116,7 @@
                         <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         ${dateLabel} · ${timeLabel}
                     </div>
-                    <h4 class="text-xs font-bold text-slate-200 line-clamp-2">${newsItem.headline}</h4>
+                    <h4 class="text-xs font-bold text-slate-200 line-clamp-2">${escapeHtml(newsItem.headline)}</h4>
                 `;
                 div.onclick = () => loadArticleIntoMainViewer(newsItem);
                 container.appendChild(div);
@@ -1207,12 +1207,12 @@
                 tr.innerHTML = `
                     <td class="py-4">
                         ${closedBanner}
-                        <div class="font-bold text-white text-base tracking-wide">${stock.ticker}</div>
+                        <div class="font-bold text-white text-base tracking-wide">${escapeHtml(stock.ticker)}</div>
                         <div class="flex items-center gap-2 mt-1">
                             <div class="text-[9px] font-bold ${statusBadge.cls}">${statusBadge.text}</div>
                             ${getConfidenceBadge(stock.confidence_score)}
                         </div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-widest mt-1 bg-black/40 inline-block px-2 py-0.5 rounded border border-white/5">${stock.view || 'Pending'}</div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-widest mt-1 bg-black/40 inline-block px-2 py-0.5 rounded border border-white/5">${escapeHtml(stock.view || 'Pending')}</div>
                     </td>
                     <td class="py-4 text-right">
                         <div class="text-white font-bold font-mono text-sm">${hasPrice ? '₹' + basePrice.toFixed(2) : '—'}</div>
@@ -1224,7 +1224,7 @@
                         ${priceBadge}
                     </td>
                     <td class="py-4 text-right">
-                        <span class="border px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-widest ${colorClasses}">${stock.impact}</span>
+                        <span class="border px-3 py-1.5 rounded-lg font-bold text-[11px] uppercase tracking-widest ${colorClasses}">${escapeHtml(stock.impact)}</span>
                     </td>
                 `;
                 tableBody.appendChild(tr);
@@ -1287,7 +1287,7 @@
                                 'text-red-400 border-red-500/30 bg-red-900/20';
                         impactedStocksHtml += `
                             <div class="flex flex-col gap-1">
-                                <span class="text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}">${stock.ticker}</span>
+                                <span class="text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}">${escapeHtml(stock.ticker)}</span>
                                 ${getConfidenceBadge(stock.confidence_score)}
                             </div>`;
                     });
@@ -1300,7 +1300,7 @@
                         ${dateStr} · ${timeStr}
                     </div>
                     <div class="flex items-start justify-between gap-4 mb-3">
-                        <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${news.headline}</h3>
+                        <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${escapeHtml(news.headline)}</h3>
                     </div>
                     <div class="stock-badge-container items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300"
                          style="display: ${isNonStockMode ? 'none' : 'flex'}">
@@ -1384,8 +1384,8 @@
                             div.className = `px-4 py-3 hover:bg-white/10 cursor-pointer flex justify-between items-center border-b border-white/5 last:border-0 ${isAdded ? 'opacity-50' : ''}`;
                             div.innerHTML = `
                                 <div>
-                                    <div class="text-sm font-bold text-white">${stock.ticker}</div>
-                                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">${stock.name}</div>
+                                    <div class="text-sm font-bold text-white">${escapeHtml(stock.ticker)}</div>
+                                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">${escapeHtml(stock.name)}</div>
                                 </div>
                                 ${isAdded ? '<span class="text-[10px] text-green-400 font-bold border border-green-500/30 px-2 py-0.5 rounded">ADDED</span>' : ''}
                             `;
@@ -1468,19 +1468,22 @@
                 card.className = "flex items-center justify-between p-3 bg-black/40 border border-white/10 rounded-xl hover:border-cyan-500/30 transition-colors group";
                 card.innerHTML = `
                     <div class="flex flex-col">
-                        <span class="font-bold font-display text-white tracking-widest text-sm">${stock.ticker}</span>
-                        <span class="text-[9px] text-slate-400 uppercase tracking-widest max-w-[150px] truncate">${stock.name}</span>
+                        <span class="font-bold font-display text-white tracking-widest text-sm">${escapeHtml(stock.ticker)}</span>
+                        <span class="text-[9px] text-slate-400 uppercase tracking-widest max-w-[150px] truncate">${escapeHtml(stock.name)}</span>
                     </div>
                     <div class="flex items-center gap-4">
                         <div class="text-right">
                             <div class="font-mono text-sm font-bold text-white">${priceFmt}</div>
                             ${changeHtml}
                         </div>
-                        <button onclick="removeStockFromWatchlist('${stock.ticker}')" class="text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1">
+                        <button type="button" class="remove-watchlist-stock text-slate-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
                         </button>
                     </div>
                 `;
+                card.querySelector('.remove-watchlist-stock')?.addEventListener('click', () => {
+                    removeStockFromWatchlist(stock.ticker);
+                });
                 container.appendChild(card);
             });
         }
@@ -1693,8 +1696,8 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                         <div class="flex items-center justify-between py-3 border-b border-white/5 last:border-0 hover:bg-white/[0.02] transition-colors">
                             <div class="flex flex-col gap-1">
                                 <div class="flex items-center gap-2">
-                                    <span class="font-bold font-display text-white text-sm tracking-widest">${stock.ticker}</span>
-                                    <span class="text-[9px] font-bold uppercase ${tCol}">${stock.impact}</span>
+                                    <span class="font-bold font-display text-white text-sm tracking-widest">${escapeHtml(stock.ticker)}</span>
+                                    <span class="text-[9px] font-bold uppercase ${tCol}">${escapeHtml(stock.impact)}</span>
                                 </div>
                                 <div class="flex items-center gap-2">
                                     <div class="text-[9px] ${statusBadge.cls} font-bold">${statusBadge.text}</div>
@@ -1714,7 +1717,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                         <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         ${dateStr} · ${timeStr}
                     </div>
-                    <h3 class="text-base font-bold text-slate-100 leading-snug mb-4">${news.headline}</h3>
+                    <h3 class="text-base font-bold text-slate-100 leading-snug mb-4">${escapeHtml(news.headline)}</h3>
                     <div class="bg-black/30 rounded-xl px-4 py-1">${stockRowsHtml}</div>
                 `;
                 container.appendChild(card);
@@ -1785,10 +1788,10 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 card.innerHTML = `
                     <div class="flex justify-between items-start mb-3">
                         <div>
-                            <h3 class="text-xl font-bold font-display text-white tracking-widest">${stock.ticker}</h3>
+                            <h3 class="text-xl font-bold font-display text-white tracking-widest">${escapeHtml(stock.ticker)}</h3>
                             <span class="text-[9px] uppercase font-bold ${statusBadge.cls}">${statusBadge.text}</span>
                         </div>
-                        <span class="text-[10px] uppercase font-bold px-2 py-1 rounded border ${textCol} border-current">${stock.impact}</span>
+                        <span class="text-[10px] uppercase font-bold px-2 py-1 rounded border ${textCol} border-current">${escapeHtml(stock.impact)}</span>
                     </div>
                     <div class="grid grid-cols-3 gap-2 text-xs font-mono mb-3 bg-black/30 rounded-lg p-3">
                         <div class="text-center">
@@ -1804,10 +1807,10 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                             <div class="font-bold ${diffColorCls}">${diffPctStr}</div>
                         </div>
                     </div>
-                    <p class="text-xs text-slate-300 leading-relaxed mb-3 line-clamp-2">${stock.reason || 'Analyzing macro flow...'}</p>
+                    <p class="text-xs text-slate-300 leading-relaxed mb-3 line-clamp-2">${escapeHtml(stock.reason || 'Analyzing macro flow...')}</p>
                     <div class="flex items-center gap-1 text-[9px] text-slate-500 border-t border-white/10 pt-2">
                         <svg class="w-3 h-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 20H5a2 2 0 01-2-2V6a2 2 0 012-2h10a2 2 0 012 2v1m2 13a2 2 0 01-2-2V7m2 13a2 2 0 002-2V9a2 2 0 00-2-2h-2m-4-3H9M7 16h6M7 12h6m-6 0h.01"/></svg>
-                        <span class="line-clamp-1">${stock.headline}</span>
+                        <span class="line-clamp-1">${escapeHtml(stock.headline)}</span>
                     </div>
                 `;
                 container.appendChild(card);
@@ -1881,7 +1884,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                         <div class="index-card glass-panel rounded-2xl p-4 cursor-default"
                              style="--card-accent:${accentColor};background:${bgGrad};">
                             <div class="flex items-center justify-between mb-2">
-                                <span class="text-[9px] font-bold tracking-[0.15em] text-slate-400 uppercase">${idx.name}</span>
+                                <span class="text-[9px] font-bold tracking-[0.15em] text-slate-400 uppercase">${escapeHtml(idx.name)}</span>
                                 ${statusBadge}
                             </div>
                             <div class="text-xl font-display font-black text-white tracking-tight mb-2">${priceFmt}</div>

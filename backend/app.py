@@ -112,10 +112,14 @@ def is_market_open():
     return (9 * 60 + 15) <= t <= (15 * 60 + 30)
 
 app = Flask(__name__, template_folder='../frontend', static_folder='../frontend', static_url_path='/')
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "super_secret_alpha_lens_key")
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
 # Minimum AI confidence to accept a prediction
 MIN_CONFIDENCE = 50
+
+# Signal evaluation rules used by startup repair and the live price worker.
+TRADE_TARGET_PCT = 2.0
+TRADE_STOP_PCT = 1.0
 
 import performance_report
 
@@ -1152,7 +1156,7 @@ def ai_news_worker():
     print("[SYSTEM] Alpha Lens v6.0 AI ENSEMBLE Engine Started!")
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 7-Model Ensemble (>= 70 score & 5/7 vote)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
-    print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = 1.5% stop : 3% target")
+    print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = {TRADE_STOP_PCT}% stop : {TRADE_TARGET_PCT}% target")
     ensemble = EnsemblePredictor()
     
     # Initialize SEEN_HEADLINES from DB on first run.
@@ -1991,8 +1995,8 @@ def repair_existing_signal_statuses(days=14):
             start_date = created_dt.astimezone(timezone(timedelta(hours=5, minutes=30))).date()
 
         is_bullish = 'bullish' in impact.lower()
-        target_pct = 2.0
-        stop_pct = 1.0
+        target_pct = TRADE_TARGET_PCT
+        stop_pct = TRADE_STOP_PCT
         if ticker not in ohlc_cache:
             ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
 
@@ -2153,8 +2157,8 @@ def yfinance_worker():
                 if status == 'Active View':
                     impact_lower = impact.lower()
                     is_bullish = 'bullish' in impact_lower
-                    target_pct = 2.0   # Hit if stock moves 2% in predicted direction
-                    stop_pct   = 1.0   # Stop loss if stock moves 1% against prediction
+                    target_pct = TRADE_TARGET_PCT
+                    stop_pct   = TRADE_STOP_PCT
 
                     # ── 1. Multi-day catch-up (History from NEXT SESSION for after-hours signals) ──
                     try:
@@ -2561,21 +2565,7 @@ def get_indices():
         _INDEX_CACHE_TIME = 0
     return jsonify(result)
 
-
-@app.route('/api/debug/signals/<int:news_id>', methods=['GET'])
-def debug_signals(news_id):
-    try:
-        conn = connect_news_db()
-        conn.row_factory = sqlite3.Row
-        c = conn.cursor()
-        c.execute("SELECT ticker, impact, status, confidence_score FROM stock_impact WHERE news_id = ?", (news_id,))
-        rows = [dict(r) for r in c.fetchall()]
-        c.execute("SELECT id, headline, created_at FROM news WHERE id = ?", (news_id,))
-        news_row = c.fetchone()
-        conn.close()
-        return jsonify({"news": dict(news_row) if news_row else None, "signals": rows, "count": len(rows), "db": _NEWS_DB})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+# Debug route removed for security
 
 def attach_market_change_percentages(stocks, market_open=None, quote_cache=None):
     if market_open is None:
@@ -2652,7 +2642,7 @@ def get_top_news():
         attach_market_change_percentages(stocks, market_open=mkt_open)
         news_item['affected_stocks'] = stocks
         conn.close()
-        return jsonify({"market_open": mkt_open, "news": [news_item], "_debug_db": _NEWS_DB, "_debug_sig_count": len(raw_stocks)})
+        return jsonify({"market_open": mkt_open, "news": [news_item]})
 
     except Exception as e:
         print("Error fetching top news", e)
@@ -2692,7 +2682,10 @@ def get_all_news():
             for s in stocks:
                 bp = s.get('base_price') or 0
                 cp = s.get('current_price') or 0
-                if bp > 0 and cp > 0:
+                is_closed = s.get('status') in ['Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction', 'Expired']
+                if is_closed and s.get('estimated_change_percent') is not None:
+                    s['diff_pct'] = round(s.get('estimated_change_percent'), 2)
+                elif bp > 0 and cp > 0:
                     s['diff_pct'] = round((cp - bp) / bp * 100, 2)
                 else:
                     s['diff_pct'] = None
@@ -3054,7 +3047,7 @@ def _verify_google_id_token(credential_jwt):
 
 @app.route('/api/send-otp', methods=['POST'])
 def send_otp():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     email = data.get('email')
 
     if not email:
@@ -3066,7 +3059,7 @@ def send_otp():
         return jsonify({"error": "Email sender is not configured (SENDGRID_FROM_EMAIL)."}), 503
 
     otp = str(random.randint(100000, 999999))
-    OTP_STORE[email] = otp
+    OTP_STORE[email] = (otp, time.time() + 600)
 
     message = Mail(
         from_email=SENDGRID_FROM_EMAIL,
@@ -3092,11 +3085,16 @@ def send_otp():
 
 @app.route('/api/verify-otp', methods=['POST'])
 def verify_otp():
-    data = request.json
+    data = request.get_json(silent=True) or {}
     email = data.get('email')
     user_otp = data.get('otp')
 
-    if not email or email not in OTP_STORE or OTP_STORE[email] != user_otp:
+    if not email or email not in OTP_STORE:
+        return jsonify({"error": "Invalid or expired OTP."}), 401
+
+    stored_otp, expiry = OTP_STORE[email]
+    if time.time() > expiry or stored_otp != user_otp:
+        del OTP_STORE[email]
         return jsonify({"error": "Invalid or expired OTP."}), 401
 
     del OTP_STORE[email]
@@ -3120,7 +3118,7 @@ def verify_otp():
 
 @app.route('/api/oauth-signin', methods=['POST'])
 def oauth_signin():
-    data = request.json or {}
+    data = request.get_json(silent=True) or {}
     credential = data.get('credential')
 
     if not credential:
@@ -3375,4 +3373,5 @@ if __name__ == '__main__':
     else:
         # Threaded=True allows the background AI loop to run alongside the website
         # use_reloader=False prevents double execution of our background threads on restart
-        app.run(debug=True, port=args.port, threaded=True, use_reloader=False)
+        debug_mode = os.environ.get("FLASK_ENV") == "development"
+        app.run(debug=debug_mode, port=args.port, threaded=True, use_reloader=False)
