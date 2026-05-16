@@ -1,98 +1,917 @@
 {
-  "generated_at": "2026-05-05T00:35:04.085177",
-  "total_signals": 9,
-  "resolved": 5,
-  "win_rate_pct": 60.0,
-  "wins": 3,
-  "losses": 2,
-  "expired": 2,
-  "no_data": 2,
-  "avg_win_pct": 0.75,
-  "avg_loss_pct": -2.28,
-  "rr_ratio": 0.33,
-  "bull_win_rate": 60.0,
-  "bear_win_rate": 0,
+  "generated_at": "2026-05-16T07:05:38.312715",
+  "total_signals": 100,
+  "resolved": 100,
+  "win_rate_pct": 25.0,
+  "wins": 25,
+  "losses": 75,
+  "expired": 0,
+  "no_data": 0,
+  "avg_win_pct": -0.37,
+  "avg_loss_pct": -1.58,
+  "rr_ratio": 0.23,
+  "bull_win_rate": 13.3,
+  "bear_win_rate": 82.4,
   "trades": [
     {
-      "ticker": "HINDUNILVR.NS",
+      "ticker": "HCLTECH.NS",
       "direction": "BULLISH",
-      "base_price": 2309.3,
-      "result": "TARGET_HIT",
-      "pct": -1.86,
-      "day": 1,
-      "conf": 74
+      "base_price": 1200.0,
+      "result": "STOP_HIT",
+      "pct": -0.99,
+      "day": 2,
+      "conf": 65
     },
     {
       "ticker": "COALINDIA.NS",
       "direction": "BULLISH",
-      "base_price": 479.95,
+      "base_price": 480.0,
       "result": "STOP_HIT",
-      "pct": -2.28,
+      "pct": -1.07,
       "day": 1,
-      "conf": 64
+      "conf": 70
     },
     {
-      "ticker": "COALINDIA.NS",
+      "ticker": "MCX.NS",
       "direction": "BULLISH",
-      "base_price": 479.95,
+      "base_price": 2912.9,
       "result": "STOP_HIT",
-      "pct": -2.28,
+      "pct": -1.03,
       "day": 1,
-      "conf": 65
+      "conf": 60
     },
     {
-      "ticker": "BHEL.NS",
+      "ticker": "BSE.NS",
       "direction": "BULLISH",
-      "base_price": 377.05,
+      "base_price": 3709.4,
       "result": "TARGET_HIT",
-      "pct": 3.18,
+      "pct": 2.11,
       "day": 1,
-      "conf": 65
+      "conf": 60
     },
     {
       "ticker": "AMBUJACEM.NS",
       "direction": "BULLISH",
-      "base_price": 445.3,
-      "result": "EXPIRED",
-      "pct": -0.16,
+      "base_price": 444.6,
+      "result": "STOP_HIT",
+      "pct": -1.68,
+      "day": 1,
+      "conf": 85
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BEARISH",
+      "base_price": 1018.5,
+      "result": "TARGET_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 70
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "MCX.NS",
+      "direction": "BULLISH",
+      "base_price": 3097.8,
+      "result": "STOP_HIT",
+      "pct": -1.09,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "YESBANK.NS",
+      "direction": "BEARISH",
+      "base_price": 22.94,
+      "result": "STOP_HIT",
+      "pct": 0.17,
       "day": 3,
-      "conf": 63
+      "conf": 65
+    },
+    {
+      "ticker": "BANKBARODA.NS",
+      "direction": "BULLISH",
+      "base_price": 263.4,
+      "result": "TARGET_HIT",
+      "pct": 1.69,
+      "day": 2,
+      "conf": 72
+    },
+    {
+      "ticker": "TITAN.NS",
+      "direction": "BULLISH",
+      "base_price": 4509.0,
+      "result": "STOP_HIT",
+      "pct": -6.05,
+      "day": 2,
+      "conf": 80
+    },
+    {
+      "ticker": "BAJAJ-AUTO.NS",
+      "direction": "BULLISH",
+      "base_price": 10711.5,
+      "result": "STOP_HIT",
+      "pct": -1.09,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "BANKBARODA.NS",
+      "direction": "BULLISH",
+      "base_price": 263.4,
+      "result": "TARGET_HIT",
+      "pct": 1.69,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "TATACONSUM.NS",
+      "direction": "BULLISH",
+      "base_price": 1176.6,
+      "result": "TARGET_HIT",
+      "pct": 4.67,
+      "day": 2,
+      "conf": 80
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "TRENT.NS",
+      "direction": "BULLISH",
+      "base_price": 4249.1,
+      "result": "STOP_HIT",
+      "pct": -1.01,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 70
+    },
+    {
+      "ticker": "BANKBARODA.NS",
+      "direction": "BULLISH",
+      "base_price": 263.4,
+      "result": "TARGET_HIT",
+      "pct": 1.69,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "PNB.NS",
+      "direction": "BULLISH",
+      "base_price": 107.2,
+      "result": "STOP_HIT",
+      "pct": -0.98,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "AXISBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 1270.9,
+      "result": "STOP_HIT",
+      "pct": -0.83,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "HDFCBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 781.3,
+      "result": "STOP_HIT",
+      "pct": -1.04,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BANKBARODA.NS",
+      "direction": "BULLISH",
+      "base_price": 263.4,
+      "result": "TARGET_HIT",
+      "pct": 1.69,
+      "day": 2,
+      "conf": 80
+    },
+    {
+      "ticker": "SWIGGY.NS",
+      "direction": "BULLISH",
+      "base_price": 280.5,
+      "result": "STOP_HIT",
+      "pct": -5.03,
+      "day": 2,
+      "conf": 67
     },
     {
       "ticker": "VEDL.NS",
       "direction": "BULLISH",
-      "base_price": 294.65,
-      "result": "EXPIRED",
-      "pct": -0.15,
+      "base_price": 296.6,
+      "result": "TARGET_HIT",
+      "pct": 2.43,
       "day": 3,
-      "conf": 59
+      "conf": 62
     },
     {
-      "ticker": "BHEL.NS",
+      "ticker": "BRITANNIA.NS",
       "direction": "BULLISH",
-      "base_price": 377.05,
+      "base_price": 5515.0,
+      "result": "STOP_HIT",
+      "pct": -1.98,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "TEJASNET.NS",
+      "direction": "BULLISH",
+      "base_price": 515.0,
+      "result": "STOP_HIT",
+      "pct": -3.99,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 70
+    },
+    {
+      "ticker": "DABUR.NS",
+      "direction": "BULLISH",
+      "base_price": 487.7,
+      "result": "STOP_HIT",
+      "pct": -1.24,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "TITAN.NS",
+      "direction": "BULLISH",
+      "base_price": 4509.0,
+      "result": "STOP_HIT",
+      "pct": -6.05,
+      "day": 2,
+      "conf": 80
+    },
+    {
+      "ticker": "ADANIENT.NS",
+      "direction": "BULLISH",
+      "base_price": 2505.9,
+      "result": "STOP_HIT",
+      "pct": -1.0,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "ADANIPORTS.NS",
+      "direction": "BULLISH",
+      "base_price": 1760.0,
+      "result": "STOP_HIT",
+      "pct": -0.93,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "KOTAKBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 381.2,
+      "result": "STOP_HIT",
+      "pct": -0.5,
+      "day": 2,
+      "conf": 57
+    },
+    {
+      "ticker": "ICICIBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 1266.3,
+      "result": "STOP_HIT",
+      "pct": -1.24,
+      "day": 3,
+      "conf": 57
+    },
+    {
+      "ticker": "HDFCBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 781.3,
+      "result": "STOP_HIT",
+      "pct": -1.04,
+      "day": 2,
+      "conf": 57
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "HDFCBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 781.3,
+      "result": "STOP_HIT",
+      "pct": -1.04,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "M&M.NS",
+      "direction": "BEARISH",
+      "base_price": 3331.5,
       "result": "TARGET_HIT",
-      "pct": 0.94,
-      "day": 1,
-      "conf": 66
+      "pct": -1.95,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "ICICIBANK.NS",
+      "direction": "BEARISH",
+      "base_price": 1266.3,
+      "result": "TARGET_HIT",
+      "pct": -2.16,
+      "day": 3,
+      "conf": 75
+    },
+    {
+      "ticker": "TECHM.NS",
+      "direction": "BEARISH",
+      "base_price": 1463.0,
+      "result": "TARGET_HIT",
+      "pct": -3.16,
+      "day": 3,
+      "conf": 75
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BEARISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.32,
+      "day": 3,
+      "conf": 65
+    },
+    {
+      "ticker": "RELIANCE.NS",
+      "direction": "BEARISH",
+      "base_price": 1436.0,
+      "result": "TARGET_HIT",
+      "pct": -2.14,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "ICICIBANK.NS",
+      "direction": "BEARISH",
+      "base_price": 1266.3,
+      "result": "TARGET_HIT",
+      "pct": -2.16,
+      "day": 3,
+      "conf": 65
+    },
+    {
+      "ticker": "HDFCBANK.NS",
+      "direction": "BEARISH",
+      "base_price": 781.3,
+      "result": "TARGET_HIT",
+      "pct": -2.3,
+      "day": 3,
+      "conf": 65
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 85
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BEARISH",
+      "base_price": 1018.5,
+      "result": "TARGET_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "SWIGGY.NS",
+      "direction": "BEARISH",
+      "base_price": 280.5,
+      "result": "TARGET_HIT",
+      "pct": -5.03,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BANKBARODA.NS",
+      "direction": "BEARISH",
+      "base_price": 263.4,
+      "result": "STOP_HIT",
+      "pct": 1.69,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "DABUR.NS",
+      "direction": "BULLISH",
+      "base_price": 487.7,
+      "result": "STOP_HIT",
+      "pct": -1.24,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BIOCON.NS",
+      "direction": "BULLISH",
+      "base_price": 378.7,
+      "result": "STOP_HIT",
+      "pct": -0.07,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BRITANNIA.NS",
+      "direction": "BULLISH",
+      "base_price": 5515.0,
+      "result": "STOP_HIT",
+      "pct": -1.98,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BEARISH",
+      "base_price": 1018.5,
+      "result": "TARGET_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 70
     },
     {
       "ticker": "JINDALSTEL.NS",
       "direction": "BULLISH",
-      "base_price": 1261.4,
-      "result": "NO_DATA",
-      "pct": 0,
-      "day": 0,
-      "conf": 61
+      "base_price": 1248.5,
+      "result": "STOP_HIT",
+      "pct": -1.01,
+      "day": 2,
+      "conf": 60
     },
     {
       "ticker": "TATATECH.NS",
       "direction": "BULLISH",
-      "base_price": 591.05,
-      "result": "NO_DATA",
-      "pct": 0,
-      "day": 0,
-      "conf": 63
+      "base_price": 632.05,
+      "result": "STOP_HIT",
+      "pct": 0.17,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "AMBUJACEM.NS",
+      "direction": "BULLISH",
+      "base_price": 443.9,
+      "result": "STOP_HIT",
+      "pct": -1.25,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "POLYCAB.NS",
+      "direction": "BULLISH",
+      "base_price": 9083.0,
+      "result": "STOP_HIT",
+      "pct": -0.68,
+      "day": 3,
+      "conf": 80
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 72
+    },
+    {
+      "ticker": "IOC.NS",
+      "direction": "BULLISH",
+      "base_price": 144.83,
+      "result": "STOP_HIT",
+      "pct": -2.13,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 85
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "TITAN.NS",
+      "direction": "BULLISH",
+      "base_price": 4509.0,
+      "result": "STOP_HIT",
+      "pct": -6.05,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "SWIGGY.NS",
+      "direction": "BULLISH",
+      "base_price": 280.5,
+      "result": "STOP_HIT",
+      "pct": -5.03,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BULLISH",
+      "base_price": 1018.5,
+      "result": "STOP_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 85
+    },
+    {
+      "ticker": "COFORGE.NS",
+      "direction": "BULLISH",
+      "base_price": 1368.1,
+      "result": "STOP_HIT",
+      "pct": -3.0,
+      "day": 3,
+      "conf": 60
+    },
+    {
+      "ticker": "HEROMOTOCO.NS",
+      "direction": "BULLISH",
+      "base_price": 5322.0,
+      "result": "STOP_HIT",
+      "pct": -1.48,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "M&M.NS",
+      "direction": "BULLISH",
+      "base_price": 3331.5,
+      "result": "STOP_HIT",
+      "pct": -1.95,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BHEL.NS",
+      "direction": "BULLISH",
+      "base_price": 403.65,
+      "result": "STOP_HIT",
+      "pct": -0.28,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "PAYTM.NS",
+      "direction": "BULLISH",
+      "base_price": 1188.4,
+      "result": "STOP_HIT",
+      "pct": -1.39,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "BHARATFORG.NS",
+      "direction": "BULLISH",
+      "base_price": 1989.7,
+      "result": "STOP_HIT",
+      "pct": -0.04,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "BSE.NS",
+      "direction": "BULLISH",
+      "base_price": 3905.6,
+      "result": "STOP_HIT",
+      "pct": -0.8,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BHARATFORG.NS",
+      "direction": "BULLISH",
+      "base_price": 1989.7,
+      "result": "STOP_HIT",
+      "pct": -0.04,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "SWIGGY.NS",
+      "direction": "BULLISH",
+      "base_price": 280.5,
+      "result": "STOP_HIT",
+      "pct": -5.03,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "TATACONSUM.NS",
+      "direction": "BULLISH",
+      "base_price": 1176.6,
+      "result": "TARGET_HIT",
+      "pct": 4.67,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "BANKBARODA.NS",
+      "direction": "BULLISH",
+      "base_price": 263.4,
+      "result": "TARGET_HIT",
+      "pct": 1.69,
+      "day": 2,
+      "conf": 62
+    },
+    {
+      "ticker": "SBIN.NS",
+      "direction": "BEARISH",
+      "base_price": 1018.5,
+      "result": "TARGET_HIT",
+      "pct": -2.59,
+      "day": 2,
+      "conf": 71
+    },
+    {
+      "ticker": "MCX.NS",
+      "direction": "BULLISH",
+      "base_price": 3097.8,
+      "result": "STOP_HIT",
+      "pct": -1.09,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "DABUR.NS",
+      "direction": "BULLISH",
+      "base_price": 487.7,
+      "result": "STOP_HIT",
+      "pct": -1.24,
+      "day": 2,
+      "conf": 75
+    },
+    {
+      "ticker": "PIDILITIND.NS",
+      "direction": "BULLISH",
+      "base_price": 1472.0,
+      "result": "STOP_HIT",
+      "pct": -1.83,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BRITANNIA.NS",
+      "direction": "BULLISH",
+      "base_price": 5515.0,
+      "result": "STOP_HIT",
+      "pct": -1.98,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "BHARATFORG.NS",
+      "direction": "BULLISH",
+      "base_price": 1989.7,
+      "result": "STOP_HIT",
+      "pct": -0.04,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "VEDL.NS",
+      "direction": "BULLISH",
+      "base_price": 296.6,
+      "result": "TARGET_HIT",
+      "pct": 2.43,
+      "day": 3,
+      "conf": 60
+    },
+    {
+      "ticker": "COALINDIA.NS",
+      "direction": "BULLISH",
+      "base_price": 457.0,
+      "result": "TARGET_HIT",
+      "pct": 1.91,
+      "day": 3,
+      "conf": 60
+    },
+    {
+      "ticker": "MARUTI.NS",
+      "direction": "BULLISH",
+      "base_price": 13718.0,
+      "result": "STOP_HIT",
+      "pct": -1.13,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "M&M.NS",
+      "direction": "BULLISH",
+      "base_price": 3331.5,
+      "result": "STOP_HIT",
+      "pct": -1.95,
+      "day": 2,
+      "conf": 67
+    },
+    {
+      "ticker": "FEDERALBNK.NS",
+      "direction": "BULLISH",
+      "base_price": 297.4,
+      "result": "STOP_HIT",
+      "pct": -0.37,
+      "day": 2,
+      "conf": 67
+    },
+    {
+      "ticker": "KOTAKBANK.NS",
+      "direction": "BULLISH",
+      "base_price": 381.2,
+      "result": "STOP_HIT",
+      "pct": -0.5,
+      "day": 2,
+      "conf": 67
+    },
+    {
+      "ticker": "RELIANCE.NS",
+      "direction": "BEARISH",
+      "base_price": 1436.0,
+      "result": "TARGET_HIT",
+      "pct": -2.14,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "ICICIBANK.NS",
+      "direction": "BEARISH",
+      "base_price": 1266.3,
+      "result": "TARGET_HIT",
+      "pct": -2.16,
+      "day": 3,
+      "conf": 65
+    },
+    {
+      "ticker": "HDFCBANK.NS",
+      "direction": "BEARISH",
+      "base_price": 781.3,
+      "result": "TARGET_HIT",
+      "pct": -2.3,
+      "day": 2,
+      "conf": 65
+    },
+    {
+      "ticker": "PAYTM.NS",
+      "direction": "BULLISH",
+      "base_price": 1188.4,
+      "result": "STOP_HIT",
+      "pct": -1.39,
+      "day": 2,
+      "conf": 60
+    },
+    {
+      "ticker": "POLYCAB.NS",
+      "direction": "BULLISH",
+      "base_price": 9083.0,
+      "result": "STOP_HIT",
+      "pct": -0.68,
+      "day": 3,
+      "conf": 60
     }
   ]
 }

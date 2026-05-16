@@ -4,7 +4,7 @@ Reads the last 100 approved signals from the database (stock_impact table)
 and evaluates each one against actual price data using yfinance.
 No AI API calls needed — signals are already in the DB.
 
-Target: +1.5% | Stop: -3.0%
+Target: +2.0% | Stop: -1.0%
 Scan window: 3 trading days (15-min candles)
 """
 
@@ -26,10 +26,90 @@ sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='repla
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 DB_PATH     = os.path.join(os.path.dirname(__file__), '..', 'news_cache.db')
-TARGET_PCT  =  1.5   # +1.5% to win
-STOP_PCT    = -3.0   # -3.0% to lose
+TARGET_PCT  =  2.0   # +2.0% to win
+STOP_PCT    = -1.0   # -1.0% to lose
 LIMIT       = 100    # Last N signals to test (uses all available if fewer)
 SCAN_DAYS   = 5      # Calendar days to scan (covers ~3 trading sessions)
+
+
+def parse_signal_timestamp(signal_time_str):
+    """Parse signal timestamps as UTC-aware datetimes."""
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(signal_time_str, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def fetch_base_price_at_signal_time(ticker, signal_dt_utc):
+    """Fetch the best estimate of the published base price for a signal."""
+    if signal_dt_utc is None:
+        return None
+
+    tkr = yf.Ticker(ticker)
+    hist = None
+    for interval in ("1m", "5m", "15m"):
+        try:
+            hist = tkr.history(period="30d", interval=interval)
+            if hist is not None and not hist.empty:
+                break
+        except Exception:
+            hist = None
+    if hist is None or hist.empty:
+        try:
+            hist = tkr.history(period="90d", interval="1d")
+        except Exception:
+            hist = None
+
+    if hist is None or hist.empty:
+        return None
+
+    if hist.index.tzinfo is None:
+        hist.index = hist.index.tz_localize(timezone.utc)
+    else:
+        hist.index = hist.index.tz_convert(timezone.utc)
+
+    before = hist[hist.index <= signal_dt_utc]
+    if not before.empty:
+        last_close = before.iloc[-1]["Close"]
+        return round(float(last_close), 2) if last_close and last_close > 0 else None
+
+    # fallback to the earliest available daily close for this ticker
+    if "Close" in hist.columns and not hist.empty:
+        first_close = hist.iloc[0]["Close"]
+        return round(float(first_close), 2) if first_close and first_close > 0 else None
+
+    return None
+
+
+def repair_missing_base_prices():
+    """Repair stock_impact rows that have no base_price before evaluating win rate."""
+    conn = sqlite3.connect(DB_PATH, timeout=15)
+    c = conn.cursor()
+    c.execute("SELECT id, ticker, created_at FROM stock_impact WHERE base_price <= 0 AND created_at IS NOT NULL")
+    rows = c.fetchall()
+    if not rows:
+        conn.close()
+        return
+
+    updated = 0
+    for impact_id, ticker, created_at in rows:
+        signal_dt = parse_signal_timestamp(created_at)
+        if signal_dt is None:
+            continue
+
+        base_price = fetch_base_price_at_signal_time(ticker, signal_dt)
+        if base_price is None or base_price <= 0:
+            continue
+
+        c.execute("UPDATE stock_impact SET base_price = ? WHERE id = ?", (base_price, impact_id))
+        updated += 1
+
+    conn.commit()
+    conn.close()
+    print(f" repaired base_price for {updated} signals.")
+
 
 # ─── COLORS ───────────────────────────────────────────────────────────────────
 GREEN  = ""
@@ -153,6 +233,7 @@ def main():
     print(f"{BOLD}   Target: +{TARGET_PCT}%  |  Stop: {STOP_PCT}%  |  Window: 3 days{RESET}")
     print(f"{BOLD}{'='*62}{RESET}\n")
 
+    repair_missing_base_prices()
     signals = fetch_signals(LIMIT)
     if not signals:
         print(f"{RED}No signals found in the database. Run the app first to generate signals.{RESET}")
