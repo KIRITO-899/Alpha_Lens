@@ -173,7 +173,9 @@ def _ao_base_headers():
 def _totp_now(secret, interval=30, digits=6):
     """Generate a TOTP code without requiring the optional pyotp package."""
     try:
-        key = base64.b32decode(secret.upper().replace(" ", ""), casefold=True)
+        s = secret.upper().replace(" ", "")
+        s += "=" * ((8 - len(s) % 8) % 8)   # add missing Base32 padding
+        key = base64.b32decode(s, casefold=True)
         counter = int(time.time() // interval)
         msg = struct.pack(">Q", counter)
         digest = hmac.new(key, msg, hashlib.sha1).digest()
