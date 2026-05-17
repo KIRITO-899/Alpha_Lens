@@ -617,6 +617,12 @@
                                     Ask about an added stock or the news affecting it.
                                 </div>
                             </div>
+                            <div id="portfolio-assistant-chips" class="flex flex-wrap gap-2 mb-3">
+                                <button type="button" onclick="askPortfolioAssistantPrompt('Latest portfolio news')" class="text-[10px] uppercase tracking-widest text-slate-300 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 hover:border-cyan-400/40 hover:text-cyan-200 transition">Latest news</button>
+                                <button type="button" onclick="askPortfolioAssistantPrompt('What is my portfolio risk?')" class="text-[10px] uppercase tracking-widest text-slate-300 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 hover:border-cyan-400/40 hover:text-cyan-200 transition">Risk</button>
+                                <button type="button" onclick="askPortfolioAssistantPrompt('Which stocks are bullish or bearish?')" class="text-[10px] uppercase tracking-widest text-slate-300 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 hover:border-cyan-400/40 hover:text-cyan-200 transition">Bull/Bear</button>
+                                <button type="button" onclick="askPortfolioAssistantPrompt('Explain the latest impact on my portfolio')" class="text-[10px] uppercase tracking-widest text-slate-300 bg-black/30 border border-white/10 rounded-lg px-2.5 py-1.5 hover:border-cyan-400/40 hover:text-cyan-200 transition">Explain</button>
+                            </div>
                             <form id="portfolio-assistant-form" onsubmit="askPortfolioAssistant(event)" class="flex items-center gap-2">
                                 <input id="portfolio-assistant-input" type="text" autocomplete="off" placeholder="Ask about portfolio news..."
                                     class="min-w-0 flex-1 bg-black/40 border border-white/10 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500 transition-colors placeholder-slate-500">
@@ -1351,6 +1357,22 @@
             }).join('');
         }
 
+        function formatAssistantMeta(meta) {
+            if (!meta) return '';
+            const sourceLabels = {
+                ai: 'AI refined',
+                local: 'Saved news',
+                fallback: 'Local fallback',
+                blocked: 'Scope guard',
+                no_context: 'No saved news'
+            };
+            const parts = [sourceLabels[meta.source] || meta.source || 'Assistant'];
+            if (typeof meta.elapsed_ms === 'number') parts.push(`${meta.elapsed_ms}ms`);
+            if (typeof meta.context_count === 'number') parts.push(`${meta.context_count} news`);
+            if (Array.isArray(meta.matched_tickers) && meta.matched_tickers.length) parts.push(meta.matched_tickers.join(', '));
+            return parts.filter(Boolean).join(' · ');
+        }
+
         function saveWatchlist() {
             localStorage.setItem('alpha_lens_watchlist', JSON.stringify(watchlist));
             renderWatchlistPanel();
@@ -1490,7 +1512,7 @@
 
         function addPortfolioAssistantMessage(role, text) {
             const container = document.getElementById('portfolio-assistant-messages');
-            if (!container) return;
+            if (!container) return null;
 
             const emptyState = container.querySelector('[data-empty-assistant]');
             if (emptyState) emptyState.remove();
@@ -1501,19 +1523,41 @@
                 ? 'ml-8 bg-cyan-500/10 border-cyan-400/20 text-cyan-50'
                 : 'mr-8 bg-black/30 border-white/10 text-slate-300'}`;
             msg.innerHTML = `<div class="text-[9px] uppercase tracking-widest font-bold mb-1 ${isUser ? 'text-cyan-300' : 'text-slate-500'}">${isUser ? 'You' : 'Assistant'}</div>
-                <div class="${isUser ? 'whitespace-pre-wrap' : 'space-y-1'}">${isUser ? escapeHtml(text) : formatAssistantAnswer(text)}</div>`;
+                <div data-message-body="true" class="${isUser ? 'whitespace-pre-wrap' : 'space-y-1'}">${isUser ? escapeHtml(text) : formatAssistantAnswer(text)}</div>
+                ${isUser ? '' : '<div data-message-meta="true" class="hidden mt-2 text-[9px] uppercase tracking-widest text-slate-500"></div>'}`;
             container.appendChild(msg);
             container.scrollTop = container.scrollHeight;
+            return msg;
+        }
+
+        function updatePortfolioAssistantMessage(messageEl, text, meta = null) {
+            const body = messageEl?.querySelector('[data-message-body]');
+            if (!body) return;
+            body.innerHTML = formatAssistantAnswer(text);
+            const metaEl = messageEl.querySelector('[data-message-meta]');
+            if (metaEl) {
+                const metaText = formatAssistantMeta(meta);
+                metaEl.textContent = metaText;
+                metaEl.classList.toggle('hidden', !metaText);
+            }
+            const container = document.getElementById('portfolio-assistant-messages');
+            if (container) container.scrollTop = container.scrollHeight;
         }
 
         function updatePortfolioAssistantState() {
             const sendBtn = document.getElementById('portfolio-assistant-send');
             const input = document.getElementById('portfolio-assistant-input');
+            const chips = document.querySelectorAll('#portfolio-assistant-chips button');
             if (!sendBtn || !input) return;
             const disabled = portfolioAssistantBusy || watchlist.length === 0;
             sendBtn.disabled = disabled;
             input.disabled = portfolioAssistantBusy;
             input.placeholder = watchlist.length === 0 ? 'Add portfolio stocks first' : 'Ask about portfolio news...';
+            chips.forEach(chip => {
+                chip.disabled = disabled;
+                chip.classList.toggle('opacity-40', disabled);
+                chip.classList.toggle('cursor-not-allowed', disabled);
+            });
         }
 
         function getPortfolioNewsForQuestion(question) {
@@ -1588,6 +1632,19 @@ ${rows.slice(0, 4).join('\n')}
 ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         }
 
+        function askPortfolioAssistantPrompt(prompt) {
+            if (portfolioAssistantBusy || watchlist.length === 0) return;
+            const input = document.getElementById('portfolio-assistant-input');
+            const form = document.getElementById('portfolio-assistant-form');
+            if (!input || !form) return;
+            input.value = prompt;
+            if (typeof form.requestSubmit === 'function') {
+                form.requestSubmit();
+            } else {
+                form.dispatchEvent(new Event('submit', { cancelable: true, bubbles: true }));
+            }
+        }
+
         async function askPortfolioAssistant(event) {
             event.preventDefault();
             if (portfolioAssistantBusy || watchlist.length === 0) return;
@@ -1598,24 +1655,40 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
 
             input.value = '';
             addPortfolioAssistantMessage('user', question);
+            const pendingMessage = addPortfolioAssistantMessage('assistant', 'Analyzing portfolio news...');
             portfolioAssistantBusy = true;
             updatePortfolioAssistantState();
+
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000);
 
             try {
                 const res = await fetch('/api/portfolio-assistant', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
+                    signal: controller.signal,
                     body: JSON.stringify({
                         question,
-                        tickers: watchlist.map(stock => stock.ticker)
+                        tickers: watchlist.map(stock => stock.ticker),
+                        holdings: watchlist.map(stock => ({
+                            ticker: stock.ticker,
+                            name: stock.name || ''
+                        }))
                     })
                 });
+                if (!res.ok) throw new Error('Portfolio assistant returned ' + res.status);
                 const data = await res.json();
-                addPortfolioAssistantMessage('assistant', data.answer || 'I could not answer that from your portfolio news.');
+                updatePortfolioAssistantMessage(pendingMessage, data.answer || 'I could not answer that from your portfolio news.', data);
             } catch (err) {
                 console.error('Portfolio assistant failed', err);
-                addPortfolioAssistantMessage('assistant', buildLocalPortfolioAnswer(question));
+                const fallback = buildLocalPortfolioAnswer(question);
+                const fallbackCount = getPortfolioNewsForQuestion(question).length;
+                updatePortfolioAssistantMessage(pendingMessage, fallback, {
+                    source: 'fallback',
+                    context_count: fallbackCount
+                });
             } finally {
+                clearTimeout(timeoutId);
                 portfolioAssistantBusy = false;
                 updatePortfolioAssistantState();
                 input?.focus();
