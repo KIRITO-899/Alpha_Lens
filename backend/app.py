@@ -1,6 +1,7 @@
 import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+print("[DEBUG] App startup beginning...", flush=True)
 from flask import Flask, render_template, request, jsonify, session
 import sqlite3
 import secrets
@@ -30,6 +31,7 @@ from openai import OpenAI as OpenAIClient
 import angelone_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
+print("[DEBUG] All imports complete", flush=True)
 yf.set_tz_cache_location("yf_cache")  # no-op in Angel One shim
 
 # Shared HTTP session for network calls to reduce connection overhead.
@@ -283,7 +285,9 @@ def init_news_db():
     conn.close()
 
 init_db()
+print("[DEBUG] init_db() completed", flush=True)
 init_news_db()
+print("[DEBUG] init_news_db() completed", flush=True)
 
 # Checkpoint any stale WAL from a previous crashed run so we start clean
 try:
@@ -292,6 +296,7 @@ try:
     _chk.close()
 except Exception:
     pass
+print("[DEBUG] WAL checkpoint completed", flush=True)
 
 # ==========================================
 # LIVE AI NEWS ENGINE (LiveMint, ET, MoneyControl)
