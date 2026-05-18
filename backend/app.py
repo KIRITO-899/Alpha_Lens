@@ -1,4 +1,4 @@
-import sys, io
+﻿import sys, io
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 print("[DEBUG] App startup beginning...", flush=True)
@@ -339,21 +339,47 @@ MODEL_NAME = 'gemini-2.5-flash'
 
 # Top Tier Indian Financial RSS Feeds + Google News for 7-day history
 RSS_SOURCES = [
+    # ── Economic Times (multiple desks) ──
     "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms",
     "https://economictimes.indiatimes.com/markets/stocks/earnings/rssfeeds/837588974.cms",
-    "https://www.moneycontrol.com/rss/buzzingstocks.xml",
-    "https://www.livemint.com/rss/markets",
     "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
-    # Google News RSS — past 7 days of Indian market news (instant historical backfill)
+    "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",
+    # ── MoneyControl ──
+    "https://www.moneycontrol.com/rss/buzzingstocks.xml",
+    "https://www.moneycontrol.com/rss/marketsindia.xml",
+    "https://www.moneycontrol.com/rss/topstory.xml",
+    # ── LiveMint ──
+    "https://www.livemint.com/rss/markets",
+    "https://www.livemint.com/rss/companies",
+    "https://www.livemint.com/rss/industry",
+    # ── Business Standard ──
+    "https://www.business-standard.com/rss/markets-106.rss",
+    "https://www.business-standard.com/rss/companies-101.rss",
+    "https://www.business-standard.com/rss/finance-103.rss",
+    # ── NDTV Profit ──
+    "https://feeds.feedburner.com/ndtvprofit-latest",
+    # ── Financial Express ──
+    "https://www.financialexpress.com/market/feed/",
+    # ── Google News RSS — past 7 days (historical backfill) ──
     "https://news.google.com/rss/search?q=indian+stock+market+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=NSE+BSE+Nifty+Sensex+stocks+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=indian+economy+RBI+market+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
+    # ── Google News: Company-specific catalysts ──
+    "https://news.google.com/rss/search?q=SEBI+RBI+NSE+BSE+order+fine+approval+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=india+mergers+acquisitions+IPO+results+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=quarterly+results+earnings+profit+loss+india+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
 ]
 
 # Global state for scraping optimizations
 RSS_CACHE = {url: {'etag': None, 'modified': None} for url in RSS_SOURCES}
 SEEN_HEADLINES = set()
+
+# ── Duplicate Signal Cooldown Guard ──
+# Tracks (ticker, direction) pairs with their last signal timestamp (UTC).
+# Prevents the same ticker+direction from generating duplicate signals within 24 hours.
+# Format: { "SBIN.NS_BULLISH": datetime_utc }
+RECENT_SIGNALS: dict = {}
 
 # NOTE: SM_GEMINI_CLIENT (aimlapi.com) removed — key expired.
 # quant_ai_screener now uses the google-genai 'client' (same as Phase 2)
@@ -1696,9 +1722,34 @@ Return ONLY valid JSON matching this shape:
                     _pub_dt_utc_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 print(f"   [!] Price fetch error for {ticker}: {_e}")
 
-            # Get tech context
+            # ── DUPLICATE SIGNAL GUARD (24-hour cooldown per ticker+direction) ──
+            _cooldown_key = f"{ticker}_{base_direction}"
+            _last_signal_time = RECENT_SIGNALS.get(_cooldown_key)
+            _now_utc = datetime.now(timezone.utc)
+            if _last_signal_time and (_now_utc - _last_signal_time).total_seconds() < 86400:  # 24 hours
+                _hours_ago = round((_now_utc - _last_signal_time).total_seconds() / 3600, 1)
+                print(f"   [SKIP] {ticker} {base_direction}: duplicate signal — last seen {_hours_ago}h ago (24h cooldown)")
+                continue
+
+            # ── Get tech context BEFORE ensemble (needed for ATR-based stop/target) ──
             tech_data = get_stock_technical_context(ticker)
             tech_context_str = json.dumps(tech_data) if tech_data else ""
+
+            # ── ATR-BASED DYNAMIC STOP & TARGET ──
+            # ATR (Average True Range) measures a stock's typical daily price swing.
+            # Using a fixed 1% stop on a stock that swings 2% daily = guaranteed stop-out.
+            # We set stop = max(1.0, atr_pct * 1.0) and target = max(2.0, atr_pct * 2.5)
+            # This gives a consistent 2.5:1 Risk:Reward ratio regardless of stock volatility.
+            _atr_pct = 0.0
+            if tech_data and tech_data.get('atr_pct'):
+                _atr_pct = float(tech_data['atr_pct'])
+            if _atr_pct > 0:
+                _dynamic_stop   = round(min(2.5, max(1.0, _atr_pct * 1.0)), 2)  # cap at 2.5%
+                _dynamic_target = round(min(6.0, max(2.0, _atr_pct * 2.5)), 2)  # cap at 6%
+            else:
+                _dynamic_stop   = TRADE_STOP_PCT    # fallback to config default
+                _dynamic_target = TRADE_TARGET_PCT
+            print(f"   [ATR] {ticker}: ATR={_atr_pct:.2f}% → stop={_dynamic_stop:.2f}% target={_dynamic_target:.2f}%")
 
             # Predict using Ensemble
             result = ensemble.predict(
@@ -1717,10 +1768,16 @@ Return ONLY valid JSON matching this shape:
                 view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
                 quality = signal.get("quality_score")
                 quality_note = f" Stock-pick quality: {quality}/100." if quality else ""
-                reason = f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). Expected directional breakout.{quality_note}"
-                approved_signals.append((news_id, ticker, result['direction'], 2.5,
+                reason = (f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). "
+                          f"ATR stop: {_dynamic_stop:.1f}% | target: {_dynamic_target:.1f}%.{quality_note}")
+                approved_signals.append((news_id, ticker, result['direction'], _dynamic_target,
                                          view, reason, base_price, current_price_now,
                                          result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
+                # Mark this ticker+direction as recently signalled to prevent duplicates
+                RECENT_SIGNALS[_cooldown_key] = _now_utc
+                # Prune old entries to keep dict lean (remove entries older than 48h)
+                cutoff = _now_utc - timedelta(hours=48)
+                RECENT_SIGNALS.update({k: v for k, v in RECENT_SIGNALS.items() if v > cutoff})
 
             # ── Save approved signals in one short atomic write ──
             if approved_signals:
@@ -1732,6 +1789,7 @@ Return ONLY valid JSON matching this shape:
                 db_write(_insert_signals)
                 print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({len(approved_signals)} alpha signals)")
         print(f"PHASE 1 DONE: {len(new_article_ids)} new headlines saved INSTANTLY to database!")
+        time.sleep(180)  # Poll every 3 minutes for fresh news (was 600s = 10 min)
 
         
         # ============================================================
@@ -1838,8 +1896,7 @@ Output STRICT valid JSON array:
             performance_report.run_performance_check()
         except Exception as e:
             print("Performance Report Error:", e)
-            
-        time.sleep(600)
+        # Note: main loop sleep is 180s at start of cycle (3-minute news polling)
 
 def get_price_with_range(ticker, market_open=None):
     """
@@ -3971,3 +4028,4 @@ if __name__ == '__main__':
         # use_reloader=False prevents double execution of our background threads on restart
         debug_mode = os.environ.get("FLASK_ENV") == "development"
         app.run(debug=debug_mode, port=args.port, threaded=True, use_reloader=False)
+

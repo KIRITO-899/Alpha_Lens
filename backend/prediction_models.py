@@ -1,7 +1,13 @@
 """
 Alpha Lens v5.0 — Multi-Model Ensemble Prediction Engine
 6 independent models analyze news → stock impact.
-Signal emitted ONLY when ensemble score >= 70 AND 4+ models agree.
+Signal emitted ONLY when ensemble score >= 50 AND 3+ models agree.
+v5.1 Improvements:
+  - AILogicModel now receives full technical context (RSI, EMA, MACD, ATR, market regime)
+  - HistoricalSimilarityModel returns neutral 50 when data is insufficient (was 68, artificially inflating)
+  - SectorMomentumModel weight restored from 0.00 to 0.10
+  - Market regime penalty: BULLISH in RISK_OFF market loses 15 points
+  - AI-unavailable fallback tightened to 3/4 agree at min_score 60
 """
 import re
 import math
@@ -33,7 +39,7 @@ class HistoricalSimilarityModel:
             conn.close()
 
             if len(patterns) < 3:
-                return 68  # Not enough data — neutral-high default
+                return 50  # Not enough data — return neutral (was 68, was inflating ensemble)
 
             tokens = self._tokenize(headline)
             matches = []
@@ -43,18 +49,18 @@ class HistoricalSimilarityModel:
                     matches.append({'sim': sim, 'same_dir': past_dir == direction, 'hit': outcome == 'HIT'})
 
             if not matches:
-                return 68
+                return 50  # No similar past patterns — neutral, not optimistic
 
             same_dir = [m for m in matches if m['same_dir']]
             if not same_dir:
-                return 50
+                return 45  # Similar news but wrong direction — slightly negative
 
             weighted_hits = sum(m['sim'] for m in same_dir if m['hit'])
             weighted_total = sum(m['sim'] for m in same_dir)
             win_rate = weighted_hits / weighted_total if weighted_total > 0 else 0.5
             return max(30, min(95, int(win_rate * 100)))
         except Exception:
-            return 65
+            return 50  # On error, be neutral not optimistic
 
 
 # ==========================================
@@ -457,14 +463,49 @@ class AILogicModel:
                 pass
         return cls._sm_client
 
-    def score(self, headline, ticker, direction, tech_data, api_client, model_name):
+    def score(self, headline, ticker, direction, tech_data, api_client, model_name, market_regime='NEUTRAL'):
         import re, json as _json
 
+        # Build rich technical context for the AI — this is key to accuracy
+        tech_summary = ""
+        if tech_data:
+            rsi = tech_data.get('rsi_14', 'N/A')
+            ema_align = tech_data.get('ema_alignment', 'UNKNOWN')
+            macd_cross = tech_data.get('macd_crossover', 'NONE')
+            trend = tech_data.get('trend', 'UNKNOWN')
+            atr_pct = tech_data.get('atr_pct', 'N/A')
+            vol_ratio = tech_data.get('volume_ratio_vs_20d_avg', 1.0)
+            adx = tech_data.get('adx', 'N/A')
+            bb_squeeze = tech_data.get('bb_squeeze', False)
+            obv = tech_data.get('obv_trend', 'UNKNOWN')
+            stoch_k = tech_data.get('stoch_rsi_k', 'N/A')
+            fib_pos = tech_data.get('fib_position', 'UNKNOWN')
+            range_pos = tech_data.get('range_position_52w', 0.5)
+            liquidity = tech_data.get('liquidity_sweep', 'NONE')
+            tech_summary = (
+                f"\nTechnical Context:"
+                f"\n  RSI(14): {rsi} | StochRSI-K: {stoch_k}"
+                f"\n  EMA Alignment: {ema_align} | MACD: {macd_cross}"
+                f"\n  ADX/Trend: {adx} ({trend})"
+                f"\n  ATR: {atr_pct}% of price (volatility gauge)"
+                f"\n  Volume: {vol_ratio}x 20D avg | OBV: {obv}"
+                f"\n  Bollinger Squeeze: {'YES - imminent breakout' if bb_squeeze else 'No'}"
+                f"\n  Fibonacci Zone: {fib_pos} | 52W Range Position: {round(range_pos*100)}%"
+                f"\n  Liquidity Sweep: {liquidity}"
+            )
+
         prompt = (
-            f'As a quantitative portfolio manager, evaluate this trade setup.\n'
+            f'You are a quantitative portfolio manager at a top Indian hedge fund (NSE/BSE specialist).\n'
+            f'Evaluate this trade setup with STRICT criteria — only approve HIGH CONVICTION setups.\n\n'
             f'News: "{headline}"\n'
-            f'Stock: {ticker} | Direction: {direction}\n'
-            f'Does this news represent a high-probability move of 3%+ before a 1.5% stop?\n'
+            f'Stock: {ticker} | Proposed Direction: {direction}\n'
+            f'Market Regime: {market_regime}\n'
+            f'{tech_summary}\n\n'
+            f'Question: Will this stock move {"UP" if direction == "BULLISH" else "DOWN"} by 2%+ '
+            f'within 3 trading sessions WITHOUT hitting a {"1.5%" if tech_data and tech_data.get("atr_pct", 2) < 2 else "2%"} stop-loss?\n\n'
+            f'Consider: Is the news a genuine catalyst? Does the technical picture support {direction}?\n'
+            f'Is volume confirming the move? Is the market regime favorable?\n'
+            f'Score 80-95 only for HIGH CONVICTION setups. Score 30-50 for weak/contrary setups.\n'
             f'Return ONLY valid JSON: {{"score": <0-100>}}'
         )
 
@@ -525,9 +566,9 @@ class EnsemblePredictor:
     WEIGHTS = {
         'historical': 0.15,
         'technical': 0.20,
-        'sector': 0.00,
+        'sector': 0.10,   # Re-enabled: sector momentum is critical for direction accuracy
         'indian_market': 0.15,
-        'ai_logic': 0.50,
+        'ai_logic': 0.40,  # Reduced from 0.50: better balance across all models
     }
 
     def __init__(self):
@@ -543,28 +584,32 @@ class EnsemblePredictor:
         s3 = self.m3.score(tech_data, direction)
         s4 = self.m4.score(ticker, direction, market_regime)
         s6 = self.m6.score(direction)
-        s7 = self.m7.score(headline, ticker, direction, tech_data, api_client, model_name)
+        # Pass market_regime to AI model so it can factor macro conditions
+        s7 = self.m7.score(headline, ticker, direction, tech_data, api_client, model_name,
+                           market_regime=market_regime)
 
         w_hist = self.WEIGHTS['historical']
         w_tech = self.WEIGHTS['technical']
-        w_sec = self.WEIGHTS['sector']
-        w_ind = self.WEIGHTS['indian_market']
-        w_ai = self.WEIGHTS['ai_logic']
+        w_sec  = self.WEIGHTS['sector']
+        w_ind  = self.WEIGHTS['indian_market']
+        w_ai   = self.WEIGHTS['ai_logic']
 
         valid_models = [s2, s3, s4, s6]
 
         if s7 is None:
             # AI model unavailable — rebalance weights across remaining models
-            # Keep sector weight at 0 since it's intentionally disabled
-            total_remaining = w_hist + w_tech + w_ind  # 0.50
+            total_remaining = w_hist + w_tech + w_sec + w_ind  # 0.60
             if total_remaining > 0:
-                scale = (w_hist + w_tech + w_ind + w_ai) / total_remaining
+                scale = 1.0 / total_remaining
                 w_hist *= scale
                 w_tech *= scale
+                w_sec  *= scale
                 w_ind  *= scale
             w_ai = 0
             s7_val = 0
-            min_agree = 2  # Only 4 models available — require 2/4 to agree
+            # Tightened: require 3/4 models AND min_score 60 when AI is unavailable
+            min_agree = 3
+            min_score = max(min_score, 60)
         else:
             s7_val = s7
             valid_models.append(s7)
@@ -578,13 +623,27 @@ class EnsemblePredictor:
             s7_val * w_ai
         )
 
+        # ── MARKET REGIME PENALTY ──
+        # In a RISK_OFF (falling) market, BULLISH signals are heavily penalized.
+        # In a RISK_ON (rising) market, BEARISH signals lose some confidence.
+        regime_penalty = 0
+        if market_regime == 'RISK_OFF' and direction == 'BULLISH':
+            regime_penalty = -15  # Strongly penalize bulls in a falling market
+            print(f"   [Ensemble] RISK_OFF regime → BULLISH penalty -15 applied for {ticker}")
+        elif market_regime == 'RISK_ON' and direction == 'BEARISH':
+            regime_penalty = -8   # Moderate penalty for bears in a rising market
+
+        final = max(0, min(100, final + regime_penalty))
+
         agree = sum(1 for s in valid_models if s > 50)
         veto = self.m3.has_veto(tech_data, direction)
         approved = final >= min_score and agree >= min_agree and not veto
 
         s7_str = s7 if s7 is not None else "FAIL"
         total_models = len(valid_models)
-        detail_str = f"H:{s2} T:{s3} Sec:{s4} Ind:{s6} AI:{s7_str} | {agree}/{total_models} agree | {'VETO' if veto else 'OK'}"
+        regime_str = f" | Regime:{market_regime}({regime_penalty:+d})"
+        detail_str = (f"H:{s2} T:{s3} Sec:{s4} Ind:{s6} AI:{s7_str} | "
+                      f"{agree}/{total_models} agree | {'VETO' if veto else 'OK'}{regime_str}")
         return {
             'approved': approved,
             'final_score': final,
