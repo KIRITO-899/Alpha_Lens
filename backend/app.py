@@ -337,38 +337,62 @@ current_key_idx = 0
 client = genai.Client(api_key=API_KEYS[current_key_idx]) if API_KEYS else None
 MODEL_NAME = 'gemini-2.5-flash'
 
-# Top Tier Indian Financial RSS Feeds + Google News for 7-day history
+# Comprehensive RSS: Indian Financial + Global Macro/Geopolitical
 RSS_SOURCES = [
     # ── Economic Times (multiple desks) ──
     "https://economictimes.indiatimes.com/markets/stocks/news/rssfeeds/2146842.cms",
     "https://economictimes.indiatimes.com/markets/stocks/earnings/rssfeeds/837588974.cms",
     "https://economictimes.indiatimes.com/markets/rssfeeds/1977021501.cms",
     "https://economictimes.indiatimes.com/industry/rssfeeds/13352306.cms",
+    "https://economictimes.indiatimes.com/news/economy/rssfeeds/1373380680.cms",
+    "https://economictimes.indiatimes.com/news/international/rssfeeds/1373381519.cms",
     # ── MoneyControl ──
     "https://www.moneycontrol.com/rss/buzzingstocks.xml",
     "https://www.moneycontrol.com/rss/marketsindia.xml",
     "https://www.moneycontrol.com/rss/topstory.xml",
+    "https://www.moneycontrol.com/rss/economy.xml",
+    "https://www.moneycontrol.com/rss/worldnews.xml",
     # ── LiveMint ──
     "https://www.livemint.com/rss/markets",
     "https://www.livemint.com/rss/companies",
     "https://www.livemint.com/rss/industry",
+    "https://www.livemint.com/rss/economy",
+    "https://www.livemint.com/rss/politics",
     # ── Business Standard ──
     "https://www.business-standard.com/rss/markets-106.rss",
     "https://www.business-standard.com/rss/companies-101.rss",
     "https://www.business-standard.com/rss/finance-103.rss",
+    "https://www.business-standard.com/rss/economy-102.rss",
+    "https://www.business-standard.com/rss/international-104.rss",
     # ── NDTV Profit ──
     "https://feeds.feedburner.com/ndtvprofit-latest",
     # ── Financial Express ──
     "https://www.financialexpress.com/market/feed/",
-    # ── Google News RSS — past 7 days (historical backfill) ──
-    "https://news.google.com/rss/search?q=indian+stock+market+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
-    "https://news.google.com/rss/search?q=NSE+BSE+Nifty+Sensex+stocks+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
-    "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
-    "https://news.google.com/rss/search?q=indian+economy+RBI+market+when:7d&hl=en-IN&gl=IN&ceid=IN:en",
-    # ── Google News: Company-specific catalysts ──
-    "https://news.google.com/rss/search?q=SEBI+RBI+NSE+BSE+order+fine+approval+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
-    "https://news.google.com/rss/search?q=india+mergers+acquisitions+IPO+results+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
-    "https://news.google.com/rss/search?q=quarterly+results+earnings+profit+loss+india+when:3d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://www.financialexpress.com/economy/feed/",
+    # ── Mint (CNBC-TV18 / Bloomberg) ──
+    "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/market-109.xml",
+    "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/economy-108.xml",
+    "https://www.cnbctv18.com/commonfeeds/v1/cne/rss/world-111.xml",
+    # ── Reuters India / Global ──
+    "https://news.google.com/rss/search?q=site:reuters.com+india+economy+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    # ── Google News: Indian Markets ──
+    "https://news.google.com/rss/search?q=indian+stock+market+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=NSE+BSE+Nifty+Sensex+stocks+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=india+stocks+earnings+results+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=indian+economy+RBI+market+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=SEBI+RBI+NSE+BSE+order+fine+approval+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=india+mergers+acquisitions+IPO+results+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=quarterly+results+earnings+profit+loss+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    # ── Google News: GLOBAL MACRO / GEOPOLITICAL (hidden chain triggers) ──
+    "https://news.google.com/rss/search?q=semiconductor+chip+shortage+ban+export+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=crude+oil+OPEC+prices+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=US+Fed+rate+decision+inflation+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=China+economy+trade+war+tariff+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=Japan+trade+export+restriction+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=rupee+dollar+FII+FPI+flow+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=geopolitical+tension+war+sanctions+india+impact+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=steel+copper+aluminium+commodity+prices+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=PLI+subsidy+government+policy+india+industry+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
 ]
 
 # Global state for scraping optimizations
@@ -694,59 +718,100 @@ STOCK_KEYWORD_MAP = {
 # ==========================================
 MACRO_IMPACT_MAP = {
     # ── Crude oil ──
-    'crude oil rise': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('ASIANPAINT.NS', 'BEARISH')],
-    'crude oil crash': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH'), ('ASIANPAINT.NS', 'BULLISH')],
-    'crude rises': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH')],
-    'crude falls': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH')],
-    'oil prices rise': [('ONGC.NS', 'BULLISH'), ('HINDPETRO.NS', 'BEARISH'), ('BPCL.NS', 'BEARISH')],
-    'oil prices fall': [('ONGC.NS', 'BEARISH'), ('HINDPETRO.NS', 'BULLISH'), ('BPCL.NS', 'BULLISH')],
+    'crude oil rise': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('ASIANPAINT.NS', 'BEARISH'), ('INDIGO.NS', 'BEARISH')],
+    'crude oil crash': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH'), ('ASIANPAINT.NS', 'BULLISH'), ('INDIGO.NS', 'BULLISH')],
+    'crude rises': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('INDIGO.NS', 'BEARISH')],
+    'crude falls': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH'), ('INDIGO.NS', 'BULLISH')],
+    'oil prices rise': [('ONGC.NS', 'BULLISH'), ('HINDPETRO.NS', 'BEARISH'), ('BPCL.NS', 'BEARISH'), ('INDIGO.NS', 'BEARISH')],
+    'oil prices fall': [('ONGC.NS', 'BEARISH'), ('HINDPETRO.NS', 'BULLISH'), ('BPCL.NS', 'BULLISH'), ('INDIGO.NS', 'BULLISH')],
+    'opec cut': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('IOC.NS', 'BEARISH'), ('INDIGO.NS', 'BEARISH')],
+    'opec increase': [('ONGC.NS', 'BEARISH'), ('BPCL.NS', 'BULLISH'), ('IOC.NS', 'BULLISH'), ('INDIGO.NS', 'BULLISH')],
     # ── FII / FPI ──
     'fii selling': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
     'fii sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'fii sells': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
     'fiis sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'fiis selling': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
     'fii outflow': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'fpi sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'fpis sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
     'fpi outflow': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'foreign investor sell': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
     'fii buying': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
-    'fii buy': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
     'fii inflow': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
     'fpi inflow': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH')],
-    # ── RBI Rates ──
-    'rate hike': [('DLF.NS', 'BEARISH'), ('LODHA.NS', 'BEARISH'), ('SBIN.NS', 'BULLISH')],
-    'rate cut': [('DLF.NS', 'BULLISH'), ('LODHA.NS', 'BULLISH'), ('SBIN.NS', 'BEARISH')],
-    'rbi rate': [('HDFCBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH'), ('DLF.NS', 'BULLISH')],
-    'repo rate cut': [('HDFCBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH'), ('DLF.NS', 'BULLISH')],
+    # ── RBI / Rates ──
+    'rate hike': [('DLF.NS', 'BEARISH'), ('LODHA.NS', 'BEARISH'), ('SBIN.NS', 'BULLISH'), ('BAJFINANCE.NS', 'BEARISH')],
+    'rate cut': [('DLF.NS', 'BULLISH'), ('LODHA.NS', 'BULLISH'), ('SBIN.NS', 'BEARISH'), ('BAJFINANCE.NS', 'BULLISH')],
+    'repo rate cut': [('HDFCBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH'), ('DLF.NS', 'BULLISH'), ('BAJFINANCE.NS', 'BULLISH')],
     'repo rate hike': [('HDFCBANK.NS', 'BEARISH'), ('SBIN.NS', 'BEARISH'), ('DLF.NS', 'BEARISH')],
-    # ── Defence / Infra ──
+    'rbi policy': [('HDFCBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH')],
+    # ── Semiconductor / Chips (Global → India) ──
+    'semiconductor shortage': [('INFY.NS', 'BEARISH'), ('WIPRO.NS', 'BEARISH'), ('TATAMOTORS.NS', 'BEARISH'), ('MARUTI.NS', 'BEARISH')],
+    'chip shortage': [('TATAMOTORS.NS', 'BEARISH'), ('MARUTI.NS', 'BEARISH'), ('HEROMOTOCO.NS', 'BEARISH'), ('EICHERMOT.NS', 'BEARISH')],
+    'semiconductor ban': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH'), ('WIPRO.NS', 'BEARISH'), ('TATAMOTORS.NS', 'BEARISH')],
+    'chip export ban': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH'), ('TATAMOTORS.NS', 'BEARISH')],
+    'semiconductor plant india': [('VEDL.NS', 'BULLISH'), ('TATAELXSI.NS', 'BULLISH'), ('DIXON.NS', 'BULLISH')],
+    'chip fab india': [('VEDL.NS', 'BULLISH'), ('TATAELXSI.NS', 'BULLISH')],
+    # ── Japan / China / US Geopolitical Supply Chain ──
+    'japan export control': [('TATAMOTORS.NS', 'BEARISH'), ('MARUTI.NS', 'BEARISH'), ('INFY.NS', 'BEARISH')],
+    'japan semiconductor': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH'), ('WIPRO.NS', 'BEARISH'), ('TATAMOTORS.NS', 'BEARISH')],
+    'china slowdown': [('TATASTEEL.NS', 'BEARISH'), ('JSWSTEEL.NS', 'BEARISH'), ('HINDALCO.NS', 'BEARISH'), ('COALINDIA.NS', 'BEARISH')],
+    'china stimulus': [('TATASTEEL.NS', 'BULLISH'), ('JSWSTEEL.NS', 'BULLISH'), ('HINDALCO.NS', 'BULLISH')],
+    'china tariff': [('TATASTEEL.NS', 'BULLISH'), ('JSWSTEEL.NS', 'BULLISH'), ('DIXON.NS', 'BULLISH')],
+    'china dumping': [('TATASTEEL.NS', 'BEARISH'), ('JSWSTEEL.NS', 'BEARISH'), ('HINDALCO.NS', 'BEARISH')],
+    'us fed rate': [('HDFCBANK.NS', 'BEARISH'), ('ICICIBANK.NS', 'BEARISH'), ('INFY.NS', 'BEARISH')],
+    'fed rate cut': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('HDFCBANK.NS', 'BULLISH')],
+    'fed rate hike': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH'), ('HDFCBANK.NS', 'BEARISH')],
+    'us recession': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH'), ('WIPRO.NS', 'BEARISH'), ('HCLTECH.NS', 'BEARISH')],
+    'us sanctions': [('RELIANCE.NS', 'BEARISH'), ('ONGC.NS', 'BEARISH')],
+    'taiwan tension': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH'), ('TATAMOTORS.NS', 'BEARISH')],
+    'taiwan strait': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
+    'russia ukraine': [('ONGC.NS', 'BULLISH'), ('COALINDIA.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH')],
+    'middle east tension': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('INDIGO.NS', 'BEARISH')],
+    'iran conflict': [('ONGC.NS', 'BULLISH'), ('BPCL.NS', 'BEARISH'), ('INDIGO.NS', 'BEARISH')],
+    # ── Currency / Trade ──
+    'rupee falls': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH'), ('SUNPHARMA.NS', 'BULLISH')],
+    'rupee weakens': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('SUNPHARMA.NS', 'BULLISH')],
+    'rupee rises': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
+    'rupee strengthens': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
+    'dollar surge': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('MARUTI.NS', 'BEARISH')],
+    'tariff': [('TATAMOTORS.NS', 'BEARISH'), ('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
+    'trade war': [('TATAMOTORS.NS', 'BEARISH'), ('INFY.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'anti-dumping duty': [('TATASTEEL.NS', 'BULLISH'), ('JSWSTEEL.NS', 'BULLISH')],
+    'import duty hike': [('DIXON.NS', 'BULLISH'), ('TATASTEEL.NS', 'BULLISH')],
+    'pli scheme': [('DIXON.NS', 'BULLISH'), ('VEDL.NS', 'BULLISH'), ('TATAELXSI.NS', 'BULLISH')],
+    # ── Commodities (deep supply chain) ──
+    'steel prices rise': [('TATASTEEL.NS', 'BULLISH'), ('JSWSTEEL.NS', 'BULLISH'), ('MARUTI.NS', 'BEARISH'), ('LT.NS', 'BEARISH')],
+    'steel prices fall': [('TATASTEEL.NS', 'BEARISH'), ('JSWSTEEL.NS', 'BEARISH'), ('MARUTI.NS', 'BULLISH'), ('LT.NS', 'BULLISH')],
+    'aluminium prices': [('HINDALCO.NS', 'BULLISH'), ('VEDL.NS', 'BULLISH')],
+    'copper prices rise': [('HINDALCO.NS', 'BULLISH'), ('VEDL.NS', 'BULLISH')],
+    'lithium shortage': [('TATAMOTORS.NS', 'BEARISH'), ('M&M.NS', 'BEARISH')],
+    'lithium prices fall': [('TATAMOTORS.NS', 'BULLISH'), ('M&M.NS', 'BULLISH')],
+    'coal prices rise': [('COALINDIA.NS', 'BULLISH'), ('NTPC.NS', 'BEARISH'), ('JSWSTEEL.NS', 'BEARISH')],
+    'natural gas prices': [('IGL.NS', 'BEARISH'), ('MGL.NS', 'BEARISH'), ('GAIL.NS', 'BULLISH')],
+    'gold surges': [('MUTHOOTFIN.NS', 'BULLISH'), ('MANAPPURAM.NS', 'BULLISH'), ('TITAN.NS', 'BEARISH')],
+    'gold rises': [('MUTHOOTFIN.NS', 'BULLISH'), ('MANAPPURAM.NS', 'BULLISH')],
+    'gold falls': [('MUTHOOTFIN.NS', 'BEARISH'), ('MANAPPURAM.NS', 'BEARISH'), ('TITAN.NS', 'BULLISH')],
+    # ── Sector Deep / Government Policy ──
     'defense budget': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH'), ('BHARATFORG.NS', 'BULLISH')],
     'defence budget': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH'), ('BHARATFORG.NS', 'BULLISH')],
+    'defense order': [('HAL.NS', 'BULLISH'), ('BEL.NS', 'BULLISH')],
     'railway budget': [('RVNL.NS', 'BULLISH'), ('IRFC.NS', 'BULLISH'), ('IRCTC.NS', 'BULLISH')],
     'infrastructure spending': [('LT.NS', 'BULLISH'), ('RVNL.NS', 'BULLISH'), ('NTPC.NS', 'BULLISH')],
-    # ── Sector rallies ──
+    'inflation rise': [('HDFCBANK.NS', 'BEARISH'), ('DLF.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
+    'gdp growth': [('HDFCBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH'), ('LT.NS', 'BULLISH')],
+    'monsoon forecast': [('UPL.NS', 'BULLISH'), ('PIDILITIND.NS', 'BULLISH'), ('DABUR.NS', 'BULLISH')],
+    'drought': [('UPL.NS', 'BEARISH'), ('DABUR.NS', 'BEARISH'), ('ITC.NS', 'BEARISH')],
+    'ev policy': [('TATAMOTORS.NS', 'BULLISH'), ('M&M.NS', 'BULLISH'), ('MARUTI.NS', 'BEARISH')],
+    'electric vehicle': [('TATAMOTORS.NS', 'BULLISH'), ('M&M.NS', 'BULLISH')],
+    'renewable energy': [('ADANIGREEN.NS', 'BULLISH'), ('TATAPOWER.NS', 'BULLISH'), ('NTPC.NS', 'BULLISH')],
+    'solar tariff': [('ADANIGREEN.NS', 'BULLISH'), ('TATAPOWER.NS', 'BULLISH')],
+    'upi transaction': [('PAYTM.NS', 'BULLISH'), ('SBICARD.NS', 'BULLISH')],
+    'digital payment': [('PAYTM.NS', 'BULLISH'), ('SBICARD.NS', 'BULLISH')],
     'pharma sector rally': [('SUNPHARMA.NS', 'BULLISH'), ('CIPLA.NS', 'BULLISH'), ('DRREDDY.NS', 'BULLISH')],
-    'pharma stocks rally': [('SUNPHARMA.NS', 'BULLISH'), ('CIPLA.NS', 'BULLISH'), ('DRREDDY.NS', 'BULLISH')],
+    'fda approval': [('SUNPHARMA.NS', 'BULLISH'), ('CIPLA.NS', 'BULLISH'), ('DRREDDY.NS', 'BULLISH')],
+    'fda warning': [('SUNPHARMA.NS', 'BEARISH'), ('CIPLA.NS', 'BEARISH'), ('DRREDDY.NS', 'BEARISH')],
     'it sector rally': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
-    'it stocks rally': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
     'banking sector': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('SBIN.NS', 'BULLISH')],
-    'bank nifty': [('HDFCBANK.NS', 'BULLISH'), ('ICICIBANK.NS', 'BULLISH'), ('KOTAKBANK.NS', 'BULLISH')],
     'auto sector': [('MARUTI.NS', 'BULLISH'), ('TATAMOTORS.NS', 'BULLISH'), ('M&M.NS', 'BULLISH')],
     'realty stocks': [('DLF.NS', 'BULLISH'), ('LODHA.NS', 'BULLISH'), ('OBEROIRLTY.NS', 'BULLISH')],
     'metal stocks': [('TATASTEEL.NS', 'BULLISH'), ('JSWSTEEL.NS', 'BULLISH'), ('HINDALCO.NS', 'BULLISH')],
-    'gold surges': [('MUTHOOTFIN.NS', 'BULLISH'), ('MANAPPURAM.NS', 'BULLISH')],
-    'gold rises': [('MUTHOOTFIN.NS', 'BULLISH'), ('MANAPPURAM.NS', 'BULLISH')],
-    'gold falls': [('MUTHOOTFIN.NS', 'BEARISH'), ('MANAPPURAM.NS', 'BEARISH')],
-    # ── Macro/Geopolitical ──
-    'rupee falls': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
-    'rupee weakens': [('INFY.NS', 'BULLISH'), ('TCS.NS', 'BULLISH'), ('WIPRO.NS', 'BULLISH')],
-    'rupee rises': [('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
-    'tariff': [('TATAMOTORS.NS', 'BEARISH'), ('INFY.NS', 'BEARISH'), ('TCS.NS', 'BEARISH')],
-    'trade war': [('TATAMOTORS.NS', 'BEARISH'), ('INFY.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'inflation rise': [('HDFCBANK.NS', 'BEARISH'), ('DLF.NS', 'BEARISH'), ('RELIANCE.NS', 'BEARISH')],
-    'gdp growth': [('HDFCBANK.NS', 'BULLISH'), ('RELIANCE.NS', 'BULLISH'), ('LT.NS', 'BULLISH')],
 }
 
 MATERIAL_EVENT_KEYWORDS = [
@@ -757,6 +822,21 @@ MATERIAL_EVENT_KEYWORDS = [
     'default', 'downgrade', 'upgrade', 'guidance', 'capex', 'expansion',
     'plant', 'shutdown', 'launch', 'tariff', 'rbi', 'repo rate', 'budget',
     'policy', 'export', 'import', 'crude', 'rupee', 'fii', 'fpi',
+    # Geopolitical / Supply Chain / Macro (hidden chain triggers)
+    'semiconductor', 'chip', 'sanction', 'embargo', 'trade war', 'tariff war',
+    'fed rate', 'federal reserve', 'ecb', 'bank of japan', 'boj',
+    'china', 'japan', 'taiwan', 'russia', 'ukraine', 'iran', 'middle east',
+    'opec', 'recession', 'slowdown', 'stimulus', 'dumping', 'anti-dumping',
+    'supply chain', 'shortage', 'disruption', 'blockade', 'strike',
+    'inflation', 'deflation', 'gdp', 'current account', 'fiscal deficit',
+    'monsoon', 'drought', 'flood', 'climate',
+    'lithium', 'cobalt', 'rare earth', 'copper', 'aluminium', 'steel',
+    'natural gas', 'lng', 'coal', 'solar', 'renewable', 'ev ', 'electric vehicle',
+    'pli', 'subsidy', 'deregulation', 'privatization', 'disinvestment',
+    'fda', 'usfda', 'dcgi', 'who', 'pandemic', 'epidemic',
+    'defence order', 'defense order', 'arms deal', 'military',
+    'digital payment', 'upi', 'fintech', 'cryptocurrency', 'bitcoin',
+    'promoter', 'insider', 'pledge', 'rating', 'moody', 'fitch', 's&p',
 ]
 
 LOW_SIGNAL_PHRASES = [
@@ -1245,7 +1325,7 @@ def ai_news_worker():
         print(f"   [DB Init Error] {e}")
 
     def fetch_feed(url):
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         articles = []
         try:
             cache = RSS_CACHE[url]
@@ -1424,31 +1504,45 @@ For material news: provide ONLY the 1-3 HIGHEST CONVICTION tickers. Quality over
                     }
                 ], indent=2)
 
-                prompt = f"""You are a top-1% quantitative portfolio manager for Indian equities, running a multi-billion dollar NSE/BSE long-short book.
+                prompt = f"""You are the Chief Investment Strategist at India's top macro hedge fund, managing ₹50,000 Cr AUM. You are NOT a keyword matcher — you are a MACRO STRATEGIST who sees connections that retail traders completely miss.
 
-Analyze exactly {len(articles_batch)} news items in one batch. For every article, decide whether any listed Indian stock is likely to be affected over the next 1-5 trading sessions.
+Your EDGE: You analyze news through HIDDEN SUPPLY CHAINS, GEOPOLITICAL TRANSMISSION, and SECOND/THIRD-ORDER EFFECTS. When retail traders read "Japan restricts semiconductor exports" they see nothing. YOU see: chip shortage → auto production cuts → MARUTI.NS/TATAMOTORS.NS BEARISH, IT hardware delays → INFY.NS BEARISH, but chip design outsourcing opportunity → TATAELXSI.NS BULLISH.
 
-Think like a quant PM, not a keyword matcher. A stock is affected only when there is a causal, tradeable pathway:
-1. Direct company impact: earnings beat/miss, order win, contract loss, merger, acquisition, stake sale, buyback, dividend, fraud, ban, approval, default, rating change, management change.
-2. Second-order impact: named suppliers, customers, competitors, commodity users/producers, lenders, platform beneficiaries, importers/exporters.
-3. Macro transmission: RBI rates/liquidity, government policy, PLI, tariffs, crude, metals, rupee, gold, fiscal spending, sector regulation.
-4. Flow/positioning: large block deals, promoter buying/selling, forced institutional rebalancing, index inclusion/exclusion.
+Analyze exactly {len(articles_batch)} news items. For EVERY article, think through these HIDDEN CHAINS:
 
-Reject zero-signal noise:
-- Generic Nifty/Sensex direction stories.
-- Technical chart summaries or "stocks to watch" listicles without a fresh catalyst.
-- Analyst target changes without new information.
-- Broad market commentary, stale repeats, or articles where the stock move is already fully priced.
-- Weak sector sympathy without a clear P&L, balance-sheet, valuation, or flow mechanism.
+LAYER 1 — OBVIOUS (what retail sees): Which company is directly named?
+LAYER 2 — SUPPLY CHAIN (what smart money sees): Who supplies to or buys from the affected company? Who competes? What raw materials flow into their products?
+  Examples: Steel price surge → input cost for MARUTI (BEARISH), revenue for TATASTEEL (BULLISH)
+           China slowdown → metal demand drop → HINDALCO/JSWSTEEL BEARISH
+           US visa restrictions → onsite revenue pressure → INFY/TCS BEARISH
+LAYER 3 — MACRO TRANSMISSION (what only PMs see): How does this ripple through the Indian economy?
+  Examples: Japan chip export ban → global auto production cut → Indian auto parts exporters BEARISH → BUT import substitution plays BULLISH
+           Middle East conflict → crude spike → OMC margin compression BEARISH → but ONGC windfall BULLISH → RBI inflation worry → rate hike fear → real estate BEARISH
+           US Fed pause → dollar weakening → rupee strengthens → IT exporters BEARISH → FII inflows → banking BULLISH
+LAYER 4 — FLOW POSITIONING: Will FIIs/DIIs be forced to rebalance? Will index weights shift? Will options market reprice?
+
+CRITICAL RULES FOR HIDDEN CHAINS:
+✅ ALWAYS map global commodity news to Indian users/producers (crude→airlines/OMCs/paint, steel→auto/infra, copper→power)
+✅ ALWAYS map geopolitical tension to Indian supply chain dependencies (China/Taiwan/Japan → IT/auto/electronics/pharma APIs)
+✅ ALWAYS map central bank decisions (Fed/ECB/BOJ/RBI) to FII flow impact on Indian equities
+✅ ALWAYS map currency moves to export/import-heavy sectors
+✅ MAP government policy/regulation to specific sector P&L impact (PLI, tariffs, subsidies, environmental norms)
+✅ MAP monsoon/weather to agri-dependent sectors (FMCG, fertilizers, rural consumption)
+
+REJECT zero-signal noise:
+- Generic "Nifty may rise/fall" commentary without a causal mechanism
+- Analyst target reiterations without NEW catalyst
+- Technical chart analysis, "stocks to watch" listicles
+- Repeat coverage of events already priced in
+- Weak sector sympathy without a clear P&L transmission path
 
 Rules:
-- Return a complete JSON array with one object for every input index.
-- For no direct stock impact, set material=false and impacts=[].
-- For material articles, return only the 1-3 highest-conviction stocks.
-- Use exact ticker format: NSE symbols end in .NS, BSE-only symbols end in .BO.
-- Do not invent tickers. If unsure, mark material=false.
-- confidence and materiality_score must be 0-100.
-- reason must explain the actual transmission mechanism, not repeat keywords.
+- Return a complete JSON array with one object for every input index
+- For no stock impact: set material=false, impacts=[]
+- For material articles: return 1-3 HIGHEST-CONVICTION stocks with DEEP reasoning
+- reason MUST explain the HIDDEN CHAIN (e.g., "Japan chip curbs → auto production delays → Maruti depends on Denso/Aisin for ECUs → 15% of components are chip-dependent → production cut risk")
+- Use exact NSE ticker.NS format. Do NOT invent tickers.
+- confidence and materiality_score: 0-100
 
 News items to analyze:
 {numbered}
@@ -1504,10 +1598,12 @@ Return ONLY valid JSON matching this shape:
                                     except Exception:
                                         conf = 75
                                     impact_type = str(impact.get("impact_type", "DIRECT")).upper()
+                                    # No penalty for deep analysis — 2nd-order and macro
+                                    # signals are the EDGE that retail traders miss
                                     if impact_type == "SECOND_ORDER":
-                                        conf = max(10, conf - 8)  # Slightly less confident
+                                        conf = max(10, conf - 2)  # Minimal penalty
                                     elif impact_type == "MACRO_TRANSMISSION":
-                                        conf = max(10, conf - 12)  # Even less confident
+                                        conf = max(10, conf - 3)  # Minimal penalty
                                     impact_candidates.append({
                                         "ticker": ticker,
                                         "direction": direction,
