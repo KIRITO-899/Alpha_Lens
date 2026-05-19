@@ -15,7 +15,7 @@ import argparse
 from dotenv import load_dotenv
 
 # Load environment variables from parent directory
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'), override=True)
 
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
@@ -1441,6 +1441,15 @@ def ai_news_worker():
             # ── Try AI screening first (only if Gemini client is available) ──
             _ai_client = globals().get('client')
             _key_idx = globals().get('current_key_idx', 0)
+
+            # ── Key exhaustion cooldown: skip batch if all keys are on cooldown ──
+            _exhausted_until = globals().get('_AI_KEYS_EXHAUSTED_UNTIL', 0)
+            if _exhausted_until and time.time() < _exhausted_until:
+                _remaining = int(_exhausted_until - time.time())
+                print(f"   [AI] All keys cooling down — skipping batch ({_remaining}s remaining).")
+                sys.stdout.flush()
+                return [_no_impact_row(a, 0, "AI_COOLDOWN") for a in articles_batch]
+
             if _ai_client:
                 print(f"   [AI] Screening batch of {len(articles_batch)} articles...")
                 sys.stdout.flush()
@@ -1605,9 +1614,13 @@ Return ONLY valid JSON matching this shape:
                             else:
                                 raise
                     if resp is None:
-                        print(f"   [AI] All keys exhausted, using rule fallback")
+                        # Set a 90-second cooldown so subsequent batches skip immediately
+                        import builtins as _bi
+                        _bi.__dict__  # no-op; set via globals
+                        globals()['_AI_KEYS_EXHAUSTED_UNTIL'] = time.time() + 90
+                        print(f"   [AI] All keys exhausted — cooldown set for 90s. Skipping batch.")
                         sys.stdout.flush()
-                        return _rule_based_fallback(articles_batch, _no_impact_row)
+                        return [_no_impact_row(a, 0, "AI_QUOTA_EXHAUSTED") for a in articles_batch]
                     parsed = extract_json_from_text(resp.text)
                     if isinstance(parsed, dict):
                         for v in parsed.values():
@@ -1720,12 +1733,9 @@ Return ONLY valid JSON matching this shape:
             return _rule_based_fallback(articles_batch, _no_impact_row)
 
         def _rule_based_fallback(articles_batch, _no_impact_row):
-            """Fallback when AI is down: return NO signals (keyword mapping disabled by user)."""
-            results = []
-            for article in articles_batch:
-                results.append(_no_impact_row(article, 0, "AI_UNAVAILABLE_NO_FALLBACK"))
-            print(f"   [AI Fallback] Keyword usage disabled. Skipping {len(articles_batch)} articles due to API exhaustion.")
-            return results
+            """AI-only mode: skip all articles when AI is unavailable. No keyword/macro signals."""
+            print(f"   [AI] Skipping {len(articles_batch)} articles — AI-only mode, no fallback.")
+            return [_no_impact_row(a, 0, "AI_UNAVAILABLE") for a in articles_batch]
 
         # Process in batches of 25 headlines per AI call
         BATCH_SIZE = 50
