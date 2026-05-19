@@ -335,7 +335,7 @@ API_KEYS = [key for key in API_KEYS if key] # Filter out missing keys
 
 current_key_idx = 0
 client = genai.Client(api_key=API_KEYS[current_key_idx]) if API_KEYS else None
-MODEL_NAME = 'gemini-1.5-flash-latest'
+MODEL_NAME = 'gemini-2.5-pro'
 
 # Comprehensive RSS: Indian Financial + Global Macro/Geopolitical
 RSS_SOURCES = [
@@ -1788,7 +1788,7 @@ Return ONLY valid JSON matching this shape:
             return results
 
         # Process in batches of 25 headlines per AI call
-        BATCH_SIZE = 25
+        BATCH_SIZE = 50
         screened_signals = []
         for i in range(0, len(raw_articles), BATCH_SIZE):
             batch = raw_articles[i:i + BATCH_SIZE]

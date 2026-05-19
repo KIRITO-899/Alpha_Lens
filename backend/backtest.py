@@ -31,7 +31,7 @@ API_KEYS = [
 current_key_idx = 0
 
 client = genai.Client(api_key=API_KEYS[current_key_idx])
-MODEL_NAME = 'gemini-1.5-flash'
+MODEL_NAME = 'gemini-2.5-pro'
 
 # --- ASYMMETRIC RISK/REWARD — wide stop gives trades breathing room ---
 TARGET_PCT = 1.5
