@@ -451,7 +451,7 @@ class AILogicModel:
     # SM-Gemini fallback client (hardcoded key for when .env Gemini keys are missing)
     _sm_client = None
     _SM_KEY = os.environ.get("SM_GEMINI_API_KEY", "")
-    _SM_MODEL = "google/gemini-2.5-flash"
+    _SM_MODEL = "google/gemini-1.5-flash-latest"
 
     @classmethod
     def _get_sm_client(cls):

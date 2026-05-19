@@ -335,7 +335,7 @@ API_KEYS = [key for key in API_KEYS if key] # Filter out missing keys
 
 current_key_idx = 0
 client = genai.Client(api_key=API_KEYS[current_key_idx]) if API_KEYS else None
-MODEL_NAME = 'gemini-2.5-flash'
+MODEL_NAME = 'gemini-1.5-flash-latest'
 
 # Comprehensive RSS: Indian Financial + Global Macro/Geopolitical
 RSS_SOURCES = [
@@ -1302,14 +1302,23 @@ def ai_news_worker():
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 7-Model Ensemble (>= 70 score & 5/7 vote)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = {TRADE_STOP_PCT}% stop : {TRADE_TARGET_PCT}% target")
-    ensemble = EnsemblePredictor()
+    import sys as _sys
+    sys.stdout.flush()
+    try:
+        ensemble = EnsemblePredictor()
+        print("   [OK] EnsemblePredictor initialized")
+    except Exception as _e:
+        print(f"   [FATAL] EnsemblePredictor failed: {_e}")
+        import traceback; traceback.print_exc()
+        return
     
     # Initialize SEEN_HEADLINES from DB on first run.
-    # CRITICAL: Only block re-processing of news that ALREADY HAS stock signals.
-    # News without signals (193 articles) must remain available for re-evaluation
-    # with the new lower threshold.
+    print("   [DEBUG] About to load SEEN_HEADLINES from DB...")
+    sys.stdout.flush()
     try:
         conn = connect_news_db()
+        print("   [DEBUG] DB connected for SEEN_HEADLINES")
+        sys.stdout.flush()
         c = conn.cursor()
         c.execute("""
             SELECT DISTINCT n.headline
@@ -1323,24 +1332,22 @@ def ai_news_worker():
         conn.close()
     except Exception as e:
         print(f"   [DB Init Error] {e}")
+    
+    print("   [DEBUG] Starting main loop...")
+    sys.stdout.flush()
 
     def fetch_feed(url):
         stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         articles = []
         try:
-            cache = RSS_CACHE[url]
-            feed = feedparser.parse(url, etag=cache['etag'], modified=cache['modified'])
-            feed_status = getattr(feed, 'status', None)
-            if feed_status == 304:
-                return [] # Not modified
-            # If feedparser returned no entries and no valid status, bail gracefully
-            if feed_status is None and not feed.entries:
-                print(f"   [RSS] No status/entries for {url} — skipping")
-                return []
-            
-            # Update cache
-            if hasattr(feed, 'etag'): RSS_CACHE[url]['etag'] = feed.etag
-            if hasattr(feed, 'modified'): RSS_CACHE[url]['modified'] = feed.modified
+            # Use requests with hard timeout, then feed to feedparser
+            try:
+                resp = HTTP_SESSION.get(url, timeout=8)
+                if resp.status_code != 200:
+                    return []
+                feed = feedparser.parse(resp.content)
+            except Exception:
+                return []  # Timeout or network error
             
             for entry in feed.entries[:30]:
                 pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
@@ -1371,18 +1378,37 @@ def ai_news_worker():
         return articles
 
     while True:
+      try:
         # ============================================================
         # PHASE 1: INSTANT — Scrape, Filter, Save, Map (no API calls)
         # ============================================================
         raw_articles = []
+        print(f"[SCRAPE] Fetching from {len(RSS_SOURCES)} RSS sources...")
+        sys.stdout.flush()
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_map = {executor.submit(fetch_feed, url): url for url in RSS_SOURCES}
+                try:
+                    for future in concurrent.futures.as_completed(future_map, timeout=60):
+                        try:
+                            res = future.result(timeout=10)
+                            raw_articles.extend(res)
+                        except Exception:
+                            pass
+                except concurrent.futures.TimeoutError:
+                    # Some feeds didn't finish in time — collect what we have
+                    for future in future_map:
+                        if future.done():
+                            try:
+                                raw_articles.extend(future.result(timeout=0))
+                            except Exception:
+                                pass
+                    print(f"   [SCRAPE] Timeout reached, collected {len(raw_articles)} articles from fast feeds")
+        except Exception as scrape_err:
+            print(f"   [SCRAPE ERROR] {scrape_err}")
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(RSS_SOURCES)) as executor:
-            results = executor.map(fetch_feed, RSS_SOURCES)
-            for res in results:
-                raw_articles.extend(res)
-        
-        if raw_articles:
-            print(f"Scraped {len(raw_articles)} headlines from all sources")
+        print(f"[SCRAPE] Got {len(raw_articles)} headlines from all sources")
+        sys.stdout.flush()
         
         # Get market regime for technical filters
         market_regime = get_market_regime()
@@ -1399,9 +1425,8 @@ def ai_news_worker():
             """
             if not articles_batch:
                 return []
-
-            for article in articles_batch:
-                article_screening_context(article)
+            # Skip slow per-article body scraping — use headline + RSS summary only
+            # deep_context scraping for 500+ articles would take 30+ minutes
 
             def _no_impact_row(article, materiality_score=0, catalyst_type="NO_DIRECT_EQUITY_IMPACT"):
                 try:
@@ -1422,7 +1447,11 @@ def ai_news_worker():
                 }
 
             # ── Try AI screening first (only if Gemini client is available) ──
-            if client:
+            _ai_client = globals().get('client')
+            _key_idx = globals().get('current_key_idx', 0)
+            if _ai_client:
+                print(f"   [AI] Screening batch of {len(articles_batch)} articles...")
+                sys.stdout.flush()
                 numbered = "\n".join(
                     [
                         f"{i+1}. Headline: {a['headline']}\n"
@@ -1551,13 +1580,42 @@ Return ONLY valid JSON matching this shape:
 {schema_example}"""
 
                 try:
-                    resp = client.models.generate_content(
-                        model=MODEL_NAME,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json"
-                        ),
-                    )
+                    resp = None
+                    _max_retries = len(API_KEYS) if API_KEYS else 1
+                    for _attempt in range(_max_retries):
+                        try:
+                            # Use ThreadPoolExecutor for hard 30s timeout
+                            import concurrent.futures as _cf2
+                            def _make_call(_c=_ai_client, _p=prompt):
+                                return _c.models.generate_content(
+                                    model=MODEL_NAME,
+                                    contents=_p,
+                                    config=types.GenerateContentConfig(
+                                        response_mime_type="application/json"
+                                    ),
+                                )
+                            with _cf2.ThreadPoolExecutor(max_workers=1) as _tex:
+                                _fut = _tex.submit(_make_call)
+                                resp = _fut.result(timeout=30)
+                            break  # Success
+                        except Exception as _api_err:
+                            err_str = str(_api_err)
+                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                                _key_idx = (_key_idx + 1) % len(API_KEYS)
+                                _ai_client = genai.Client(api_key=API_KEYS[_key_idx])
+                                print(f"   [AI] 429 hit, rotating to key {_key_idx+1}/{len(API_KEYS)}")
+                                sys.stdout.flush()
+                                time.sleep(2)
+                            elif "TimeoutError" in err_str or "timed out" in err_str.lower():
+                                print(f"   [AI] Timeout on batch, falling back to rules")
+                                sys.stdout.flush()
+                                return _rule_based_fallback(articles_batch, _no_impact_row)
+                            else:
+                                raise
+                    if resp is None:
+                        print(f"   [AI] All keys exhausted, using rule fallback")
+                        sys.stdout.flush()
+                        return _rule_based_fallback(articles_batch, _no_impact_row)
                     parsed = extract_json_from_text(resp.text)
                     if isinstance(parsed, dict):
                         for v in parsed.values():
@@ -1661,12 +1719,73 @@ Return ONLY valid JSON matching this shape:
                     print(f"   [AI Screener] {signal_count} ticker-signals from {len(articles_batch)} AI-reviewed headlines")
                     return results
                 except Exception as e:
-                    print(f"   [AI Screener Error] {e} -- no keyword fallback used")
-                    return [_no_impact_row(article, 0, "AI_ERROR") for article in articles_batch]
+                    print(f"   [AI Screener Error] {e} -- falling back to rule-based mapping")
+                    # ── FALLBACK: Rule-based mapping when AI is unavailable ──
+                    return _rule_based_fallback(articles_batch, _no_impact_row)
 
-            # AI-only stock selection: do not create keyword-based stock signals.
-            print("   [AI Screener] Gemini client unavailable; no keyword stock mapping used")
-            return [_no_impact_row(article, 0, "AI_UNAVAILABLE") for article in articles_batch]
+            # AI client not available — use rule-based fallback
+            print("   [AI Screener] Gemini client unavailable; using rule-based mapping")
+            return _rule_based_fallback(articles_batch, _no_impact_row)
+
+        def _rule_based_fallback(articles_batch, _no_impact_row):
+            """Map articles to stocks using MACRO_IMPACT_MAP + STOCK_KEYWORD_MAP when AI is down."""
+            results = []
+            for article in articles_batch:
+                headline = article.get("headline", "")
+                summary = article.get("summary", "")
+                text = f"{headline} {summary}".lower()
+                found_signals = []
+                
+                # Check MACRO_IMPACT_MAP
+                for trigger, impacts in MACRO_IMPACT_MAP.items():
+                    if trigger in text:
+                        for ticker, direction in impacts:
+                            found_signals.append({
+                                "ticker": ticker,
+                                "direction": direction,
+                                "quality_score": 65,
+                                "reason": f"Rule-based: '{trigger}' detected in headline",
+                            })
+                
+                # Check STOCK_KEYWORD_MAP for direct company mentions
+                for keyword, ticker_raw in STOCK_KEYWORD_MAP.items():
+                    pattern = r'\b' + re.escape(keyword.lower()) + r'\b'
+                    if re.search(pattern, text):
+                        ticker = normalize_ticker(ticker_raw)
+                        if ticker:
+                            direction = _headline_direction(headline, summary)
+                            found_signals.append({
+                                "ticker": ticker,
+                                "direction": direction,
+                                "quality_score": 60,
+                                "reason": f"Rule-based: '{keyword}' mentioned in headline",
+                            })
+                
+                if found_signals:
+                    # Deduplicate by ticker, keep highest quality
+                    seen_tickers = {}
+                    for sig in found_signals:
+                        t = sig["ticker"]
+                        if t not in seen_tickers or sig["quality_score"] > seen_tickers[t]["quality_score"]:
+                            seen_tickers[t] = sig
+                    for sig in list(seen_tickers.values())[:3]:
+                        results.append({
+                            "headline": headline,
+                            "time": article["time"],
+                            "url": article.get("url"),
+                            "summary": summary,
+                            "deep_context": article.get("deep_context", ""),
+                            "ticker": sig["ticker"],
+                            "direction": sig["direction"],
+                            "quality_score": sig["quality_score"],
+                            "reason": sig["reason"],
+                        })
+                else:
+                    results.append(_no_impact_row(article, 0, "RULE_NO_MATCH"))
+            
+            signal_count = sum(1 for r in results if r.get("ticker"))
+            print(f"   [Rule Fallback] {signal_count} ticker-signals from {len(articles_batch)} headlines")
+            return results
 
         # Process in batches of 25 headlines per AI call
         BATCH_SIZE = 25
@@ -1876,7 +1995,7 @@ Return ONLY valid JSON matching this shape:
                 db_write(_insert_signals)
                 print(f"   [+] ENSEMBLE APPROVED: {headline[:45]}... ({len(approved_signals)} alpha signals)")
         print(f"PHASE 1 DONE: {len(new_article_ids)} new headlines saved INSTANTLY to database!")
-        time.sleep(180)  # Poll every 3 minutes for fresh news (was 600s = 10 min)
+        time.sleep(180)  # Poll every 3 minutes for fresh news
 
         
         # ============================================================
@@ -1984,6 +2103,11 @@ Output STRICT valid JSON array:
         except Exception as e:
             print("Performance Report Error:", e)
         # Note: main loop sleep is 180s at start of cycle (3-minute news polling)
+      except Exception as _loop_err:
+        print(f"[FATAL LOOP ERROR] {_loop_err}")
+        import traceback; traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
+        time.sleep(30)  # Wait 30s before retrying
 
 def get_price_with_range(ticker, market_open=None):
     """
