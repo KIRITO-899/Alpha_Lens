@@ -1041,7 +1041,7 @@
             <!-- VIEW 1: TOP NEWS (DASHBOARD)                  -->
             <!-- ============================================== -->
             <div id="view-top-news" class="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
-                <div class="col-span-1 xl:col-span-8 space-y-8">
+                <div id="top-news-main-col" class="col-span-1 xl:col-span-8 space-y-8">
 
                     <div class="glass-panel premium-shell p-5 rounded-2xl">
                         <div class="flex justify-between items-center mb-3">
@@ -1149,7 +1149,7 @@
                         </div>
                     </div>
                 </div>
-                <aside class="col-span-1 xl:col-span-4 insight-rail xl:sticky xl:top-28">
+                <aside class="col-span-1 xl:col-span-4 insight-rail xl:sticky xl:top-28 stock-mode-element">
                     <div class="glass-panel premium-shell p-6 rounded-xl">
                         <div class="section-kicker mb-5">
                             <span>Signal Desk</span>
@@ -1778,6 +1778,7 @@
             // Collect stock elements EXCLUDING the ticker (handled separately)
             const stockElements = document.querySelectorAll('.stock-table-container, .stock-mode-element:not(#index-ticker)');
             const stockBadges = document.querySelectorAll('.stock-badge-container');
+            const topNewsMain = document.getElementById('top-news-main-col');
             if (isNonStockMode) {
                 knob.style.transform = 'translateX(16px)';
                 knob.classList.replace('bg-slate-400', 'bg-white');
@@ -1785,6 +1786,10 @@
                 stockElements.forEach(el => el.style.display = 'none');
                 stockBadges.forEach(el => el.style.display = 'none');
                 if (ticker) ticker.style.display = 'none'; // always hide ticker in non-stock
+                if (topNewsMain) {
+                    topNewsMain.classList.remove('xl:col-span-8');
+                    topNewsMain.classList.add('xl:col-span-12');
+                }
                 // If user is on a hidden tab, redirect to top-news
                 const hiddenTabs = ['portfolio', 'stocks'];
                 const activeView = hiddenTabs.find(t => !document.getElementById(`view-${t}`).classList.contains('hidden'));
@@ -1808,6 +1813,10 @@
                     return v && !v.classList.contains('hidden');
                 });
                 if (ticker) ticker.style.display = (currentTab === 'top-news') ? '' : 'none';
+                if (topNewsMain) {
+                    topNewsMain.classList.add('xl:col-span-8');
+                    topNewsMain.classList.remove('xl:col-span-12');
+                }
 
                 // Hide general filters
                 const genFilters = document.getElementById('general-filters');

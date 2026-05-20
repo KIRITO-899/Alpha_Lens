@@ -333,8 +333,57 @@ API_KEYS = [
 ]
 API_KEYS = [key for key in API_KEYS if key] # Filter out missing keys
 
+# Per-key cooldown after 429 (skip dead keys instead of re-trying them every batch)
+_KEY_QUOTA_COOLDOWN_UNTIL: dict = {}
+_GEMINI_KEY_COOLDOWN_SECS = int(os.environ.get("GEMINI_KEY_COOLDOWN_SECS", "300"))
+
+def _is_gemini_quota_error(exc: Exception) -> bool:
+    err = str(exc).lower()
+    return "429" in err or "resource_exhausted" in err or "quota" in err
+
+def _gemini_key_available(key_idx: int) -> bool:
+    return _KEY_QUOTA_COOLDOWN_UNTIL.get(key_idx, 0) <= time.time()
+
+def _available_gemini_key_indices():
+    return [i for i in range(len(API_KEYS)) if _gemini_key_available(i)]
+
+def _mark_gemini_key_quota_hit(key_idx: int):
+    _KEY_QUOTA_COOLDOWN_UNTIL[key_idx] = time.time() + _GEMINI_KEY_COOLDOWN_SECS
+
+def _seconds_until_any_gemini_key():
+    now = time.time()
+    waits = [_KEY_QUOTA_COOLDOWN_UNTIL[i] - now for i in range(len(API_KEYS))
+             if _KEY_QUOTA_COOLDOWN_UNTIL.get(i, 0) > now]
+    return max(0, int(min(waits))) if waits else 0
+
+def _next_available_gemini_key_idx(start_from: int = 0):
+    if not API_KEYS:
+        return None
+    for step in range(len(API_KEYS)):
+        idx = (start_from + step) % len(API_KEYS)
+        if _gemini_key_available(idx):
+            return idx
+    return None
+
+def _set_active_gemini_client(key_idx: int):
+    global current_key_idx, client
+    current_key_idx = key_idx
+    client = genai.Client(api_key=API_KEYS[key_idx])
+    return client
+
+def _bootstrap_gemini_client():
+    global current_key_idx, client
+    if not API_KEYS:
+        client = None
+        return None
+    idx = _next_available_gemini_key_idx(0)
+    if idx is None:
+        idx = 0
+        print(f"   [AI] All Gemini keys on quota cooldown — starting on key 1 until one frees up.")
+    return _set_active_gemini_client(idx)
+
 current_key_idx = 0
-client = genai.Client(api_key=API_KEYS[current_key_idx]) if API_KEYS else None
+client = _bootstrap_gemini_client()
 # Keep the live signal engine on a quota-friendly model by default. The previous
 # hard-coded Pro model exhausted free-tier quota quickly, which disabled the AI
 # confirmation layer and left the system leaning on bearish risk-off rules.
@@ -1442,16 +1491,20 @@ def ai_news_worker():
                 }
 
             # ── Try AI screening first (only if Gemini client is available) ──
-            _ai_client = globals().get('client')
-            _key_idx = globals().get('current_key_idx', 0)
-
-            # ── Key exhaustion cooldown: skip batch if all keys are on cooldown ──
-            _exhausted_until = globals().get('_AI_KEYS_EXHAUSTED_UNTIL', 0)
-            if _exhausted_until and time.time() < _exhausted_until:
-                _remaining = int(_exhausted_until - time.time())
-                print(f"   [AI] All keys cooling down — skipping batch ({_remaining}s remaining).")
+            available_keys = _available_gemini_key_indices()
+            if not available_keys:
+                _wait = _seconds_until_any_gemini_key()
+                print(f"   [AI] All keys on quota cooldown — skipping batch ({_wait}s until a key retries).")
                 sys.stdout.flush()
                 return [_no_impact_row(a, 0, "AI_COOLDOWN") for a in articles_batch]
+
+            try_order = []
+            if current_key_idx in available_keys:
+                try_order.append(current_key_idx)
+            try_order.extend(i for i in available_keys if i not in try_order)
+
+            _key_idx = try_order[0]
+            _ai_client = _set_active_gemini_client(_key_idx)
 
             if _ai_client:
                 print(f"   [AI] Screening batch of {len(articles_batch)} articles...")
@@ -1585,10 +1638,9 @@ Return ONLY valid JSON matching this shape:
 
                 try:
                     resp = None
-                    _max_retries = len(API_KEYS) if API_KEYS else 1
-                    for _attempt in range(_max_retries):
+                    for _key_idx in try_order:
+                        _ai_client = genai.Client(api_key=API_KEYS[_key_idx])
                         try:
-                            # Use ThreadPoolExecutor for hard 30s timeout
                             import concurrent.futures as _cf2
                             def _make_call(_c=_ai_client, _p=prompt):
                                 return _c.models.generate_content(
@@ -1601,27 +1653,25 @@ Return ONLY valid JSON matching this shape:
                             with _cf2.ThreadPoolExecutor(max_workers=1) as _tex:
                                 _fut = _tex.submit(_make_call)
                                 resp = _fut.result(timeout=30)
-                            break  # Success
+                            _set_active_gemini_client(_key_idx)
+                            print(f"   [AI] Screener OK on key {_key_idx + 1}/{len(API_KEYS)}")
+                            sys.stdout.flush()
+                            break
                         except Exception as _api_err:
-                            err_str = str(_api_err)
-                            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                                _key_idx = (_key_idx + 1) % len(API_KEYS)
-                                _ai_client = genai.Client(api_key=API_KEYS[_key_idx])
-                                print(f"   [AI] 429 hit, rotating to key {_key_idx+1}/{len(API_KEYS)}")
+                            if _is_gemini_quota_error(_api_err):
+                                _mark_gemini_key_quota_hit(_key_idx)
+                                print(f"   [AI] 429 on key {_key_idx + 1}/{len(API_KEYS)} — trying next available key")
                                 sys.stdout.flush()
                                 time.sleep(2)
-                            elif "TimeoutError" in err_str or "timed out" in err_str.lower():
+                                continue
+                            if "TimeoutError" in str(_api_err) or "timed out" in str(_api_err).lower():
                                 print(f"   [AI] Timeout on batch, falling back to rules")
                                 sys.stdout.flush()
                                 return _rule_based_fallback(articles_batch, _no_impact_row)
-                            else:
-                                raise
+                            raise
                     if resp is None:
-                        # Set a 90-second cooldown so subsequent batches skip immediately
-                        import builtins as _bi
-                        _bi.__dict__  # no-op; set via globals
-                        globals()['_AI_KEYS_EXHAUSTED_UNTIL'] = time.time() + 90
-                        print(f"   [AI] All keys exhausted — cooldown set for 90s. Skipping batch.")
+                        _wait = _seconds_until_any_gemini_key()
+                        print(f"   [AI] No available keys left for this batch ({_wait}s until retry).")
                         sys.stdout.flush()
                         return [_no_impact_row(a, 0, "AI_QUOTA_EXHAUSTED") for a in articles_batch]
                     parsed = extract_json_from_text(resp.text)
@@ -1987,9 +2037,15 @@ Output STRICT valid JSON array:
 ]"""
                 
                 success = False
-                retries = 0
-                while not success and retries < len(API_KEYS):
+                explain_keys = _available_gemini_key_indices() or list(range(len(API_KEYS)))
+                explain_order = []
+                if current_key_idx in explain_keys:
+                    explain_order.append(current_key_idx)
+                explain_order.extend(k for k in explain_keys if k not in explain_order)
+
+                for _key_idx in explain_order:
                     try:
+                        _set_active_gemini_client(_key_idx)
                         resp = client.models.generate_content(
                             model=MODEL_NAME,
                             contents=prompt,
@@ -2016,20 +2072,18 @@ Output STRICT valid JSON array:
                                          news_id))
                             conn.commit()
                             conn.close()
-                        
-                        print(f"   [+] Batch {i//5 + 1}: Explained {len(batch)} articles in 1 API call")
+
+                        print(f"   [+] Batch {i//5 + 1}: Explained {len(batch)} articles (key {_key_idx + 1})")
                         success = True
+                        break
                     except Exception as e:
-                        error_msg = str(e).lower()
-                        if "429" in error_msg or "quota" in error_msg:
-                            print(f"   [!] API Quota Reached. Swapping keys...")
-                            current_key_idx = (current_key_idx + 1) % len(API_KEYS)
-                            client = genai.Client(api_key=API_KEYS[current_key_idx])
+                        if _is_gemini_quota_error(e):
+                            _mark_gemini_key_quota_hit(_key_idx)
+                            print(f"   [!] Quota on key {_key_idx + 1}/{len(API_KEYS)} — rotating...")
                             time.sleep(2)
-                            retries += 1
-                        else:
-                            print(f"   [-] Batch Gemini Error: {str(e)[:80]}")
-                            break
+                            continue
+                        print(f"   [-] Batch Gemini Error: {str(e)[:80]}")
+                        break
                 
                 if not success:
                     print(f"   [-] Failed batch {i//5 + 1} after {retries} retries")
