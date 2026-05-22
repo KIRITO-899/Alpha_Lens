@@ -4974,5 +4974,5 @@ if __name__ == '__main__':
         # Threaded=True allows the background AI loop to run alongside the website
         # use_reloader=False prevents double execution of our background threads on restart
         debug_mode = os.environ.get("FLASK_ENV") == "development"
-        app.run(debug=debug_mode, port=args.port, threaded=True, use_reloader=False)
+        app.run(debug=debug_mode, host='0.0.0.0', port=args.port, threaded=True, use_reloader=False)
 
