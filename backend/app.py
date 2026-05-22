@@ -2147,15 +2147,14 @@ Return ONLY valid JSON matching this shape:
 
             # ── ATR-BASED DYNAMIC STOP & TARGET ──
             # ATR (Average True Range) measures a stock's typical daily price swing.
-            # Using a fixed 1% stop on a stock that swings 2% daily = guaranteed stop-out.
-            # We set stop = max(1.0, atr_pct * 1.0) and target = max(2.0, atr_pct * 2.5)
-            # This gives a consistent 2.5:1 Risk:Reward ratio regardless of stock volatility.
+            # We set stop = max(1.0, atr_pct * 1.0) and target = max(2.0, atr_pct * 2.0)
+            # This gives a consistent 2:1 Reward:Risk ratio regardless of stock volatility.
             _atr_pct = 0.0
             if tech_data and tech_data.get('atr_pct'):
                 _atr_pct = float(tech_data['atr_pct'])
             if _atr_pct > 0:
                 _dynamic_stop   = round(min(2.5, max(1.0, _atr_pct * 1.0)), 2)  # cap at 2.5%
-                _dynamic_target = round(min(6.0, max(2.0, _atr_pct * 2.5)), 2)  # cap at 6%
+                _dynamic_target = round(min(5.0, max(2.0, _atr_pct * 2.0)), 2)  # cap at 5% (2:1 Reward:Risk)
             else:
                 _dynamic_stop   = TRADE_STOP_PCT    # fallback to config default
                 _dynamic_target = TRADE_TARGET_PCT
@@ -2740,12 +2739,7 @@ def yfinance_worker():
                                 _hist_start_date = _next_session_date
 
                             # If next trading session hasn't started yet, keep diff at 0%
-                            _is_today_after_close = (_signal_ist_date == _today_ist and _pub_ist >= _last_close)
-                            _is_weekend = _now_ist.weekday() >= 5
-                            _now_minutes = _now_ist.hour * 60 + _now_ist.minute
-                            _before_today_open = (_today_ist == _next_session_date and _now_minutes < (9 * 60 + 15)) if _next_session_date else False
-                            _before_next_session_open = (_today_ist < _next_session_date) if _next_session_date else False
-                            if not market_currently_open and (_is_today_after_close or _is_weekend or _before_today_open or _before_next_session_open):
+                            if not has_market_traded_since(created_at_str):
                                 current_price = base_price
                     except Exception:
                         pass
@@ -4563,37 +4557,48 @@ def get_signal_terminal():
         rows = c.fetchall()
         conn.close()
 
+        mkt_open = is_market_open()
         signals = []
         for row in rows:
             d = dict(row)
             bp = d.get('base_price') or 0
             cp = d.get('current_price') or bp
             status = d.get('status', 'Active View')
+            created_at = d.get('created_at')
 
-            # Compute progress toward target/stop
-            progress_pct = 0.0
-            target_pct = 2.0
-            stop_pct = 1.0
-            reason_str = d.get('reason', '') or ''
-            import re as _re
-            m_tgt = _re.search(r'target[:\s]+([0-9.]+)%', reason_str, _re.I)
-            m_stp = _re.search(r'stop[:\s]+([0-9.]+)%', reason_str, _re.I)
-            if m_tgt:
-                try: target_pct = float(m_tgt.group(1))
-                except: pass
-            if m_stp:
-                try: stop_pct = float(m_stp.group(1))
-                except: pass
-
-            is_bullish = 'bullish' in (d.get('impact') or '').lower()
-            if bp > 0 and cp > 0:
-                diff = ((cp - bp) / bp) * 100
-                if is_bullish:
-                    progress_pct = round(min(100, max(-100, (diff / target_pct) * 100)), 1)
-                else:
-                    progress_pct = round(min(100, max(-100, (-diff / target_pct) * 100)), 1)
+            # If market hasn't traded since news publication, show entry price as current price
+            if not mkt_open and status == 'Active View' and not has_market_traded_since(created_at):
+                cp = bp
+                diff = 0.0
+                progress_pct = 0.0
+                target_pct = 2.0
+                stop_pct = 1.0
+                is_bullish = 'bullish' in (d.get('impact') or '').lower()
             else:
-                diff = d.get('estimated_change_percent') or 0
+                # Compute progress toward target/stop
+                progress_pct = 0.0
+                target_pct = 2.0
+                stop_pct = 1.0
+                reason_str = d.get('reason', '') or ''
+                import re as _re
+                m_tgt = _re.search(r'target[:\s]+([0-9.]+)%', reason_str, _re.I)
+                m_stp = _re.search(r'stop[:\s]+([0-9.]+)%', reason_str, _re.I)
+                if m_tgt:
+                    try: target_pct = float(m_tgt.group(1))
+                    except: pass
+                if m_stp:
+                    try: stop_pct = float(m_stp.group(1))
+                    except: pass
+
+                is_bullish = 'bullish' in (d.get('impact') or '').lower()
+                if bp > 0 and cp > 0:
+                    diff = ((cp - bp) / bp) * 100
+                    if is_bullish:
+                        progress_pct = round(min(100, max(-100, (diff / target_pct) * 100)), 1)
+                    else:
+                        progress_pct = round(min(100, max(-100, (-diff / target_pct) * 100)), 1)
+                else:
+                    diff = d.get('estimated_change_percent') or 0
 
             signals.append({
                 'id': d['id'],
