@@ -11,3 +11,4 @@ beautifulsoup4
 openai
 pandas
 werkzeug
+psycopg2-binary

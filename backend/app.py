@@ -228,8 +228,187 @@ def choose_news_db_path():
 _NEWS_DB  = choose_news_db_path()
 _USERS_DB = os.path.join(_APP_DIR, 'users.db')
 
+class CursorWrapper:
+    def __init__(self, cursor, is_postgres=False):
+        self.cursor = cursor
+        self.is_postgres = is_postgres
+        self._lastrowid = None
+
+    @property
+    def lastrowid(self):
+        return self._lastrowid
+
+    def execute(self, sql, params=None):
+        if not self.is_postgres:
+            self.cursor.execute(sql, params or ())
+            self._lastrowid = self.cursor.lastrowid
+            return self
+
+        # PostgreSQL Translation Layer
+        sql_translated = sql.replace('?', '%s')
+        sql_upper = sql_translated.upper()
+
+        # 1. Drop PRAGMA commands
+        if sql_upper.strip().startswith('PRAGMA'):
+            return self
+
+        # 2. Translate 'INTEGER PRIMARY KEY AUTOINCREMENT' to 'SERIAL PRIMARY KEY'
+        if 'INTEGER PRIMARY KEY AUTOINCREMENT' in sql_upper:
+            import re
+            sql_translated = re.sub(
+                r'INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT',
+                'SERIAL PRIMARY KEY',
+                sql_translated,
+                flags=re.IGNORECASE
+            )
+
+        # 3. Translate 'INSERT OR IGNORE INTO' to 'INSERT INTO ... ON CONFLICT DO NOTHING'
+        if 'INSERT OR IGNORE INTO' in sql_upper:
+            import re
+            sql_translated = re.sub(
+                r'INSERT\s+OR\s+IGNORE\s+INTO',
+                'INSERT INTO',
+                sql_translated,
+                flags=re.IGNORECASE
+            )
+            sql_translated = sql_translated.rstrip()
+            if sql_translated.endswith(';'):
+                sql_translated = sql_translated[:-1] + ' ON CONFLICT DO NOTHING;'
+            else:
+                sql_translated = sql_translated + ' ON CONFLICT DO NOTHING'
+
+        # 4. Handle lastrowid via RETURNING id for INSERT queries (except stock_universe)
+        sql_translated_upper = sql_translated.upper()
+        is_insert = sql_translated_upper.strip().startswith('INSERT')
+        
+        if is_insert and ('RETURNING' not in sql_translated_upper) and ('STOCK_UNIVERSE' not in sql_translated_upper):
+            sql_translated = sql_translated.rstrip()
+            if sql_translated.endswith(';'):
+                sql_translated = sql_translated[:-1] + ' RETURNING id;'
+            else:
+                sql_translated = sql_translated + ' RETURNING id'
+            
+            self.cursor.execute(sql_translated, params or ())
+            try:
+                row = self.cursor.fetchone()
+                if row:
+                    self._lastrowid = row[0]
+            except Exception:
+                self._lastrowid = None
+        else:
+            self.cursor.execute(sql_translated, params or ())
+            
+        return self
+
+    def fetchone(self):
+        return self.cursor.fetchone()
+
+    def fetchall(self):
+        return self.cursor.fetchall()
+
+    def __iter__(self):
+        return iter(self.cursor)
+
+    def close(self):
+        self.cursor.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __getattr__(self, name):
+        return getattr(self.cursor, name)
+
+
+class ConnectionWrapper:
+    def __init__(self, conn, is_postgres=False):
+        self.conn = conn
+        self.is_postgres = is_postgres
+        self._row_factory = None
+
+    @property
+    def row_factory(self):
+        return self._row_factory
+
+    @row_factory.setter
+    def row_factory(self, val):
+        self._row_factory = val
+        if not self.is_postgres:
+            self.conn.row_factory = val
+
+    def cursor(self):
+        if self.is_postgres:
+            if self._row_factory is not None:
+                import psycopg2.extras
+                cursor = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
+            else:
+                cursor = self.conn.cursor()
+        else:
+            cursor = self.conn.cursor()
+        return CursorWrapper(cursor, is_postgres=self.is_postgres)
+
+    def execute(self, sql, params=None):
+        cur = self.cursor()
+        cur.execute(sql, params)
+        return cur
+
+    def commit(self):
+        self.conn.commit()
+
+    def rollback(self):
+        try:
+            self.conn.rollback()
+        except Exception:
+            pass
+
+    def close(self):
+        self.conn.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __getattr__(self, name):
+        return getattr(self.conn, name)
+
+
+def connect_postgres_db(db_url):
+    import psycopg2
+    # Ensure connections have a reasonable timeout
+    conn = psycopg2.connect(db_url, connect_timeout=10)
+    return ConnectionWrapper(conn, is_postgres=True)
+
+
+def connect_news_db():
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        try:
+            return connect_postgres_db(db_url)
+        except Exception as e:
+            print(f"   [DB] Failed to connect to PostgreSQL: {e}. Falling back to SQLite...")
+    
+    conn = sqlite3.connect(_NEWS_DB, timeout=30.0, check_same_thread=False)
+    return ConnectionWrapper(conn, is_postgres=False)
+
+
+def connect_users_db():
+    db_url = os.environ.get("DATABASE_URL")
+    if db_url:
+        try:
+            return connect_postgres_db(db_url)
+        except Exception as e:
+            print(f"   [DB] Failed to connect to PostgreSQL for users: {e}. Falling back to SQLite...")
+            
+    conn = sqlite3.connect(_USERS_DB, timeout=10.0)
+    return ConnectionWrapper(conn, is_postgres=False)
+
+
 def init_db():
-    conn = sqlite3.connect(_USERS_DB)
+    conn = connect_users_db()
     c = conn.cursor()
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
@@ -241,12 +420,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-def connect_news_db():
-    conn = sqlite3.connect(_NEWS_DB, timeout=30.0,
-                           check_same_thread=False)
-    conn.execute('PRAGMA journal_mode=WAL;')
-    conn.execute('PRAGMA synchronous=NORMAL;')  # faster WAL writes
-    return conn
 
 def db_write(fn, retries=3, delay=1.0):
     """
@@ -263,19 +436,25 @@ def db_write(fn, retries=3, delay=1.0):
                 conn.commit()
                 conn.close()
                 return result
-            except sqlite3.OperationalError as e:
-                try: conn.close()
-                except: pass
-                if attempt < retries - 1:
-                    print(f"   [DB] Write locked, retry {attempt+1}/{retries}...")
+            except Exception as e:
+                # Check for operational / interface / connection / database lock errors
+                exc_name = type(e).__name__
+                is_operational = (exc_name in ('OperationalError', 'InterfaceError', 'DatabaseError')) or isinstance(e, sqlite3.OperationalError)
+                try:
+                    conn.rollback()
+                except:
+                    pass
+                try:
+                    conn.close()
+                except:
+                    pass
+                
+                if is_operational and attempt < retries - 1:
+                    print(f"   [DB] Write locked/operational error ({exc_name}), retry {attempt+1}/{retries}...")
                     time.sleep(delay)
                 else:
                     print(f"   [DB] Write failed after {retries} retries: {e}")
-            except Exception as e:
-                try: conn.close()
-                except: pass
-                print(f"   [DB] Write error: {e}")
-                break
+                    break
     return None
 
 
@@ -294,7 +473,7 @@ def init_news_db():
     ''')
     try:
         c.execute("ALTER TABLE news ADD COLUMN category TEXT DEFAULT 'General'")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
     c.execute('''
         CREATE TABLE IF NOT EXISTS stock_impact (
@@ -314,15 +493,15 @@ def init_news_db():
     ''')
     try:
         c.execute("ALTER TABLE stock_impact ADD COLUMN confidence_score INTEGER DEFAULT 80")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
     try:
         c.execute("ALTER TABLE stock_impact ADD COLUMN technical_context TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
     try:
         c.execute("ALTER TABLE stock_impact ADD COLUMN ensemble_detail TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
+    except Exception:
         pass
         
     c.execute('''
@@ -348,11 +527,11 @@ def init_news_db():
     ''')
     try:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_headline ON news(headline)")
-    except (sqlite3.OperationalError, sqlite3.IntegrityError):
+    except Exception:
         pass  # Index already exists or duplicate data prevents creation
     try:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_stockimpact_news_ticker ON stock_impact(news_id, ticker)")
-    except (sqlite3.OperationalError, sqlite3.IntegrityError):
+    except Exception:
         pass  # Index already exists or duplicate data prevents creation
     c.execute("CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_stockimpact_news_id ON stock_impact(news_id)")
@@ -4143,7 +4322,7 @@ def verify_otp():
     del OTP_STORE[email]
 
     try:
-        conn = sqlite3.connect(_USERS_DB)
+        conn = connect_users_db()
         c = conn.cursor()
         c.execute("SELECT email FROM users WHERE email = ?", (email,))
         user = c.fetchone()
@@ -4182,7 +4361,7 @@ def oauth_signin():
         return jsonify({"error": "Google account email is missing or unverified."}), 400
 
     try:
-        conn = sqlite3.connect(_USERS_DB)
+        conn = connect_users_db()
         c = conn.cursor()
         c.execute("SELECT email FROM users WHERE email = ?", (email,))
         user = c.fetchone()
