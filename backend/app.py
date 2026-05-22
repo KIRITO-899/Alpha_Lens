@@ -546,10 +546,114 @@ def init_news_db():
     conn.commit()
     conn.close()
 
+def migrate_local_sqlite_to_postgres():
+    import sqlite3
+    db_path = 'backend/news_cache.db'
+    if not os.path.exists(db_path):
+        db_path = 'news_cache.db'
+    if not os.path.exists(db_path):
+        return
+
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        print("   [MIGRATION] SQLite is active locally. No PostgreSQL migration needed.")
+        return
+
+    print(f"   [MIGRATION] Found local SQLite database at {db_path}. Starting cloud migration...")
+    try:
+        sqlite_conn = sqlite3.connect(db_path)
+        sqlite_cur = sqlite_conn.cursor()
+
+        pg_conn = connect_news_db()
+        pg_cur = pg_conn.cursor()
+
+        # 1. Migrate stock_universe
+        print("   [MIGRATION] Migrating stock_universe table...")
+        sqlite_cur.execute("SELECT ticker, symbol, name, exchange, source, updated_at FROM stock_universe")
+        univ_rows = sqlite_cur.fetchall()
+        for row in univ_rows:
+            try:
+                pg_cur.execute("""
+                    INSERT INTO stock_universe (ticker, symbol, name, exchange, source, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (ticker) DO NOTHING
+                """, row)
+            except Exception as e:
+                print(f"      [MIGRATION] Error inserting stock_universe {row[0]}: {e}")
+
+        # 2. Migrate news
+        print("   [MIGRATION] Migrating news table...")
+        sqlite_cur.execute("SELECT id, headline, source, url, summary, sentiment, category, created_at, text_content, audio_path FROM news")
+        news_rows = sqlite_cur.fetchall()
+        for row in news_rows:
+            try:
+                pg_cur.execute("""
+                    INSERT INTO news (id, headline, source, url, summary, sentiment, category, created_at, text_content, audio_path)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, row)
+            except Exception as e:
+                print(f"      [MIGRATION] Error inserting news {row[0]}: {e}")
+
+        # 3. Migrate stock_impact
+        print("   [MIGRATION] Migrating stock_impact table...")
+        sqlite_cur.execute("SELECT id, news_id, ticker, impact_type, reasoning, change_pct, confidence_score, technical_context, ensemble_detail, created_at FROM stock_impact")
+        impact_rows = sqlite_cur.fetchall()
+        for row in impact_rows:
+            try:
+                pg_cur.execute("""
+                    INSERT INTO stock_impact (id, news_id, ticker, impact_type, reasoning, change_pct, confidence_score, technical_context, ensemble_detail, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, row)
+            except Exception as e:
+                print(f"      [MIGRATION] Error inserting stock_impact {row[0]}: {e}")
+
+        # 4. Migrate historical_patterns
+        print("   [MIGRATION] Migrating historical_patterns table...")
+        sqlite_cur.execute("SELECT id, headline, ticker, direction, outcome, change_pct, created_at FROM historical_patterns")
+        pat_rows = sqlite_cur.fetchall()
+        for row in pat_rows:
+            try:
+                pg_cur.execute("""
+                    INSERT INTO historical_patterns (id, headline, ticker, direction, outcome, change_pct, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                """, row)
+            except Exception as e:
+                print(f"      [MIGRATION] Error inserting pattern {row[0]}: {e}")
+
+        pg_conn.commit()
+
+        # Adjust primary key sequences
+        for seq_table in ['news', 'stock_impact', 'historical_patterns']:
+            try:
+                pg_cur.execute(f"SELECT setval(pg_get_serial_sequence('{seq_table}', 'id'), COALESCE(MAX(id), 1) + 1) FROM {seq_table}")
+                pg_conn.commit()
+            except Exception as ex:
+                print(f"      [MIGRATION] Error syncing sequence {seq_table}: {ex}")
+
+        sqlite_conn.close()
+        pg_conn.close()
+
+        print("   [MIGRATION] SUCCESS! All data migrated to cloud database.")
+        
+        # Rename file so it does not attempt migration again
+        try:
+            os.rename(db_path, db_path + ".done")
+            print(f"   [MIGRATION] Renamed local {db_path} to prevent re-migration.")
+        except Exception as e:
+            print(f"      [MIGRATION] Warning: Could not rename SQLite file: {e}")
+
+    except Exception as e:
+        print(f"   [MIGRATION] FAILED: {e}")
+
 init_db()
 print("[DEBUG] init_db() completed", flush=True)
 init_news_db()
 print("[DEBUG] init_news_db() completed", flush=True)
+migrate_local_sqlite_to_postgres()
+print("[DEBUG] migrate_local_sqlite_to_postgres() completed", flush=True)
 
 # Checkpoint any stale WAL from a previous crashed run so we start clean
 try:
