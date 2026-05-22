@@ -40,7 +40,7 @@ def run_performance_check():
             FROM stock_impact 
             GROUP BY status
         """)
-        status_counts = {row['status']: row['count'] for row in c.fetchall()}
+        status_counts = {row[0]: row[1] for row in c.fetchall()}
 
         hits = status_counts.get('Predicted Target Hit', 0)
         misses = status_counts.get('Reacted Against Prediction', 0) + status_counts.get('Stop Loss Hit', 0)
