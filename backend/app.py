@@ -4575,8 +4575,6 @@ def get_signal_terminal():
                 stop_pct = 1.0
                 is_bullish = 'bullish' in (d.get('impact') or '').lower()
             else:
-                # Compute progress toward target/stop
-                progress_pct = 0.0
                 target_pct = 2.0
                 stop_pct = 1.0
                 reason_str = d.get('reason', '') or ''
@@ -4593,12 +4591,23 @@ def get_signal_terminal():
                 is_bullish = 'bullish' in (d.get('impact') or '').lower()
                 if bp > 0 and cp > 0:
                     diff = ((cp - bp) / bp) * 100
-                    if is_bullish:
-                        progress_pct = round(min(100, max(-100, (diff / target_pct) * 100)), 1)
-                    else:
-                        progress_pct = round(min(100, max(-100, (-diff / target_pct) * 100)), 1)
                 else:
-                    diff = d.get('estimated_change_percent') or 0
+                    diff = d.get('estimated_change_percent') or 0.0
+
+                if status == 'Predicted Target Hit':
+                    progress_pct = 100.0
+                elif status in ('Stop Loss Hit', 'Reacted Against Prediction'):
+                    progress_pct = -100.0
+                elif bp > 0 and cp > 0:
+                    towards_prediction = (is_bullish and diff >= 0) or (not is_bullish and diff <= 0)
+                    if towards_prediction:
+                        divisor = target_pct if target_pct > 0 else 2.0
+                        progress_pct = round(min(100.0, (abs(diff) / divisor) * 100), 1)
+                    else:
+                        divisor = stop_pct if stop_pct > 0 else 1.0
+                        progress_pct = -round(min(100.0, (abs(diff) / divisor) * 100), 1)
+                else:
+                    progress_pct = 0.0
 
             signals.append({
                 'id': d['id'],
