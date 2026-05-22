@@ -478,9 +478,11 @@ def init_news_db():
         )
     ''')
     try:
+        conn.commit()
         c.execute("ALTER TABLE news ADD COLUMN category TEXT DEFAULT 'General'")
+        conn.commit()
     except Exception:
-        pass
+        conn.rollback()
     c.execute('''
         CREATE TABLE IF NOT EXISTS stock_impact (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -498,17 +500,23 @@ def init_news_db():
         )
     ''')
     try:
+        conn.commit()
         c.execute("ALTER TABLE stock_impact ADD COLUMN confidence_score INTEGER DEFAULT 80")
+        conn.commit()
     except Exception:
-        pass
+        conn.rollback()
     try:
+        conn.commit()
         c.execute("ALTER TABLE stock_impact ADD COLUMN technical_context TEXT DEFAULT ''")
+        conn.commit()
     except Exception:
-        pass
+        conn.rollback()
     try:
+        conn.commit()
         c.execute("ALTER TABLE stock_impact ADD COLUMN ensemble_detail TEXT DEFAULT ''")
+        conn.commit()
     except Exception:
-        pass
+        conn.rollback()
         
     c.execute('''
         CREATE TABLE IF NOT EXISTS historical_patterns (
