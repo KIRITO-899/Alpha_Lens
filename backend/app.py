@@ -2931,7 +2931,7 @@ def _fetch_nse_index_quotes():
 
 
 # In-memory cache for index data (60-second TTL)
-_INDEX_CACHE = {}
+_INDEX_CACHE = []
 _INDEX_CACHE_TIME = 0
 
 _STOCK_MARKET_CHANGE_CACHE = {}
@@ -3036,7 +3036,7 @@ def get_indices():
 
     # Return cached data if fresh (60s during market hours, 5min when closed)
     cache_ttl = 60 if market_open else 300
-    if _index_result_has_quotes(_INDEX_CACHE) and (time.time() - _INDEX_CACHE_TIME) < cache_ttl:
+    if _INDEX_CACHE and (time.time() - _INDEX_CACHE_TIME) < cache_ttl:
         for item in _INDEX_CACHE:
             item['is_live'] = market_open
             item['price_label'] = price_label
@@ -3178,14 +3178,10 @@ def get_indices():
             "market_status": market_status
         })
     
-    # Cache only complete quote sets. Empty quote sets should recover as soon
-    # as the next request can reach the data provider.
-    if _index_result_has_quotes(result):
+    # Cache any successfully populated results to prevent API spamming
+    if result:
         _INDEX_CACHE = result
         _INDEX_CACHE_TIME = time.time()
-    else:
-        _INDEX_CACHE = []
-        _INDEX_CACHE_TIME = 0
     return jsonify(result)
 
 # Debug route removed for security
@@ -3547,61 +3543,10 @@ def portfolio_aliases(portfolio_tickers, portfolio_names=None):
     return aliases
 
 def is_portfolio_news_question(question, context_items, portfolio_tickers, portfolio_names=None):
-    q = (question or "").lower().strip()
-    if not q:
-        return False
-
-    aliases = portfolio_aliases(portfolio_tickers, portfolio_names)
-    if any(alias and re.search(r'\b' + re.escape(alias) + r'\b', q) for alias in aliases):
-        return True
-
-    q_words = set(re.findall(r'[a-z]{3,}', q))
-    if q_words & OUT_OF_SCOPE_TOPIC_WORDS:
-        return False
-
-    context_text = " ".join(
-        f"{item.get('headline', '')} {item.get('explanation', '')} "
-        + " ".join(str(stock.get("reason") or "") for stock in item.get("stocks", []))
-        for item in context_items
-    ).lower()
-    q_tokens = {tok for tok in re.findall(r'[a-z]{4,}', q) if tok not in {
-        'what', 'when', 'where', 'which', 'about', 'from', 'that', 'this',
-        'will', 'with', 'have', 'does', 'there', 'their', 'your',
-    }}
-    matching_tokens = [tok for tok in q_tokens if tok in context_text]
-    if len(matching_tokens) >= 2:
-        return True
-
-    portfolio_terms = [
-        'portfolio', 'holding', 'holdings', 'my stock', 'my stocks',
-        'added stock', 'watchlist', 'news', 'impact', 'affected',
-        'why', 'what happened', 'explain', 'should i', 'risk', 'bullish',
-        'bearish', 'confidence', 'move', 'reaction', 'summary', 'latest',
-    ]
-    if not any(term in q for term in portfolio_terms):
-        return False
-
-    broad_portfolio_terms = [
-        'portfolio', 'holding', 'holdings', 'my stock', 'my stocks',
-        'added stock', 'watchlist', 'news', 'impact', 'affected',
-        'what happened', 'risk', 'bullish', 'bearish', 'confidence',
-        'reaction', 'summary', 'latest',
-    ]
-    if any(term in q for term in broad_portfolio_terms):
-        return True
-
-    return bool(q_tokens and matching_tokens)
+    return True
 
 def should_try_portfolio_ai(question):
-    q = (question or "").lower()
-    if portfolio_question_intent(question) in {"latest", "risk", "bull_bear", "explain"}:
-        return False
-    ai_terms = [
-        'why', 'worry', 'concern', 'compare', 'summary',
-        'summarize', 'overall', 'should i', 'what should', 'portfolio risk',
-        'reason', 'outlook',
-    ]
-    return any(term in q for term in ai_terms)
+    return True
 
 def portfolio_item_bases(item):
     return {ticker_base(s.get("ticker")) for s in item.get("stocks", []) if ticker_base(s.get("ticker"))}
@@ -3856,26 +3801,37 @@ def fallback_portfolio_answer(question, context_items, portfolio_tickers, portfo
     return "\n\n".join(sections)
 
 def run_portfolio_ai_with_timeout(prompt, timeout_seconds=6.5):
-    if not client:
+    global client, current_key_idx
+    if not API_KEYS:
         return None
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
-    future = executor.submit(
-        client.models.generate_content,
-        model=MODEL_NAME,
-        contents=prompt,
-    )
-    try:
-        response = future.result(timeout=timeout_seconds)
-        return (getattr(response, "text", "") or "").strip()
-    except concurrent.futures.TimeoutError:
-        future.cancel()
-        print("Portfolio assistant AI timeout; returning local answer")
-        return None
-    except Exception as e:
-        print(f"Portfolio assistant AI error: {e}")
-        return None
-    finally:
-        executor.shutdown(wait=False, cancel_futures=True)
+    max_attempts = len(API_KEYS)
+    for attempt in range(max_attempts):
+        active_client = client
+        active_idx = current_key_idx
+        if not active_client:
+            active_client, active_idx = get_and_rotate_client()
+            if not active_client:
+                return None
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            active_client.models.generate_content,
+            model=MODEL_NAME,
+            contents=prompt,
+        )
+        try:
+            response = future.result(timeout=timeout_seconds)
+            return (getattr(response, "text", "") or "").strip()
+        except concurrent.futures.TimeoutError:
+            future.cancel()
+            print(f"Portfolio assistant AI timeout on key {active_idx + 1}; rotating...")
+            get_and_rotate_client(active_idx, is_timeout=True)
+        except Exception as e:
+            print(f"Portfolio assistant AI error on key {active_idx + 1}: {e}; rotating...")
+            is_quota = _is_gemini_quota_error(e)
+            get_and_rotate_client(active_idx, is_timeout=False, is_quota=is_quota)
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
+    return None
 
 @app.route('/api/portfolio-assistant', methods=['POST'])
 def portfolio_assistant():
