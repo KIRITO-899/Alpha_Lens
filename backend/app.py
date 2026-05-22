@@ -541,10 +541,26 @@ def init_news_db():
 
 def migrate_local_sqlite_to_postgres():
     import sqlite3
-    db_path = 'backend/news_cache.db'
-    if not os.path.exists(db_path):
-        db_path = 'news_cache.db'
-    if not os.path.exists(db_path):
+    # Use __file__ to find the correct absolute path regardless of working directory
+    _here = os.path.dirname(os.path.abspath(__file__))
+    _repo_root = os.path.dirname(_here)
+    print(f"   [MIGRATION] Working dir: {os.getcwd()}, app dir: {_here}", flush=True)
+
+    candidates = [
+        os.path.join(_here, 'news_cache.db'),           # backend/news_cache.db (app.py sibling)
+        os.path.join(_repo_root, 'backend', 'news_cache.db'),  # repo_root/backend/news_cache.db
+        os.path.join(_repo_root, 'news_cache.db'),       # repo_root/news_cache.db
+        os.path.join(os.getcwd(), 'backend', 'news_cache.db'),
+        os.path.join(os.getcwd(), 'news_cache.db'),
+    ]
+    db_path = None
+    for c in candidates:
+        print(f"   [MIGRATION] Checking: {c} -> exists={os.path.exists(c)}", flush=True)
+        if os.path.exists(c):
+            db_path = c
+            break
+    if not db_path:
+        print("   [MIGRATION] No local SQLite database found. Skipping migration.", flush=True)
         return
 
     db_url = os.environ.get("DATABASE_URL")
