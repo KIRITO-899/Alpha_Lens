@@ -4934,6 +4934,47 @@ def get_latest_signal():
         return jsonify({'id': 0})
 
 
+@app.route('/api/debug-db', methods=['GET'])
+def debug_db():
+    try:
+        conn = connect_news_db()
+        is_pg = conn.is_postgres
+        c = conn.cursor()
+        
+        # Get count of news
+        c.execute("SELECT COUNT(*) FROM news")
+        news_count = c.fetchone()[0]
+        
+        # Get count of stock impact
+        c.execute("SELECT COUNT(*) FROM stock_impact")
+        impact_count = c.fetchone()[0]
+        
+        # Fetch latest 5 news headlines
+        c.execute("SELECT id, headline, created_at FROM news ORDER BY created_at DESC LIMIT 5")
+        latest_news = []
+        for row in c.fetchall():
+            if hasattr(row, 'keys') or isinstance(row, dict):
+                latest_news.append(dict(row))
+            else:
+                latest_news.append({'id': row[0], 'headline': row[1], 'created_at': str(row[2])})
+        
+        conn.close()
+        return jsonify({
+            'status': 'success',
+            'is_postgres': is_pg,
+            'news_count': news_count,
+            'impact_count': impact_count,
+            'latest_news': latest_news
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'traceback': traceback.format_exc()
+        }), 500
+
+
 def start_background_workers():
     engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
     engine_thread.start()
