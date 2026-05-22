@@ -4940,6 +4940,26 @@ def start_background_workers():
 
     yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
     yf_thread.start()
+
+    # Keep-alive ping — only runs on Render (when RENDER env var is set)
+    # Pings the app itself every 10 minutes to prevent free tier spin-down
+    render_url = os.environ.get("RENDER_EXTERNAL_URL") or os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    if render_url:
+        if not render_url.startswith("http"):
+            render_url = "https://" + render_url
+        def _keep_alive():
+            import urllib.request
+            while True:
+                try:
+                    time.sleep(600)  # 10 minutes
+                    urllib.request.urlopen(f"{render_url}/api/me", timeout=10)
+                    print(f"   [KEEP-ALIVE] Pinged {render_url} to prevent spin-down", flush=True)
+                except Exception as e:
+                    print(f"   [KEEP-ALIVE] Ping failed (non-critical): {e}", flush=True)
+        ka_thread = threading.Thread(target=_keep_alive, daemon=True)
+        ka_thread.start()
+        print(f"   [KEEP-ALIVE] Started — pinging {render_url} every 10 min", flush=True)
+
     return engine_thread, yf_thread
 
 if __name__ == '__main__':
