@@ -568,7 +568,7 @@ def migrate_local_sqlite_to_postgres():
         print("   [MIGRATION] SQLite is active locally. No PostgreSQL migration needed.")
         return
 
-    print(f"   [MIGRATION] Found local SQLite database at {db_path}. Starting cloud migration...")
+    print(f"   [MIGRATION] Found local SQLite database at {db_path}. Starting cloud migration...", flush=True)
     try:
         sqlite_conn = sqlite3.connect(db_path)
         sqlite_cur = sqlite_conn.cursor()
@@ -577,7 +577,7 @@ def migrate_local_sqlite_to_postgres():
         pg_cur = pg_conn.cursor()
 
         # 1. Migrate stock_universe
-        print("   [MIGRATION] Migrating stock_universe table...")
+        print("   [MIGRATION] Migrating stock_universe table...", flush=True)
         sqlite_cur.execute("SELECT ticker, symbol, name, exchange, source, updated_at FROM stock_universe")
         univ_rows = sqlite_cur.fetchall()
         for row in univ_rows:
@@ -588,38 +588,57 @@ def migrate_local_sqlite_to_postgres():
                     ON CONFLICT (ticker) DO NOTHING
                 """, row)
             except Exception as e:
+                pg_conn.rollback()
                 print(f"      [MIGRATION] Error inserting stock_universe {row[0]}: {e}")
+        pg_conn.commit()
 
-        # 2. Migrate news
-        print("   [MIGRATION] Migrating news table...")
-        sqlite_cur.execute("SELECT id, headline, source, url, summary, sentiment, category, created_at, text_content, audio_path FROM news")
+        # 2. Migrate news (using actual SQLite columns)
+        print("   [MIGRATION] Migrating news table...", flush=True)
+        sqlite_cur.execute("SELECT id, headline, news_time, aam_janta_translation, macro_pathway, created_at, category FROM news")
         news_rows = sqlite_cur.fetchall()
+        inserted_news = 0
         for row in news_rows:
             try:
                 pg_cur.execute("""
-                    INSERT INTO news (id, headline, source, url, summary, sentiment, category, created_at, text_content, audio_path)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO news (id, headline, news_time, aam_janta_translation, macro_pathway, created_at, category)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                 """, row)
+                inserted_news += 1
             except Exception as e:
+                pg_conn.rollback()
                 print(f"      [MIGRATION] Error inserting news {row[0]}: {e}")
+        pg_conn.commit()
+        print(f"   [MIGRATION] News: {inserted_news}/{len(news_rows)} rows migrated.", flush=True)
 
-        # 3. Migrate stock_impact
-        print("   [MIGRATION] Migrating stock_impact table...")
-        sqlite_cur.execute("SELECT id, news_id, ticker, impact_type, reasoning, change_pct, confidence_score, technical_context, ensemble_detail, created_at FROM stock_impact")
+        # 3. Migrate stock_impact (using actual SQLite columns)
+        print("   [MIGRATION] Migrating stock_impact table...", flush=True)
+        sqlite_cur.execute("""
+            SELECT id, news_id, ticker, impact, estimated_change_percent, view, reason,
+                   base_price, current_price, status, created_at, confidence_score,
+                   technical_context, ensemble_detail
+            FROM stock_impact
+        """)
         impact_rows = sqlite_cur.fetchall()
+        inserted_impact = 0
         for row in impact_rows:
             try:
                 pg_cur.execute("""
-                    INSERT INTO stock_impact (id, news_id, ticker, impact_type, reasoning, change_pct, confidence_score, technical_context, ensemble_detail, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO stock_impact (id, news_id, ticker, impact, estimated_change_percent,
+                        view, reason, base_price, current_price, status, created_at,
+                        confidence_score, technical_context, ensemble_detail)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
                 """, row)
+                inserted_impact += 1
             except Exception as e:
+                pg_conn.rollback()
                 print(f"      [MIGRATION] Error inserting stock_impact {row[0]}: {e}")
+        pg_conn.commit()
+        print(f"   [MIGRATION] Stock impact: {inserted_impact}/{len(impact_rows)} rows migrated.", flush=True)
 
         # 4. Migrate historical_patterns
-        print("   [MIGRATION] Migrating historical_patterns table...")
+        print("   [MIGRATION] Migrating historical_patterns table...", flush=True)
         sqlite_cur.execute("SELECT id, headline, ticker, direction, outcome, change_pct, created_at FROM historical_patterns")
         pat_rows = sqlite_cur.fetchall()
         for row in pat_rows:
@@ -630,8 +649,8 @@ def migrate_local_sqlite_to_postgres():
                     ON CONFLICT (id) DO NOTHING
                 """, row)
             except Exception as e:
+                pg_conn.rollback()
                 print(f"      [MIGRATION] Error inserting pattern {row[0]}: {e}")
-
         pg_conn.commit()
 
         # Adjust primary key sequences
@@ -645,17 +664,17 @@ def migrate_local_sqlite_to_postgres():
         sqlite_conn.close()
         pg_conn.close()
 
-        print("   [MIGRATION] SUCCESS! All data migrated to cloud database.")
-        
+        print("   [MIGRATION] SUCCESS! All data migrated to cloud database.", flush=True)
+
         # Rename file so it does not attempt migration again
         try:
             os.rename(db_path, db_path + ".done")
-            print(f"   [MIGRATION] Renamed local {db_path} to prevent re-migration.")
+            print(f"   [MIGRATION] Renamed local {db_path} to prevent re-migration.", flush=True)
         except Exception as e:
             print(f"      [MIGRATION] Warning: Could not rename SQLite file: {e}")
 
     except Exception as e:
-        print(f"   [MIGRATION] FAILED: {e}")
+        print(f"   [MIGRATION] FAILED: {e}", flush=True)
 
 init_db()
 print("[DEBUG] init_db() completed", flush=True)
