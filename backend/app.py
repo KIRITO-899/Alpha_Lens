@@ -465,25 +465,30 @@ def db_write(fn, retries=3, delay=1.0):
 
 
 def init_news_db():
-    conn = connect_news_db()
-    c = conn.cursor()
-    c.execute('''
+    def run_query_safe(sql):
+        try:
+            conn = connect_news_db()
+            c = conn.cursor()
+            c.execute(sql)
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+
+    run_query_safe('''
         CREATE TABLE IF NOT EXISTS news (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             headline TEXT NOT NULL,
             news_time TEXT,
             aam_janta_translation TEXT,
-            macro_pathway TEXT, -- Stored as JSON string
+            macro_pathway TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    try:
-        conn.commit()
-        c.execute("ALTER TABLE news ADD COLUMN category TEXT DEFAULT 'General'")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-    c.execute('''
+    
+    run_query_safe("ALTER TABLE news ADD COLUMN category TEXT DEFAULT 'General'")
+    
+    run_query_safe('''
         CREATE TABLE IF NOT EXISTS stock_impact (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             news_id INTEGER,
@@ -499,37 +504,24 @@ def init_news_db():
             FOREIGN KEY(news_id) REFERENCES news(id)
         )
     ''')
-    try:
-        conn.commit()
-        c.execute("ALTER TABLE stock_impact ADD COLUMN confidence_score INTEGER DEFAULT 80")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-    try:
-        conn.commit()
-        c.execute("ALTER TABLE stock_impact ADD COLUMN technical_context TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-    try:
-        conn.commit()
-        c.execute("ALTER TABLE stock_impact ADD COLUMN ensemble_detail TEXT DEFAULT ''")
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        
-    c.execute('''
+    
+    run_query_safe("ALTER TABLE stock_impact ADD COLUMN confidence_score INTEGER DEFAULT 80")
+    run_query_safe("ALTER TABLE stock_impact ADD COLUMN technical_context TEXT DEFAULT ''")
+    run_query_safe("ALTER TABLE stock_impact ADD COLUMN ensemble_detail TEXT DEFAULT ''")
+    
+    run_query_safe('''
         CREATE TABLE IF NOT EXISTS historical_patterns (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             headline TEXT,
             ticker TEXT,
-            direction TEXT,      -- BULLISH or BEARISH
-            outcome TEXT,        -- HIT or MISS
-            change_pct REAL,     -- actual change percent
+            direction TEXT,
+            outcome TEXT,
+            change_pct REAL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    c.execute('''
+    
+    run_query_safe('''
         CREATE TABLE IF NOT EXISTS stock_universe (
             ticker TEXT PRIMARY KEY,
             symbol TEXT,
@@ -539,20 +531,13 @@ def init_news_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    try:
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_headline ON news(headline)")
-    except Exception:
-        pass  # Index already exists or duplicate data prevents creation
-    try:
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_stockimpact_news_ticker ON stock_impact(news_id, ticker)")
-    except Exception:
-        pass  # Index already exists or duplicate data prevents creation
-    c.execute("CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_stockimpact_news_id ON stock_impact(news_id)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_stock_universe_symbol ON stock_universe(symbol)")
-    c.execute("CREATE INDEX IF NOT EXISTS idx_stock_universe_name ON stock_universe(name)")
-    conn.commit()
-    conn.close()
+    
+    run_query_safe("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_headline ON news(headline)")
+    run_query_safe("CREATE UNIQUE INDEX IF NOT EXISTS idx_stockimpact_news_ticker ON stock_impact(news_id, ticker)")
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at)")
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_stockimpact_news_id ON stock_impact(news_id)")
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_stock_universe_symbol ON stock_universe(symbol)")
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_stock_universe_name ON stock_universe(name)")
 
 def migrate_local_sqlite_to_postgres():
     import sqlite3
