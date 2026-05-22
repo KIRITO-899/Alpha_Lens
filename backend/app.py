@@ -306,6 +306,15 @@ class CursorWrapper:
             
         return self
 
+    def executemany(self, sql, seq_of_parameters):
+        if not self.is_postgres:
+            self.cursor.executemany(sql, seq_of_parameters)
+            return self
+
+        sql_translated = sql.replace('?', '%s')
+        self.cursor.executemany(sql_translated, seq_of_parameters)
+        return self
+
     def fetchone(self):
         return self.cursor.fetchone()
 
