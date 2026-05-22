@@ -672,8 +672,18 @@ LIVE_NEWS_CACHE = []
 
 # Your Gemini API Keys for rotation
 API_KEYS = [
-    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 10)
+    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 13)
 ]
+# Add direct fallbacks for keys 10, 11, 12
+fallback_keys = [
+    "AIzaSyBjYaEDhYWQD-muqhmzxn2hpzgXuq4BYCE",
+    "AIzaSyBEYTIYiaCNWuCRM19oJ6QKEMSwbfmZIqY",
+    "AIzaSyDHc5YyF3QO84EfmrwfqA2DowxqzP5t89Y"
+]
+for fk in fallback_keys:
+    if fk and fk not in API_KEYS:
+        API_KEYS.append(fk)
+
 API_KEYS = [key for key in API_KEYS if key] # Filter out missing keys
 
 # Per-key cooldown after 429 (skip dead keys instead of re-trying them every batch)
