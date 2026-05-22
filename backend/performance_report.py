@@ -6,9 +6,16 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'news_cache.db')
 
 def connect_news_db():
-    conn = sqlite3.connect(DB_PATH, timeout=20.0)
-    conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        from app import connect_news_db as get_app_db
+        return get_app_db()
+    except Exception:
+        import sqlite3
+        import os
+        db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'news_cache.db')
+        conn = sqlite3.connect(db_path, timeout=20.0)
+        conn.row_factory = sqlite3.Row
+        return conn
 
 def run_performance_check():
     """
