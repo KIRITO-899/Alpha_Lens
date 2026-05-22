@@ -4936,6 +4936,24 @@ def get_latest_signal():
 
 @app.route('/api/debug-db', methods=['GET'])
 def debug_db():
+    pg_error = None
+    db_url = os.environ.get("DATABASE_URL")
+    
+    if db_url:
+        try:
+            # Try to connect directly
+            import psycopg2
+            pg_conn = psycopg2.connect(db_url, connect_timeout=5)
+            pg_conn.close()
+        except Exception as e:
+            import traceback
+            pg_error = {
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }
+    else:
+        pg_error = "DATABASE_URL is not set in environment"
+
     try:
         conn = connect_news_db()
         is_pg = conn.is_postgres
@@ -4964,13 +4982,17 @@ def debug_db():
             'is_postgres': is_pg,
             'news_count': news_count,
             'impact_count': impact_count,
-            'latest_news': latest_news
+            'latest_news': latest_news,
+            'pg_connection_error': pg_error,
+            'has_database_url_env': db_url is not None
         })
     except Exception as e:
         import traceback
         return jsonify({
             'status': 'error',
             'error': str(e),
+            'pg_connection_error': pg_error,
+            'has_database_url_env': db_url is not None,
             'traceback': traceback.format_exc()
         }), 500
 
