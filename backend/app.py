@@ -555,11 +555,15 @@ def migrate_local_sqlite_to_postgres():
     _repo_root = os.path.dirname(_here)
     print(f"   [MIGRATION] Working dir: {os.getcwd()}, app dir: {_here}", flush=True)
 
+    # Also check .done files to re-run a partial migration
     candidates = [
-        os.path.join(_here, 'news_cache.db'),           # backend/news_cache.db (app.py sibling)
-        os.path.join(_repo_root, 'backend', 'news_cache.db'),  # repo_root/backend/news_cache.db
-        os.path.join(_repo_root, 'news_cache.db'),       # repo_root/news_cache.db
+        os.path.join(_here, 'news_cache.db'),
+        os.path.join(_here, 'news_cache.db.done'),
+        os.path.join(_repo_root, 'backend', 'news_cache.db'),
+        os.path.join(_repo_root, 'backend', 'news_cache.db.done'),
+        os.path.join(_repo_root, 'news_cache.db'),
         os.path.join(os.getcwd(), 'backend', 'news_cache.db'),
+        os.path.join(os.getcwd(), 'backend', 'news_cache.db.done'),
         os.path.join(os.getcwd(), 'news_cache.db'),
     ]
     db_path = None
@@ -606,19 +610,24 @@ def migrate_local_sqlite_to_postgres():
         sqlite_cur.execute("SELECT id, headline, news_time, aam_janta_translation, macro_pathway, created_at, category FROM news")
         news_rows = sqlite_cur.fetchall()
         inserted_news = 0
+        skipped_news = 0
         for row in news_rows:
             try:
+                # Use ON CONFLICT DO NOTHING to suppress ALL unique violations
+                # (both id PK and the unique headline index)
                 pg_cur.execute("""
                     INSERT INTO news (id, headline, news_time, aam_janta_translation, macro_pathway, created_at, category)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (id) DO NOTHING
+                    ON CONFLICT DO NOTHING
                 """, row)
+                pg_conn.commit()
                 inserted_news += 1
             except Exception as e:
                 pg_conn.rollback()
-                print(f"      [MIGRATION] Error inserting news {row[0]}: {e}")
-        pg_conn.commit()
-        print(f"   [MIGRATION] News: {inserted_news}/{len(news_rows)} rows migrated.", flush=True)
+                skipped_news += 1
+                if skipped_news <= 5:
+                    print(f"      [MIGRATION] Error inserting news id={row[0]}: {e}", flush=True)
+        print(f"   [MIGRATION] News: {inserted_news} inserted, {skipped_news} skipped out of {len(news_rows)}.", flush=True)
 
         # 3. Migrate stock_impact (using actual SQLite columns)
         print("   [MIGRATION] Migrating stock_impact table...", flush=True)
