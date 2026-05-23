@@ -4818,6 +4818,7 @@ def search_stock_universe(query, limit=20):
         return []
     like   = f"%{q}%"
     prefix = f"{q}%"
+    results = []
     try:
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
@@ -4849,7 +4850,7 @@ def search_stock_universe(query, limit=20):
         """, (q, q, q, prefix, prefix, prefix, like, like, like, limit))
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
-        return [
+        results = [
             {
                 "name":     r.get("name") or r.get("symbol") or r.get("ticker"),
                 "ticker":   r.get("ticker"),
@@ -4860,7 +4861,48 @@ def search_stock_universe(query, limit=20):
         ]
     except Exception as e:
         print(f"[Stock Search] DB search failed: {e}")
-        return []
+        results = []
+
+    # In-memory fallback to STOCK_KEYWORD_MAP if database returned no results
+    if not results:
+        curated_matches = []
+        for name, ticker in STOCK_KEYWORD_MAP.items():
+            base = ticker_base(ticker)
+            if not is_valid_stock_universe_symbol(base):
+                continue
+            name_lower = name.lower()
+            ticker_lower = ticker.lower()
+            
+            # Simple match ranking
+            if name_lower == q or ticker_lower == q:
+                rank = 0
+            elif ticker_lower.startswith(q) or name_lower.startswith(q):
+                rank = 1
+            elif q in ticker_lower or q in name_lower:
+                rank = 2
+            else:
+                continue
+                
+            curated_matches.append({
+                "rank": rank,
+                "name": name.title(),
+                "ticker": ticker,
+                "exchange": "BSE" if ticker.endswith(".BO") else "NSE",
+                "source": "curated"
+            })
+            
+        curated_matches.sort(key=lambda x: (x["rank"], len(x["ticker"]), x["ticker"]))
+        results = [
+            {
+                "name": item["name"],
+                "ticker": item["ticker"],
+                "exchange": item["exchange"],
+                "source": item["source"]
+            }
+            for item in curated_matches[:limit]
+        ]
+
+    return results
 
 @app.route('/api/stock-search', methods=['GET'])
 def search_stocks():
