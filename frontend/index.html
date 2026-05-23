@@ -2271,13 +2271,14 @@
         }
 
         async function handleStockSearch(e) {
-            const query = e.target.value;
+            const inputEl = document.getElementById('stock-search-input');
+            const query = inputEl ? inputEl.value : '';
             const dropdown = document.getElementById('stock-search-dropdown');
             
             if (searchTimeout) clearTimeout(searchTimeout);
             
             if (!query || query.length < 2) {
-                dropdown.classList.add('hidden');
+                if (dropdown) dropdown.classList.add('hidden');
                 return;
             }
             
@@ -2286,6 +2287,7 @@
                     const res = await fetch('/api/stock-search?q=' + encodeURIComponent(query));
                     const results = await res.json();
                     
+                    if (!dropdown) return;
                     dropdown.innerHTML = '';
                     if (results.length === 0) {
                         dropdown.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">No stocks found</div>';
@@ -2305,7 +2307,7 @@
                                 div.onclick = () => {
                                     addStockToWatchlist(stock.ticker, stock.name);
                                     dropdown.classList.add('hidden');
-                                    e.target.value = '';
+                                    if (inputEl) inputEl.value = '';
                                 };
                             }
                             dropdown.appendChild(div);
