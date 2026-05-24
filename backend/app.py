@@ -4285,6 +4285,115 @@ def build_explain_portfolio_answer(context_items, answer_bases):
     sections.append(f"**News Used**\n- {item.get('headline')}")
     return "\n\n".join(sections)
 
+_UNHELPFUL_FALLBACK_FRAGMENTS = (
+    "do not have saved portfolio-linked news",
+    "not enough detail to answer",
+)
+
+
+def _is_unhelpful_fallback(answer):
+    """True when fallback_portfolio_answer punted because no matching news exists."""
+    if not answer:
+        return True
+    low = answer.lower()
+    return any(frag in low for frag in _UNHELPFUL_FALLBACK_FRAGMENTS)
+
+
+_DATA_DRIVEN_QUESTION_PATTERNS = (
+    r'\b(long[\- ]?term|long term|short[\- ]?term|short term)\b',
+    r'\b(hold|holding)\b.*\b(year|years|month|months|long)\b',
+    r'\b(\d+\s*(year|years|month|months))\b',
+    r'\b(horizon|future|forever)\b',
+    r'\b(sell|exit|trim|reduce|offload|dump|book\s*profit)\b',
+    r'\b(expensive|cheap|overvalu|undervalu|valuation|fairly\s*valued|worth\s*buying)\b',
+    r'\b(p\s*/\s*e|pe\s*ratio|pb\s*ratio|p\s*/\s*b)\b',
+    r'\b(risk|risky|safe|downside|drawdown|volatil)\b',
+    r'\b(diversif|allocation|rebalanc|portfolio\s*mix)\b',
+    r'\b(best|better|worst|stronger|weaker)\b',
+)
+
+
+def _question_needs_data_driven_answer(question):
+    """
+    True when the question is about portfolio decisions (horizon, hold/sell, valuation,
+    risk, allocation) rather than a specific saved news event. The news-based fallback
+    can't meaningfully answer these, so we route to the data-driven summary instead.
+    """
+    if not question:
+        return False
+    q = question.lower()
+    return any(re.search(pat, q) for pat in _DATA_DRIVEN_QUESTION_PATTERNS)
+
+
+def build_data_driven_fallback(question, portfolio_details, portfolio_tickers):
+    """
+    Produce a useful answer for general portfolio questions when AI is unavailable
+    and no matching saved news exists. Uses the live quotes + fundamentals already
+    gathered in `portfolio_details` (one preformatted string per holding).
+
+    Tries to detect intent (long-term hold, sell/exit, valuation, sector) and
+    tailors the framing accordingly. Always lists each holding with the live data
+    so the user gets something concrete instead of "I can only answer from news."
+    """
+    q = (question or "").lower()
+
+    horizon_terms = ("long term", "long-term", "longterm", "hold", "holding", "year", "years",
+                     "month", "months", "horizon", "future")
+    sell_terms = ("sell", "exit", "book profit", "trim", "reduce", "offload", "dump")
+    value_terms = ("expensive", "cheap", "overvalu", "undervalu", "valuation", "p/e", "pe ratio",
+                   "fairly", "worth")
+    risk_terms = ("risk", "risky", "safe", "downside", "drawdown", "volatile", "volatility")
+
+    horizon = any(t in q for t in horizon_terms)
+    sell = any(t in q for t in sell_terms)
+    valuation = any(t in q for t in value_terms)
+    risk = any(t in q for t in risk_terms)
+
+    intent_lines = []
+    if horizon and sell:
+        intent_lines.append(
+            "For a multi-year hold, prefer names with a profitable franchise, a P/E close to or below "
+            "their sector median, and price comfortably below the 52-week high. Stocks trading near "
+            "their 52-week high on stretched P/E are typical trim candidates if you need to free capital."
+        )
+    elif horizon:
+        intent_lines.append(
+            "Long-term holds work best when the business has a durable moat and the entry valuation isn't "
+            "stretched. Use P/E vs sector median and distance from 52-week high as quick sanity checks."
+        )
+    elif sell:
+        intent_lines.append(
+            "Common reasons to trim: P/E meaningfully above sector median, price near 52-week high with "
+            "weakening fundamentals, or sector headwinds (rate cycle, regulation, demand slowdown)."
+        )
+    elif valuation:
+        intent_lines.append(
+            "Quick valuation read: compare each holding's P/E against its sector median. Above median = "
+            "expensive (needs growth to justify); below = potentially cheap if earnings hold up."
+        )
+    elif risk:
+        intent_lines.append(
+            "Risk view: stocks far above their 52-week low and trading on high P/E carry more downside in "
+            "a correction. Diversification across sectors lowers single-name shock risk."
+        )
+    else:
+        intent_lines.append(
+            "Live snapshot of your holdings below. The AI advisor is briefly unavailable, but you can use "
+            "P/E vs sector median and distance from 52-week high/low as quick decision anchors."
+        )
+
+    sections = ["**Answer**\n" + " ".join(intent_lines)]
+
+    if portfolio_details:
+        sections.append("**Your Holdings — Live Data**\n" + "\n".join(portfolio_details))
+
+    sections.append(
+        "**Note**\nThe AI advisor timed out, so this is a data-only summary. "
+        "Ask again in a moment for a full analysis."
+    )
+    return "\n\n".join(sections)
+
+
 def fallback_portfolio_answer(question, context_items, portfolio_tickers, portfolio_names=None):
     if not context_items:
         return "I do not have saved portfolio-linked news for those added stocks yet."
@@ -4666,8 +4775,17 @@ USER QUESTION:
             matched_tickers=sorted(requested_bases),
         )
 
-    # Fallback to local answer if Gemini failed
-    local_answer = fallback_portfolio_answer(question, answer_context_items, normalized_tickers, portfolio_names)
+    # Fallback when Gemini is unavailable.
+    # For general portfolio questions (horizon, hold/sell, valuation, sector, risk),
+    # the news-based fallback can't really help — it would just paraphrase an unrelated
+    # headline. Prefer the data-driven summary built from the live prices and
+    # fundamentals we already fetched.
+    if _question_needs_data_driven_answer(question):
+        local_answer = build_data_driven_fallback(question, portfolio_details, portfolio_tickers)
+    else:
+        local_answer = fallback_portfolio_answer(question, answer_context_items, normalized_tickers, portfolio_names)
+        if _is_unhelpful_fallback(local_answer):
+            local_answer = build_data_driven_fallback(question, portfolio_details, portfolio_tickers)
     return assistant_response(
         local_answer,
         "local",

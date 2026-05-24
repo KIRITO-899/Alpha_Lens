@@ -2538,10 +2538,55 @@
             }).slice(0, 5);
         }
 
+        function buildDataOnlyPortfolioAnswer(question) {
+            // Used when the network/AI call fails entirely. We don't have fundamentals
+            // client-side, but we can at least list the watchlist with live prices and
+            // tailor the intro to the question type so the user gets a real answer.
+            if (!watchlist || watchlist.length === 0) {
+                return 'Add stocks to your portfolio first, then I can help you analyze them.';
+            }
+            const q = (question || '').toLowerCase();
+            const horizon = /(long[- ]?term|hold|year|month|horizon|future)/.test(q);
+            const sell = /(sell|exit|book profit|trim|reduce|offload)/.test(q);
+            const valuation = /(expensive|cheap|overvalu|undervalu|valuation|p\/?e|fairly|worth)/.test(q);
+            const risk = /(risk|risky|safe|downside|drawdown|volatil)/.test(q);
+
+            let intro;
+            if (horizon && sell) {
+                intro = 'For a multi-year hold, favour names with steady earnings and reasonable valuation. Trim candidates are usually stocks trading near 52-week highs on stretched P/E, or those in sectors facing structural headwinds.';
+            } else if (horizon) {
+                intro = 'Long-term holds work best with durable franchises bought at sensible valuations. Sector tailwinds and a P/E near or below the sector median are useful anchors.';
+            } else if (sell) {
+                intro = 'Stocks worth trimming are typically those with P/E meaningfully above their sector median, near 52-week highs with weakening fundamentals, or facing sector-specific headwinds.';
+            } else if (valuation) {
+                intro = 'Quick valuation read: compare each holding’s P/E to its sector median. Above median needs growth to justify, below median may signal a discount if earnings hold up.';
+            } else if (risk) {
+                intro = 'Risk concentrates in stocks well above their 52-week low and on rich P/E. Sector diversification reduces single-name shock risk.';
+            } else {
+                intro = 'Quick read on your current holdings below. The AI advisor is briefly unavailable, but this snapshot covers the basics.';
+            }
+
+            const lines = watchlist.map(s => {
+                const px = watchlistPrices[s.ticker] || {};
+                const price = (px.price != null) ? `₹${Number(px.price).toFixed(2)}` : '—';
+                const chg = (px.change_pct != null) ? ` (${px.change_pct >= 0 ? '+' : ''}${Number(px.change_pct).toFixed(2)}%)` : '';
+                return `- **${s.ticker}** — ${price}${chg}`;
+            });
+
+            return `**Answer**
+${intro}
+
+**Your Holdings**
+${lines.join('\n')}
+
+**Note**
+The advisor service didn’t respond in time. Ask again in a moment for a full analysis.`;
+        }
+
         function buildLocalPortfolioAnswer(question) {
             const relatedNews = getPortfolioNewsForQuestion(question);
             if (relatedNews.length === 0) {
-                return 'I can only answer from your added portfolio stocks and their saved news.';
+                return buildDataOnlyPortfolioAnswer(question);
             }
 
             const watchlistSymbols = new Set(watchlist.map(s => tickerSymbol(s.ticker)));
@@ -2597,7 +2642,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             updatePortfolioAssistantState();
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
+            // Backend may rotate through several Gemini keys on timeout (~6.5s each),
+            // and yfinance fundamentals can take a few seconds. Give it room.
+            const timeoutId = setTimeout(() => controller.abort(), 30000);
 
             try {
                 const res = await fetch('/api/portfolio-assistant', {
