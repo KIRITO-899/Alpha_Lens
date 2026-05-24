@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "alpha-lens",
+      "runtimeExecutable": "C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe",
+      "runtimeArgs": ["app.py"],
+      "cwd": "C:/Project rohan/Alpha_Lens/backend",
+      "port": 5000
+    }
+  ]
+}

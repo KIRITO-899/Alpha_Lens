@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const fs=require\\('fs'\\); const code=fs.readFileSync\\('C:/Project rohan/Alpha_Lens/frontend/stocks.js','utf8'\\); eval\\(code\\); console.log\\('OK count=', LOCAL_STOCKS.length\\);\")",
+      "PowerShell(node -e \"const fs=require\\('fs'\\); const code=fs.readFileSync\\('C:/Project rohan/Alpha_Lens/frontend/stocks.js','utf8'\\); eval\\(code\\); console.log\\('OK count=', LOCAL_STOCKS.length\\); console.log\\('First:', JSON.stringify\\(LOCAL_STOCKS[0]\\)\\); const q='re'; const matches = LOCAL_STOCKS.filter\\(s => s.t.toLowerCase\\(\\).includes\\(q\\) || s.n.toLowerCase\\(\\).includes\\(q\\)\\); console.log\\('Matches for re:', matches.length\\); console.log\\(JSON.stringify\\(matches.slice\\(0,5\\)\\)\\);\")",
+      "PowerShell(try { $r = Invoke-WebRequest -Uri \"http://127.0.0.1:5000/stocks.js\" -UseBasicParsing -TimeoutSec 5; Write-Output \"STATUS: $\\($r.StatusCode\\)\"; Write-Output \"CONTENT-TYPE: $\\($r.Headers['Content-Type']\\)\"; Write-Output \"LENGTH: $\\($r.Content.Length\\)\"; Write-Output \"FIRST 200 CHARS:\"; Write-Output $r.Content.Substring\\(0, [Math]::Min\\(200, $r.Content.Length\\)\\) } catch { Write-Output \"ERROR: $\\($_.Exception.Message\\)\" })",
+      "mcp__Claude_Preview__preview_start"
+    ]
+  }
+}
