@@ -4746,12 +4746,12 @@ def upsert_stock_universe_rows(rows):
             ON CONFLICT(ticker) DO UPDATE SET
                 symbol=EXCLUDED.symbol,
                 name=CASE
-                    WHEN source = 'curated' THEN name
+                    WHEN stock_universe.source = 'curated' THEN stock_universe.name
                     ELSE EXCLUDED.name
                 END,
                 exchange=EXCLUDED.exchange,
                 source=CASE
-                    WHEN source = 'curated' THEN source
+                    WHEN stock_universe.source = 'curated' THEN stock_universe.source
                     ELSE EXCLUDED.source
                 END,
                 updated_at=CURRENT_TIMESTAMP
@@ -4876,7 +4876,7 @@ def search_stock_universe(query, limit=20):
         return []
     like   = f"%{q}%"
     prefix = f"{q}%"
-    results = []
+    db_results = []
     try:
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
@@ -4901,66 +4901,65 @@ def search_stock_universe(query, limit=20):
               AND UPPER(symbol) NOT LIKE '%TEST%'
               AND UPPER(symbol) NOT LIKE '%DUMMY%'
             ORDER BY rank,
-                     (source = 'curated') DESC,
+                     CASE WHEN source = 'curated' THEN 1 ELSE 0 END DESC,
                      LENGTH(symbol),
                      symbol
             LIMIT ?
         """, (q, q, q, prefix, prefix, prefix, like, like, like, limit))
-        rows = [dict(r) for r in c.fetchall()]
+        raw_rows = c.fetchall()
         conn.close()
-        results = [
-            {
-                "name":     r.get("name") or r.get("symbol") or r.get("ticker"),
-                "ticker":   r.get("ticker"),
-                "exchange": r.get("exchange"),
-                "source":   r.get("source"),
-            }
-            for r in rows
-        ]
-    except Exception as e:
-        print(f"[Stock Search] DB search failed: {e}")
-        results = []
-
-    # In-memory fallback to STOCK_KEYWORD_MAP if database returned no results
-    if not results:
-        curated_matches = []
-        for name, ticker in STOCK_KEYWORD_MAP.items():
-            base = ticker_base(ticker)
-            if not is_valid_stock_universe_symbol(base):
-                continue
-            name_lower = name.lower()
-            ticker_lower = ticker.lower()
-            
-            # Simple match ranking
-            if name_lower == q or ticker_lower == q:
-                rank = 0
-            elif ticker_lower.startswith(q) or name_lower.startswith(q):
-                rank = 1
-            elif q in ticker_lower or q in name_lower:
-                rank = 2
-            else:
-                continue
-                
-            curated_matches.append({
-                "rank": rank,
-                "name": name.title(),
-                "ticker": ticker,
-                "exchange": "BSE" if ticker.endswith(".BO") else "NSE",
-                "source": "curated"
+        for r in raw_rows:
+            try:
+                row = dict(r)
+            except Exception:
+                row = {"ticker": r[0], "symbol": r[1], "name": r[2], "exchange": r[3], "source": r[4]}
+            db_results.append({
+                "name":     row.get("name") or row.get("symbol") or row.get("ticker"),
+                "ticker":   row.get("ticker"),
+                "exchange": row.get("exchange"),
+                "source":   row.get("source"),
             })
-            
-        curated_matches.sort(key=lambda x: (x["rank"], len(x["ticker"]), x["ticker"]))
-        results = [
-            {
-                "name": item["name"],
-                "ticker": item["ticker"],
-                "exchange": item["exchange"],
-                "source": item["source"]
-            }
-            for item in curated_matches[:limit]
-        ]
+    except Exception as e:
+        print(f"[Stock Search] DB search failed: {e}", flush=True)
+        db_results = []
 
-    return results
+    # ALWAYS also search STOCK_KEYWORD_MAP in-memory and merge.
+    # This guarantees results even when DB is empty, seeding is in-flight, or DB query fails.
+    seen_tickers = {r["ticker"] for r in db_results}
+    curated_matches = []
+    for kw_name, ticker in STOCK_KEYWORD_MAP.items():
+        if ticker in seen_tickers:
+            continue
+        base = ticker_base(ticker)
+        if not is_valid_stock_universe_symbol(base):
+            continue
+        name_lower   = kw_name.lower()
+        ticker_lower = ticker.lower()
+        base_lower   = base.lower()
+
+        if name_lower == q or ticker_lower == q or base_lower == q:
+            rank = 0
+        elif base_lower.startswith(q) or ticker_lower.startswith(q) or name_lower.startswith(q):
+            rank = 1
+        elif q in base_lower or q in ticker_lower or q in name_lower:
+            rank = 2
+        else:
+            continue
+
+        curated_matches.append({
+            "rank":     rank,
+            "name":     kw_name.title(),
+            "ticker":   ticker,
+            "exchange": "BSE" if ticker.endswith(".BO") else "NSE",
+            "source":   "curated",
+        })
+
+    curated_matches.sort(key=lambda x: (x["rank"], len(x["ticker"]), x["ticker"]))
+    merged = db_results + [
+        {"name": m["name"], "ticker": m["ticker"], "exchange": m["exchange"], "source": m["source"]}
+        for m in curated_matches
+    ]
+    return merged[:limit]
 
 @app.route('/api/stock-search', methods=['GET'])
 def search_stocks():
