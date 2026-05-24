@@ -5689,7 +5689,12 @@ if __name__ == '__main__':
         run_workers = True
 
     if os.environ.get("ALPHA_LENS_SKIP_AUTO_REPAIR", "").lower() not in ("1", "true", "yes"):
-        repair_existing_signal_statuses(days=14)
+        def _run_repair():
+            try:
+                repair_existing_signal_statuses(days=14)
+            except Exception as e:
+                print(f"[REPAIR ERROR] Failed to run repair: {e}", flush=True)
+        threading.Thread(target=_run_repair, name="SignalRepairThread", daemon=True).start()
 
     engine_thread = None
     yf_thread = None
