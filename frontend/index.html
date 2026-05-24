@@ -51,6 +51,8 @@
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Ctext x='16' y='21' text-anchor='middle' fill='%23C9A962' font-family='system-ui' font-size='11' font-weight='700'%3EAL%3C/text%3E%3C/svg%3E">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+    <script src="/stocks.js"></script>
+
 
     <style>
         /* ==========================================================
@@ -2270,52 +2272,97 @@
             updatePortfolioAssistantState();
         }
 
-        async function handleStockSearch(e) {
-            const query = e.target.value;
+        // LOCAL_STOCKS is loaded from external stocks.js script
+
+
+        function searchLocalStocks(query) {
+            const q = query.toLowerCase().trim();
+            if (!q || q.length < 2) return [];
+            const results = [];
+            const seen = new Set();
+            for (const stock of LOCAL_STOCKS) {
+                const tLower = stock.t.toLowerCase();
+                const nLower = stock.n.toLowerCase();
+                const baseLower = stock.t.replace(/\.(NS|BO)$/i,'').toLowerCase();
+                let rank = 99;
+                if (nLower === q || tLower === q || baseLower === q) rank = 0;
+                else if (baseLower.startsWith(q) || nLower.startsWith(q)) rank = 1;
+                else if (q in baseLower || baseLower.includes(q) || nLower.includes(q) || tLower.includes(q)) rank = 2;
+                else continue;
+                if (!seen.has(stock.t)) {
+                    seen.add(stock.t);
+                    results.push({rank, ticker: stock.t, name: stock.n, exchange: stock.t.endsWith('.BO') ? 'BSE' : 'NSE'});
+                }
+            }
+            results.sort((a, b) => a.rank - b.rank || a.ticker.length - b.ticker.length);
+            return results.slice(0, 20);
+        }
+
+        function renderSearchDropdown(results) {
+            const inputEl = document.getElementById('stock-search-input');
             const dropdown = document.getElementById('stock-search-dropdown');
-            
+            if (!dropdown) return;
+            dropdown.innerHTML = '';
+            if (!results || results.length === 0) {
+                dropdown.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">No stocks found</div>';
+            } else {
+                results.forEach(stock => {
+                    const isAdded = watchlist.some(s => tickerSymbol(s.ticker) === tickerSymbol(stock.ticker));
+                    const div = document.createElement('div');
+                    div.className = `px-4 py-3 hover:bg-white/10 cursor-pointer flex justify-between items-center border-b border-white/5 last:border-0 ${isAdded ? 'opacity-50' : ''}`;
+                    div.innerHTML = `
+                        <div>
+                            <div class="text-sm font-bold text-white">${escapeHtml(stock.ticker)}</div>
+                            <div class="text-[10px] text-slate-400 uppercase tracking-wider">${escapeHtml(stock.name)}</div>
+                        </div>
+                        ${isAdded ? '<span class="text-[10px] text-green-400 font-bold border border-green-500/30 px-2 py-0.5 rounded">ADDED</span>' : ''}
+                    `;
+                    if (!isAdded) {
+                        div.onclick = () => {
+                            addStockToWatchlist(stock.ticker, stock.name);
+                            dropdown.classList.add('hidden');
+                            if (inputEl) inputEl.value = '';
+                        };
+                    }
+                    dropdown.appendChild(div);
+                });
+            }
+            dropdown.classList.remove('hidden');
+        }
+
+        async function handleStockSearch(e) {
+            const inputEl = document.getElementById('stock-search-input');
+            const query = (inputEl ? inputEl.value : '').trim();
+            const dropdown = document.getElementById('stock-search-dropdown');
+
             if (searchTimeout) clearTimeout(searchTimeout);
-            
+
             if (!query || query.length < 2) {
-                dropdown.classList.add('hidden');
+                if (dropdown) dropdown.classList.add('hidden');
                 return;
             }
-            
+
+            // STEP 1: Show local results instantly (zero latency)
+            const localResults = searchLocalStocks(query);
+            renderSearchDropdown(localResults.length > 0 ? localResults : null);
+
+            // STEP 2: Also fetch from backend (for obscure stocks) and merge
             searchTimeout = setTimeout(async () => {
                 try {
                     const res = await fetch('/api/stock-search?q=' + encodeURIComponent(query));
-                    const results = await res.json();
-                    
-                    dropdown.innerHTML = '';
-                    if (results.length === 0) {
-                        dropdown.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">No stocks found</div>';
-                    } else {
-                        results.forEach(stock => {
-                            const isAdded = watchlist.some(s => tickerSymbol(s.ticker) === tickerSymbol(stock.ticker));
-                            const div = document.createElement('div');
-                            div.className = `px-4 py-3 hover:bg-white/10 cursor-pointer flex justify-between items-center border-b border-white/5 last:border-0 ${isAdded ? 'opacity-50' : ''}`;
-                            div.innerHTML = `
-                                <div>
-                                    <div class="text-sm font-bold text-white">${escapeHtml(stock.ticker)}</div>
-                                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">${escapeHtml(stock.name)}</div>
-                                </div>
-                                ${isAdded ? '<span class="text-[10px] text-green-400 font-bold border border-green-500/30 px-2 py-0.5 rounded">ADDED</span>' : ''}
-                            `;
-                            if (!isAdded) {
-                                div.onclick = () => {
-                                    addStockToWatchlist(stock.ticker, stock.name);
-                                    dropdown.classList.add('hidden');
-                                    e.target.value = '';
-                                };
-                            }
-                            dropdown.appendChild(div);
-                        });
-                    }
-                    dropdown.classList.remove('hidden');
+                    if (!res.ok) return; // Keep local results on API error
+                    const apiResults = await res.json();
+                    if (!Array.isArray(apiResults)) return;
+
+                    // Merge: local results first, then add any new tickers from API
+                    const seen = new Set(localResults.map(s => s.ticker));
+                    const extra = apiResults.filter(s => !seen.has(s.ticker));
+                    const merged = [...localResults, ...extra].slice(0, 20);
+                    renderSearchDropdown(merged.length > 0 ? merged : null);
                 } catch (err) {
-                    console.error("Search failed", err);
+                    // Keep local results — do not show error to user
                 }
-            }, 300);
+            }, 400);
         }
 
         document.addEventListener('click', (e) => {

@@ -367,7 +367,12 @@ class CursorWrapper:
             return self
 
         sql_translated = sql.replace('?', '%s')
-        self.cursor.executemany(sql_translated, seq_of_parameters)
+        try:
+            import psycopg2.extras
+            psycopg2.extras.execute_batch(self.cursor, sql_translated, seq_of_parameters)
+        except Exception as e:
+            print(f"   [DB] execute_batch failed: {e}. Falling back to standard executemany.", flush=True)
+            self.cursor.executemany(sql_translated, seq_of_parameters)
         return self
 
     def fetchone(self):
@@ -649,17 +654,28 @@ def migrate_local_sqlite_to_postgres():
         print("   [MIGRATION] Migrating stock_universe table...", flush=True)
         sqlite_cur.execute("SELECT ticker, symbol, name, exchange, source, updated_at FROM stock_universe")
         univ_rows = sqlite_cur.fetchall()
-        for row in univ_rows:
+        if univ_rows:
             try:
-                pg_cur.execute("""
+                pg_cur.executemany("""
                     INSERT INTO stock_universe (ticker, symbol, name, exchange, source, updated_at)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (ticker) DO NOTHING
-                """, row)
+                """, univ_rows)
+                pg_conn.commit()
             except Exception as e:
                 pg_conn.rollback()
-                print(f"      [MIGRATION] Error inserting stock_universe {row[0]}: {e}")
-        pg_conn.commit()
+                print(f"   [MIGRATION] Batch stock_universe failed ({e}). Falling back to row-by-row...", flush=True)
+                for row in univ_rows:
+                    try:
+                        pg_cur.execute("""
+                            INSERT INTO stock_universe (ticker, symbol, name, exchange, source, updated_at)
+                            VALUES (%s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (ticker) DO NOTHING
+                        """, row)
+                        pg_conn.commit()
+                    except Exception as ex:
+                        pg_conn.rollback()
+                        print(f"      [MIGRATION] Error inserting stock_universe {row[0]}: {ex}", flush=True)
 
         # 2. Migrate news (using actual SQLite columns)
         print("   [MIGRATION] Migrating news table...", flush=True)
@@ -667,22 +683,32 @@ def migrate_local_sqlite_to_postgres():
         news_rows = sqlite_cur.fetchall()
         inserted_news = 0
         skipped_news = 0
-        for row in news_rows:
+        if news_rows:
             try:
-                # Use ON CONFLICT DO NOTHING to suppress ALL unique violations
-                # (both id PK and the unique headline index)
-                pg_cur.execute("""
+                pg_cur.executemany("""
                     INSERT INTO news (id, headline, news_time, aam_janta_translation, macro_pathway, created_at, category)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT DO NOTHING
-                """, row)
+                """, news_rows)
                 pg_conn.commit()
-                inserted_news += 1
+                inserted_news = len(news_rows)
             except Exception as e:
                 pg_conn.rollback()
-                skipped_news += 1
-                if skipped_news <= 5:
-                    print(f"      [MIGRATION] Error inserting news id={row[0]}: {e}", flush=True)
+                print(f"   [MIGRATION] Batch news migration failed ({e}). Falling back to row-by-row...", flush=True)
+                for row in news_rows:
+                    try:
+                        pg_cur.execute("""
+                            INSERT INTO news (id, headline, news_time, aam_janta_translation, macro_pathway, created_at, category)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT DO NOTHING
+                        """, row)
+                        pg_conn.commit()
+                        inserted_news += 1
+                    except Exception as ex:
+                        pg_conn.rollback()
+                        skipped_news += 1
+                        if skipped_news <= 5:
+                            print(f"      [MIGRATION] Error inserting news id={row[0]}: {ex}", flush=True)
         print(f"   [MIGRATION] News: {inserted_news} inserted, {skipped_news} skipped out of {len(news_rows)}.", flush=True)
 
         # 3. Migrate stock_impact (using actual SQLite columns)
@@ -695,37 +721,63 @@ def migrate_local_sqlite_to_postgres():
         """)
         impact_rows = sqlite_cur.fetchall()
         inserted_impact = 0
-        for row in impact_rows:
+        if impact_rows:
             try:
-                pg_cur.execute("""
+                pg_cur.executemany("""
                     INSERT INTO stock_impact (id, news_id, ticker, impact, estimated_change_percent,
                         view, reason, base_price, current_price, status, created_at,
                         confidence_score, technical_context, ensemble_detail)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
-                """, row)
-                inserted_impact += 1
+                """, impact_rows)
+                pg_conn.commit()
+                inserted_impact = len(impact_rows)
             except Exception as e:
                 pg_conn.rollback()
-                print(f"      [MIGRATION] Error inserting stock_impact {row[0]}: {e}")
-        pg_conn.commit()
+                print(f"   [MIGRATION] Batch stock_impact failed ({e}). Falling back to row-by-row...", flush=True)
+                inserted_impact = 0
+                for row in impact_rows:
+                    try:
+                        pg_cur.execute("""
+                            INSERT INTO stock_impact (id, news_id, ticker, impact, estimated_change_percent,
+                                view, reason, base_price, current_price, status, created_at,
+                                confidence_score, technical_context, ensemble_detail)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                        """, row)
+                        pg_conn.commit()
+                        inserted_impact += 1
+                    except Exception as ex:
+                        pg_conn.rollback()
+                        print(f"      [MIGRATION] Error inserting stock_impact {row[0]}: {ex}", flush=True)
         print(f"   [MIGRATION] Stock impact: {inserted_impact}/{len(impact_rows)} rows migrated.", flush=True)
 
         # 4. Migrate historical_patterns
         print("   [MIGRATION] Migrating historical_patterns table...", flush=True)
         sqlite_cur.execute("SELECT id, headline, ticker, direction, outcome, change_pct, created_at FROM historical_patterns")
         pat_rows = sqlite_cur.fetchall()
-        for row in pat_rows:
+        if pat_rows:
             try:
-                pg_cur.execute("""
+                pg_cur.executemany("""
                     INSERT INTO historical_patterns (id, headline, ticker, direction, outcome, change_pct, created_at)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO NOTHING
-                """, row)
+                """, pat_rows)
+                pg_conn.commit()
             except Exception as e:
                 pg_conn.rollback()
-                print(f"      [MIGRATION] Error inserting pattern {row[0]}: {e}")
-        pg_conn.commit()
+                print(f"   [MIGRATION] Batch historical_patterns failed ({e}). Falling back to row-by-row...", flush=True)
+                for row in pat_rows:
+                    try:
+                        pg_cur.execute("""
+                            INSERT INTO historical_patterns (id, headline, ticker, direction, outcome, change_pct, created_at)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            ON CONFLICT (id) DO NOTHING
+                        """, row)
+                        pg_conn.commit()
+                    except Exception as ex:
+                        pg_conn.rollback()
+                        print(f"      [MIGRATION] Error inserting pattern {row[0]}: {ex}", flush=True)
 
         # Adjust primary key sequences
         for seq_table in ['news', 'stock_impact', 'historical_patterns']:
@@ -733,7 +785,7 @@ def migrate_local_sqlite_to_postgres():
                 pg_cur.execute(f"SELECT setval(pg_get_serial_sequence('{seq_table}', 'id'), COALESCE(MAX(id), 1) + 1) FROM {seq_table}")
                 pg_conn.commit()
             except Exception as ex:
-                print(f"      [MIGRATION] Error syncing sequence {seq_table}: {ex}")
+                print(f"      [MIGRATION] Error syncing sequence {seq_table}: {ex}", flush=True)
 
         sqlite_conn.close()
         pg_conn.close()
@@ -754,8 +806,14 @@ init_db()
 print("[DEBUG] init_db() completed", flush=True)
 init_news_db()
 print("[DEBUG] init_news_db() completed", flush=True)
-migrate_local_sqlite_to_postgres()
-print("[DEBUG] migrate_local_sqlite_to_postgres() completed", flush=True)
+import threading
+migration_thread = threading.Thread(
+    target=migrate_local_sqlite_to_postgres,
+    name="CloudMigrationThread",
+    daemon=True
+)
+migration_thread.start()
+print("[DEBUG] Started migrate_local_sqlite_to_postgres() in background thread", flush=True)
 
 # Checkpoint any stale WAL from a previous crashed run so we start clean
 try:
@@ -4344,6 +4402,109 @@ def run_portfolio_ai_with_timeout(prompt, timeout_seconds=6.5):
             executor.shutdown(wait=False, cancel_futures=True)
     return None
 
+FUNDAMENTALS_CACHE = {}
+
+def get_stock_fundamentals(ticker):
+    """Retrieve trailing P/E, P/B, 52-week High/Low and Sector dynamically from yfinance, caching in-memory for 1 hour."""
+    normalized = normalize_ticker(ticker)
+    if not normalized:
+        return {}
+    
+    now = time.time()
+    cached = FUNDAMENTALS_CACHE.get(normalized)
+    if cached and (now - cached["ts"]) < 3600: # 1 hour cache TTL
+        return cached["data"]
+    
+    try:
+        import yfinance as yf
+        t = yf.Ticker(normalized)
+        info = t.info
+        
+        # Extract fields
+        sector = info.get("sector") or "Unknown"
+        pe = info.get("trailingPE") or info.get("forwardPE")
+        pb = info.get("priceToBook")
+        high = info.get("fiftyTwoWeekHigh")
+        low = info.get("fiftyTwoWeekLow")
+        long_name = info.get("longName") or info.get("shortName") or ticker_base(normalized)
+        
+        # Float conversions
+        pe_val = round(float(pe), 2) if pe is not None else None
+        pb_val = round(float(pb), 2) if pb is not None else None
+        high_val = round(float(high), 2) if high is not None else None
+        low_val = round(float(low), 2) if low is not None else None
+        
+        data = {
+            "name": long_name,
+            "sector": sector,
+            "pe_ratio": pe_val,
+            "pb_ratio": pb_val,
+            "high_52w": high_val,
+            "low_52w": low_val
+        }
+        FUNDAMENTALS_CACHE[normalized] = {"data": data, "ts": now}
+        return data
+    except Exception as e:
+        print(f"[Fundamentals] Error fetching for {ticker}: {e}")
+        # Return empty structure or stale data if present
+        if cached:
+            return cached["data"]
+        return {}
+
+def is_related_to_stocks_portfolio_news(question, portfolio_tickers, portfolio_names=None):
+    """
+    Returns True if the question is related to portfolios, stocks, market, financial news, or economy.
+    Returns False otherwise.
+    Uses robust keyword matching.
+    """
+    q = (question or "").lower().strip()
+    if not q:
+        return False
+        
+    # Check out-of-scope topics first using existing dictionary
+    for word in OUT_OF_SCOPE_TOPIC_WORDS:
+        if re.search(r'\b' + re.escape(word) + r'\b', q):
+            return False
+
+    # Words that strongly indicate relatedness to portfolio, stocks, market, news, or economy
+    allowed_keywords = {
+        # Portfolio / Holdings
+        "portfolio", "holding", "holdings", "watchlist", "added", "investment", "investments", "buy", "sell", "own",
+        # Stocks / Assets
+        "stock", "stocks", "share", "shares", "equity", "equities", "ticker", "tickers", "symbol", "symbols", "asset", "assets",
+        # Market / Price
+        "market", "markets", "price", "prices", "valuation", "valuations", "expensive", "cheap", "pe", "p/e", "pb", "p/b",
+        "pe ratio", "p/e ratio", "sector", "sectors", "industry", "industries", "index", "indices", "nifty", "sensex", "bse", "nse",
+        # Economy / Macro
+        "economy", "economic", "gdp", "inflation", "decline", "declining", "grow", "growth", "recession", "slump", "rbi", "fed",
+        "interest", "rates", "tariff", "policy", "monsoon", "tax", "budget", "deficit", "rupee", "dollar", "currency",
+        # Company / Financials
+        "earnings", "profit", "loss", "revenue", "sales", "dividend", "dividends", "ceo", "board", "quarter", "results",
+        # News / Impact
+        "news", "headline", "headlines", "impact", "affect", "reaction", "signal", "signals", "bullish", "bearish", "trend",
+        "rsi", "ema", "macd", "technical", "technicals", "chart", "charts", "trendline", "breakout", "breakdown"
+    }
+    
+    # Check if any allowed keyword is present
+    for word in allowed_keywords:
+        if re.search(r'\b' + re.escape(word) + r'\b', q):
+            return True
+            
+    # Check if any portfolio ticker is mentioned
+    for ticker in portfolio_tickers:
+        base = ticker_base(ticker).lower()
+        if base and re.search(r'\b' + re.escape(base) + r'\b', q):
+            return True
+            
+    # Check if any portfolio name is mentioned
+    if portfolio_names:
+        for name in portfolio_names:
+            clean = clean_stock_name(name)
+            if clean and len(clean) > 2 and clean in q:
+                return True
+            
+    return False
+
 @app.route('/api/portfolio-assistant', methods=['POST'])
 def portfolio_assistant():
     started_at = time.time()
@@ -4391,59 +4552,56 @@ def portfolio_assistant():
             context_count=0,
         )
 
-    external = detect_external_tickers(question, portfolio_tickers)
-    if external:
+    # 1. SCOPE GUARD
+    if not is_related_to_stocks_portfolio_news(question, portfolio_tickers, portfolio_names):
         return assistant_response(
-            "I can only answer from your added portfolio stocks and their saved news.",
+            "Error: I can only answer questions related to your portfolio, stocks, and the news related to them.",
             "blocked",
             context_count=0,
-            blocked_tickers=external,
         )
 
+    # 2. FETCH PORTFOLIO LIVE QUOTES & FUNDAMENTAL DETAILS
+    portfolio_details = []
+    for ticker in portfolio_tickers:
+        # Get live price
+        quote = get_stock_market_change_quote(ticker)
+        price = quote.get("price", 0.0)
+        change_pct = quote.get("change_pct", 0.0)
+        price_str = f"₹{price:.2f}" if price else "N/A"
+        change_str = f"{change_pct:+.2f}%" if change_pct else "0.00%"
+        
+        # Get fundamentals
+        fund = get_stock_fundamentals(ticker)
+        name = fund.get("name") or ticker_base(ticker)
+        sector = fund.get("sector") or "Unknown"
+        pe = fund.get("pe_ratio")
+        pb = fund.get("pb_ratio")
+        high = fund.get("high_52w")
+        low = fund.get("low_52w")
+        
+        pe_str = f"{pe:.2f}" if pe else "N/A"
+        pb_str = f"{pb:.2f}" if pb else "N/A"
+        high_str = f"₹{high:.2f}" if high else "N/A"
+        low_str = f"₹{low:.2f}" if low else "N/A"
+        
+        portfolio_details.append(
+            f"- **{ticker}** ({name}):\n"
+            f"  * Current Price: {price_str} ({change_str})\n"
+            f"  * Sector: {sector}\n"
+            f"  * P/E Ratio: {pe_str}\n"
+            f"  * P/B Ratio: {pb_str}\n"
+            f"  * 52-Week Range: High {high_str} | Low {low_str}"
+        )
+        
+    portfolio_context = "\n".join(portfolio_details)
+
+    # 3. GET NEWS CONTEXT
     context_items, normalized_tickers = get_portfolio_news_context(portfolio_tickers)
-
-    if not is_portfolio_news_question(question, context_items, normalized_tickers, portfolio_names):
-        return assistant_response(
-            "I can only answer from your added portfolio stocks and their saved news.",
-            "blocked",
-            context_count=len(context_items),
-            tickers=normalized_tickers,
-            skipped_ai=True,
-        )
-
-    if not context_items:
-        return assistant_response(
-            "I do not have saved portfolio-linked news for those added stocks yet.",
-            "no_context",
-            context_count=0,
-            tickers=normalized_tickers,
-        )
-
     requested_bases = mentioned_portfolio_bases(question, normalized_tickers, portfolio_names)
     answer_context_items = rank_portfolio_context_items(question, context_items, requested_bases)
-    if requested_bases and not answer_context_items:
-        return assistant_response(
-            f"I do not have saved portfolio-linked news for {', '.join(sorted(requested_bases))} yet.",
-            "no_context",
-            context_count=0,
-            tickers=normalized_tickers,
-            matched_tickers=sorted(requested_bases),
-        )
-
-    local_answer = fallback_portfolio_answer(question, answer_context_items, normalized_tickers, portfolio_names)
-
-    if not should_try_portfolio_ai(question):
-        return assistant_response(
-            local_answer,
-            "local",
-            context_count=len(answer_context_items),
-            tickers=normalized_tickers,
-            matched_tickers=sorted(requested_bases),
-            skipped_ai=True,
-        )
-
+    
     context_lines = []
-    for item in answer_context_items:
+    for item in answer_context_items[:5]:
         stock_lines = []
         for stock in item.get("stocks", []):
             if requested_bases and ticker_base(stock.get("ticker")) not in requested_bases:
@@ -4460,34 +4618,49 @@ def portfolio_assistant():
             f"{item.get('headline')} | Portfolio stocks: {' || '.join(stock_lines)} | "
             f"Explanation: {(item.get('explanation') or '')[:500]}"
         )
+        
+    news_context = "\n".join(context_lines) if context_lines else "No specific database news matching these stocks is currently logged."
 
+    # 4. CONSTRUCT RICH AI PROMPT
     prompt = f"""You are Alpha Lens Portfolio Assistant.
-You may answer ONLY using the user's added portfolio tickers and the saved news context below.
-If the question is outside these portfolio tickers or outside this news context, say exactly:
-"I can only answer from your added portfolio stocks and their saved news."
-Do not invent facts, prices, targets, or news. Answer only the question asked.
+You are a highly sophisticated financial advisor and quantitative researcher specializing in the Indian equities market.
+You have full access to the user's portfolio stocks, live prices, valuation metrics, and their saved news context.
+
+Your task is to answer the user's question in the best possible, professional, and detailed way by researching all possibilities (macroeconomics, stock fundamentals, and sector valuations).
+
+CRITICAL RULE 1 (SCOPE GUARD):
+You must STRICTLY only answer questions that are related to the user's portfolio, stocks (in general or in their portfolio), stock market, financial news, economy, and company details.
+If the question is NOT related to portfolios, stocks, stock market, companies, financial news, or economic topics (for example: if it asks about weather, cooking, recipes, general coding/programming, general science, non-financial history, sports, astrology, celebrities, or random trivia), you MUST respond exactly with the following error message and nothing else:
+"Error: I can only answer questions related to your portfolio, stocks, and the news related to them."
+
+CRITICAL RULE 2 (PORTFOLIO ANALYTICS):
+When answering questions about the portfolio or specific stocks, incorporate the provided stock data (Price, P/E ratio, P/B ratio, 52-week High/Low, and Sector) to give a thorough, data-backed analysis.
+Estimate and compare their P/E ratios to standard sector/industry benchmarks in the Indian market to assess if they are expensive, cheap, or fairly valued.
+Address relevant macroeconomic factors (e.g. declining Indian economy, interest rates, RBI policy) and explain how they impact the specific sectors and stocks in their portfolio.
 
 Format the answer in clean Markdown:
 **Answer**
-1-3 short sentences.
+A clear, detailed, and professional explanation (3-6 sentences or bullet points) answering the user's question, integrating macro factors, fundamentals (P/E ratio), and sector positioning.
 
-**Portfolio Impact**
-- TICKER: direction, confidence, and what the saved news implies.
+**Portfolio Valuation & Metrics**
+Provide a clean summary table or list of the portfolio stocks mentioned/analyzed, displaying their current Price, P/E, Sector, and Valuation Status (e.g., undervalued, expensive, fairly valued) based on your expert sector knowledge.
 
-**News Used**
-- The exact saved headline(s) used.
+**News & Signals Used**
+- Mention any headlines from the saved news used, or state "General market analysis and fundamentals used" if no saved database news is directly applicable.
 
-If there is not enough saved context, say that clearly instead of guessing.
+---
+USER PORTFOLIO DETAILS:
+{portfolio_context}
 
-Portfolio tickers: {', '.join(normalized_tickers)}
+SAVED NEWS & AI SIGNALS CONTEXT:
+{news_context}
 
-Saved portfolio news context:
-{chr(10).join(context_lines)}
-
-Question: {question}
+USER QUESTION:
+{question}
 """
+
     answer = run_portfolio_ai_with_timeout(prompt)
-    if answer and "I can only answer from your added portfolio stocks and their saved news." not in answer:
+    if answer:
         return assistant_response(
             answer,
             "ai",
@@ -4496,6 +4669,8 @@ Question: {question}
             matched_tickers=sorted(requested_bases),
         )
 
+    # Fallback to local answer if Gemini failed
+    local_answer = fallback_portfolio_answer(question, answer_context_items, normalized_tickers, portfolio_names)
     return assistant_response(
         local_answer,
         "local",
@@ -4687,15 +4862,15 @@ def upsert_stock_universe_rows(rows):
             INSERT INTO stock_universe (ticker, symbol, name, exchange, source, updated_at)
             VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(ticker) DO UPDATE SET
-                symbol=excluded.symbol,
+                symbol=EXCLUDED.symbol,
                 name=CASE
                     WHEN stock_universe.source = 'curated' THEN stock_universe.name
-                    ELSE excluded.name
+                    ELSE EXCLUDED.name
                 END,
-                exchange=excluded.exchange,
+                exchange=EXCLUDED.exchange,
                 source=CASE
                     WHEN stock_universe.source = 'curated' THEN stock_universe.source
-                    ELSE excluded.source
+                    ELSE EXCLUDED.source
                 END,
                 updated_at=CURRENT_TIMESTAMP
         """, rows)
@@ -4819,6 +4994,7 @@ def search_stock_universe(query, limit=20):
         return []
     like   = f"%{q}%"
     prefix = f"{q}%"
+    db_results = []
     try:
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
@@ -4843,25 +5019,65 @@ def search_stock_universe(query, limit=20):
               AND UPPER(symbol) NOT LIKE '%TEST%'
               AND UPPER(symbol) NOT LIKE '%DUMMY%'
             ORDER BY rank,
-                     (source = 'curated') DESC,
+                     CASE WHEN source = 'curated' THEN 1 ELSE 0 END DESC,
                      LENGTH(symbol),
                      symbol
             LIMIT ?
         """, (q, q, q, prefix, prefix, prefix, like, like, like, limit))
-        rows = [dict(r) for r in c.fetchall()]
+        raw_rows = c.fetchall()
         conn.close()
-        return [
-            {
-                "name":     r.get("name") or r.get("symbol") or r.get("ticker"),
-                "ticker":   r.get("ticker"),
-                "exchange": r.get("exchange"),
-                "source":   r.get("source"),
-            }
-            for r in rows
-        ]
+        for r in raw_rows:
+            try:
+                row = dict(r)
+            except Exception:
+                row = {"ticker": r[0], "symbol": r[1], "name": r[2], "exchange": r[3], "source": r[4]}
+            db_results.append({
+                "name":     row.get("name") or row.get("symbol") or row.get("ticker"),
+                "ticker":   row.get("ticker"),
+                "exchange": row.get("exchange"),
+                "source":   row.get("source"),
+            })
     except Exception as e:
-        print(f"[Stock Search] DB search failed: {e}")
-        return []
+        print(f"[Stock Search] DB search failed: {e}", flush=True)
+        db_results = []
+
+    # ALWAYS also search STOCK_KEYWORD_MAP in-memory and merge.
+    # This guarantees results even when DB is empty, seeding is in-flight, or DB query fails.
+    seen_tickers = {r["ticker"] for r in db_results}
+    curated_matches = []
+    for kw_name, ticker in STOCK_KEYWORD_MAP.items():
+        if ticker in seen_tickers:
+            continue
+        base = ticker_base(ticker)
+        if not is_valid_stock_universe_symbol(base):
+            continue
+        name_lower   = kw_name.lower()
+        ticker_lower = ticker.lower()
+        base_lower   = base.lower()
+
+        if name_lower == q or ticker_lower == q or base_lower == q:
+            rank = 0
+        elif base_lower.startswith(q) or ticker_lower.startswith(q) or name_lower.startswith(q):
+            rank = 1
+        elif q in base_lower or q in ticker_lower or q in name_lower:
+            rank = 2
+        else:
+            continue
+
+        curated_matches.append({
+            "rank":     rank,
+            "name":     kw_name.title(),
+            "ticker":   ticker,
+            "exchange": "BSE" if ticker.endswith(".BO") else "NSE",
+            "source":   "curated",
+        })
+
+    curated_matches.sort(key=lambda x: (x["rank"], len(x["ticker"]), x["ticker"]))
+    merged = db_results + [
+        {"name": m["name"], "ticker": m["ticker"], "exchange": m["exchange"], "source": m["source"]}
+        for m in curated_matches
+    ]
+    return merged[:limit]
 
 @app.route('/api/stock-search', methods=['GET'])
 def search_stocks():
@@ -5596,7 +5812,12 @@ if __name__ == '__main__':
         run_workers = True
 
     if os.environ.get("ALPHA_LENS_SKIP_AUTO_REPAIR", "").lower() not in ("1", "true", "yes"):
-        repair_existing_signal_statuses(days=14)
+        def _run_repair():
+            try:
+                repair_existing_signal_statuses(days=14)
+            except Exception as e:
+                print(f"[REPAIR ERROR] Failed to run repair: {e}", flush=True)
+        threading.Thread(target=_run_repair, name="SignalRepairThread", daemon=True).start()
 
     engine_thread = None
     yf_thread = None
