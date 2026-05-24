@@ -2646,17 +2646,36 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
 
             const watchlistSymbols = new Set(watchlist.map(s => tickerSymbol(s.ticker)));
 
-            // Only show news that HAS stock impacts matching our watchlist (filtered by DB insertion time)
+            // Build per-symbol headline regexes (word-boundary match, skip very short symbols
+            // to avoid false positives like "ABB" matching "abbey").
+            const symbolPatterns = [];
+            watchlistSymbols.forEach(sym => {
+                if (!sym || sym.length < 3) return;
+                // Escape regex special chars in ticker symbols (e.g. &)
+                const esc = sym.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                symbolPatterns.push({ sym, re: new RegExp(`\\b${esc}\\b`, 'i') });
+            });
+
+            const headlineMatchesWatchlist = (headline) => {
+                if (!headline) return null;
+                for (const { sym, re } of symbolPatterns) {
+                    if (re.test(headline)) return sym;
+                }
+                return null;
+            };
+
+            // Show news that EITHER (a) has affected_stocks tagged with a watchlist ticker,
+            // or (b) mentions a watchlist ticker in its headline (catches news the AI tagger missed).
             const sevenDaysAgo = Date.now() - (168 * 60 * 60 * 1000);
             const stockNews = globalNewsData.filter(n => {
                 if (parseSQLiteDate(n.created_at).getTime() < sevenDaysAgo) return false;
-                if (!n.affected_stocks || n.affected_stocks.length === 0) return false;
-                
-                // Keep news if AT LEAST ONE affected stock is in our watchlist
-                return n.affected_stocks.some(stock => {
-                    const tkKey = tickerSymbol(stock.ticker);
-                    return watchlistSymbols.has(tkKey);
+
+                const taggedMatch = n.affected_stocks && n.affected_stocks.some(stock => {
+                    return watchlistSymbols.has(tickerSymbol(stock.ticker));
                 });
+                if (taggedMatch) return true;
+
+                return !!headlineMatchesWatchlist(n.headline);
             });
             
             const countEl = document.getElementById('portfolio-count');
@@ -2675,8 +2694,8 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 card.className = 'glass-panel p-6 rounded-2xl mb-4';
                 
                 const seenPortfolioTickers = new Set();
-                
-                let stockRowsHtml = news.affected_stocks.filter(stock => {
+
+                let stockRowsHtml = (news.affected_stocks || []).filter(stock => {
                     const tkKey = tickerSymbol(stock.ticker);
                     if (!watchlistSymbols.has(tkKey)) return false; // Hide stocks not in watchlist
                     if (seenPortfolioTickers.has(tkKey)) return false;
@@ -2721,7 +2740,25 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                             </div>
                         </div>`;
                 }).join('');
-                
+
+                // If no tagged stock matched but the headline mentions a watchlist ticker,
+                // render a placeholder row so the card still surfaces the connection.
+                if (!stockRowsHtml) {
+                    const matchedSym = headlineMatchesWatchlist(news.headline);
+                    if (matchedSym) {
+                        const wlEntry = watchlist.find(s => tickerSymbol(s.ticker) === matchedSym);
+                        const displayTicker = wlEntry ? wlEntry.ticker : matchedSym;
+                        stockRowsHtml = `
+                            <div class="flex items-center justify-between py-3 border-b border-white/5 last:border-0">
+                                <div class="flex items-center gap-2">
+                                    <span class="font-bold font-display text-white text-sm tracking-widest">${escapeHtml(displayTicker)}</span>
+                                    <span class="text-[9px] font-bold uppercase text-slate-400">MENTIONED</span>
+                                </div>
+                                <div class="text-[9px] text-slate-500 font-mono">No impact analysis yet</div>
+                            </div>`;
+                    }
+                }
+
                 card.innerHTML = `
                     <div class="flex items-center gap-2 text-[9px] text-violet-400 font-mono mb-3">
                         <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
