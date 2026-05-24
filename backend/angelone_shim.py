@@ -231,7 +231,6 @@ def _ao_login():
 
 def _ensure_session():
     """Ensure a valid Angel One session, re-authenticating daily."""
-    global _jwt_token, _session_date
     if not _angel_one_configured():
         return False
     with _session_lock:
@@ -248,7 +247,7 @@ def _ao_auth_headers():
 # ── Scrip Master ──────────────────────────────────────────────────────────────
 def _load_scrip_master():
     """Download & cache Angel One scrip master (NSE + BSE EQ symbols → tokens)."""
-    global _scrip_cache, _bse_cache, _scrip_loaded
+    global _scrip_loaded
     with _scrip_lock:
         if _scrip_loaded:
             return

@@ -901,7 +901,7 @@ def _set_active_gemini_client(key_idx: int):
     return client
 
 def _bootstrap_gemini_client():
-    global current_key_idx, client
+    global client
     if not API_KEYS:
         client = None
         return None
@@ -915,7 +915,6 @@ current_key_idx = 0
 client = _bootstrap_gemini_client()
 
 def get_and_rotate_client(last_failed_idx=None, is_timeout=False, is_quota=True, is_transient=False):
-    global current_key_idx, client
     if last_failed_idx is not None:
         if is_quota or is_timeout or is_transient:
             cooldown = 15 if (is_transient or is_timeout) else _GEMINI_KEY_COOLDOWN_SECS
@@ -1946,7 +1945,6 @@ def _get_yahoo_official_close(ticker):
 # V3 INSTANT NEWS ENGINE — Two-Phase Pipeline
 
 def ai_news_worker():
-    global LIVE_NEWS_CACHE, current_key_idx, client, MODEL_NAME, SEEN_HEADLINES
     print("[SYSTEM] Alpha Lens v6.0 AI ENSEMBLE Engine Started!")
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 7-Model Ensemble (>= 70 score & 5/7 vote)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
@@ -4370,7 +4368,6 @@ def fallback_portfolio_answer(question, context_items, portfolio_tickers, portfo
     return "\n\n".join(sections)
 
 def run_portfolio_ai_with_timeout(prompt, timeout_seconds=6.5):
-    global client, current_key_idx
     if not API_KEYS:
         return None
     max_attempts = len(API_KEYS)
