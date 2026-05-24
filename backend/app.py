@@ -312,7 +312,12 @@ class CursorWrapper:
             return self
 
         sql_translated = sql.replace('?', '%s')
-        self.cursor.executemany(sql_translated, seq_of_parameters)
+        try:
+            import psycopg2.extras
+            psycopg2.extras.execute_batch(self.cursor, sql_translated, seq_of_parameters)
+        except Exception as e:
+            print(f"   [DB] execute_batch failed: {e}. Falling back to standard executemany.", flush=True)
+            self.cursor.executemany(sql_translated, seq_of_parameters)
         return self
 
     def fetchone(self):
@@ -745,8 +750,14 @@ init_db()
 print("[DEBUG] init_db() completed", flush=True)
 init_news_db()
 print("[DEBUG] init_news_db() completed", flush=True)
-migrate_local_sqlite_to_postgres()
-print("[DEBUG] migrate_local_sqlite_to_postgres() completed", flush=True)
+import threading
+migration_thread = threading.Thread(
+    target=migrate_local_sqlite_to_postgres,
+    name="CloudMigrationThread",
+    daemon=True
+)
+migration_thread.start()
+print("[DEBUG] Started migrate_local_sqlite_to_postgres() in background thread", flush=True)
 
 # Checkpoint any stale WAL from a previous crashed run so we start clean
 try:
