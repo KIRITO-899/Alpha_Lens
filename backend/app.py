@@ -518,11 +518,11 @@ def db_write(fn, retries=3, delay=1.0):
                 is_operational = (exc_name in ('OperationalError', 'InterfaceError', 'DatabaseError')) or isinstance(e, sqlite3.OperationalError)
                 try:
                     conn.rollback()
-                except:
+                except Exception:  # bare 'except:' would swallow KeyboardInterrupt/SystemExit
                     pass
                 try:
                     conn.close()
-                except:
+                except Exception:  # same reason
                     pass
                 
                 if is_operational and attempt < retries - 1:
@@ -3798,7 +3798,7 @@ def get_top_news():
         news_item = dict(news_row)
         try:
             news_item['macro_pathway'] = json.loads(news_item['macro_pathway'])
-        except:
+        except (ValueError, TypeError):  # json.loads() only raises these; bare except swallows KeyboardInterrupt
             news_item['macro_pathway'] = []
 
         c2.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
@@ -3868,7 +3868,7 @@ def get_all_news():
             news_item = dict(zip(news_cols, raw_row))
             try:
                 news_item['macro_pathway'] = json.loads(news_item.get('macro_pathway') or '[]')
-            except:
+            except (ValueError, TypeError):  # json.loads() only raises these; bare except swallows KeyboardInterrupt
                 news_item['macro_pathway'] = []
             c2.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
             raw_stocks_rows = c2.fetchall()
@@ -5800,6 +5800,15 @@ def start_background_workers():
 if __name__ == '__main__':
     # Small delay so DB is fully ready before workers start writing
     time.sleep(2)
+
+    # Warn if DATABASE_URL is unset in production
+    if not os.environ.get("DATABASE_URL"):
+        is_prod = os.environ.get("FLASK_ENV", "production").lower() not in ("development", "dev", "test")
+        if is_prod:
+            print("\n" + "="*80)
+            print("   [WARNING] DATABASE_URL is not set in production environment!")
+            print("   The system will silently fall back to local SQLite: news_cache.db")
+            print("="*80 + "\n", flush=True)
 
     parser = argparse.ArgumentParser(description='Alpha Lens backend startup mode')
     parser.add_argument('--workers-only', action='store_true', help='Run background workers without launching the Flask UI')
