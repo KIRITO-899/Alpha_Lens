@@ -2705,8 +2705,12 @@ Return ONLY valid JSON matching this shape:
         print(f"   [FILTER] Screened out {len(raw_articles) - len(new_articles)} duplicates. {len(new_articles)} new articles to review.")
         sys.stdout.flush()
 
-        # Smaller batches reduce per-request token load and 429 risk on free-tier keys
-        BATCH_SIZE = 10
+        # Batch tunables — bigger batches halve the API-call count, and with
+        # 12 rotating keys the 1s spacer is enough to stay under RPM. Override
+        # via SCRAPER_BATCH_SIZE / SCRAPER_BATCH_SLEEP if you need to dial it
+        # back during a Gemini quota crunch.
+        BATCH_SIZE = int(os.environ.get("SCRAPER_BATCH_SIZE", "20"))
+        BATCH_SLEEP = float(os.environ.get("SCRAPER_BATCH_SLEEP", "1"))
         screened_signals = []
         for i in range(0, len(new_articles), BATCH_SIZE):
             batch = new_articles[i:i + BATCH_SIZE]
@@ -2716,10 +2720,8 @@ Return ONLY valid JSON matching this shape:
                 sys.stdout.flush()
                 break
             screened_signals.extend(batch_results)
-            if i + BATCH_SIZE < len(new_articles):
-                print("   [AI Batch Spacer] Sleeping 3 seconds to avoid RPM limit...")
-                sys.stdout.flush()
-                time.sleep(3)
+            if i + BATCH_SIZE < len(new_articles) and BATCH_SLEEP > 0:
+                time.sleep(BATCH_SLEEP)
         
         ai_signal_count = sum(1 for s in screened_signals if s.get("ticker"))
         ai_article_count = len({s.get("headline") for s in screened_signals})
@@ -2729,7 +2731,14 @@ Return ONLY valid JSON matching this shape:
         # NOTE: We open/close the DB connection atomically per article to avoid
         # long-held write locks that cause "database is locked" errors when other
         # threads (yfinance_worker, Flask routes) also need to write.
+        #
+        # headline_id_cache — populated lazily as we walk screened_signals. The
+        # AI screener typically emits 1-3 ticker-signals per headline, so without
+        # this cache every additional ticker for the same headline would trigger
+        # a fresh SELECT. Reduces per-cycle DB round-trips by ~3x on the hot
+        # path. Lifetime: this loop only.
         new_article_ids = []
+        headline_id_cache = {}
 
         for signal in screened_signals:
             headline = signal['headline']
@@ -2737,32 +2746,28 @@ Return ONLY valid JSON matching this shape:
             ticker = normalize_ticker(signal.get('ticker')) if signal.get('ticker') else None
             base_direction = (signal.get('direction') or '').upper()
 
-            # ── Fast In-Memory Duplicate Check ──
-            h_lower = headline.lower().strip()
-            if h_lower in SEEN_HEADLINES:
-                # Headline already saved; still need to try this ticker signal
-                try:
-                    _c = connect_news_db()
-                    _cur = _c.cursor()
-                    _cur.execute("SELECT id FROM news WHERE headline = ? LIMIT 1", (headline,))
-                    _row = _cur.fetchone()
-                    _c.close()
-                    news_id = _row[0] if _row else None
-                except Exception:
-                    news_id = None
+            # ── Cache lookup first — zero DB round-trips on repeat headlines ──
+            if headline in headline_id_cache:
+                news_id = headline_id_cache[headline]
             else:
-                SEEN_HEADLINES.add(h_lower)
-                try:
-                    _c = connect_news_db()
-                    _cur = _c.cursor()
-                    _cur.execute("SELECT id FROM news WHERE headline = ? LIMIT 1", (headline,))
-                    _row = _cur.fetchone()
-                    _c.close()
-                    news_id = _row[0] if _row else None
-                except Exception:
+                h_lower = headline.lower().strip()
+                if h_lower in SEEN_HEADLINES:
+                    # Already in DB from a prior cycle — one SELECT to grab the id
                     news_id = None
-
-                if news_id is None:
+                    try:
+                        _c = connect_news_db()
+                        _cur = _c.cursor()
+                        _cur.execute("SELECT id FROM news WHERE headline = ? LIMIT 1", (headline,))
+                        _row = _cur.fetchone()
+                        _c.close()
+                        news_id = _row[0] if _row else None
+                    except Exception:
+                        pass
+                else:
+                    # New headline — go straight to INSERT (the _insert_news fn
+                    # has its own SELECT fallback if INSERT OR IGNORE no-ops on
+                    # a UNIQUE collision). Dropped the redundant pre-SELECT.
+                    SEEN_HEADLINES.add(h_lower)
                     category = classify_category(headline)
                     _hl = headline
                     _time = signal['time']
@@ -2779,6 +2784,8 @@ Return ONLY valid JSON matching this shape:
                     news_id = db_write(_insert_news)
                     if news_id:
                         new_article_ids.append({'id': news_id, 'headline': headline})
+
+                headline_id_cache[headline] = news_id
 
             if news_id is None:
                 continue
@@ -3058,10 +3065,14 @@ Return ONLY valid JSON matching this shape:
         # Find all articles missing AI explanation
         conn = connect_news_db()
         c = conn.cursor()
-        c.execute("SELECT id, headline FROM news WHERE aam_janta_translation IS NULL ORDER BY created_at DESC LIMIT 5")
+        # Phase 2 batch size — was 5/cycle which built a multi-hour backlog
+        # of untranslated headlines. With faster Phase 1 (BATCH_SIZE=20) we
+        # need to drain explanations faster too. Tunable via PHASE2_LIMIT.
+        _phase2_limit = int(os.environ.get("PHASE2_LIMIT", "20"))
+        c.execute("SELECT id, headline FROM news WHERE aam_janta_translation IS NULL ORDER BY created_at DESC LIMIT ?", (_phase2_limit,))
         pending_articles = [{'id': r[0], 'headline': r[1]} for r in c.fetchall()]
         conn.close()
-        
+
         if pending_articles:
             print(f"[Phase 2] Batch AI explanations for {len(pending_articles)} articles (5 per API call)...")
             
