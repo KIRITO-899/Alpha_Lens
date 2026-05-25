@@ -563,6 +563,73 @@
         }
         .tr-empty-sub{font-size:13px;max-width:420px;margin:0 auto;line-height:1.55}
 
+        /* ── PREMIUM SKELETON LOADERS (shimmer-based) ── */
+        @keyframes skel-shimmer {
+            0%   { background-position: -200% 0; }
+            100% { background-position: 200% 0; }
+        }
+        .skel {
+            background: linear-gradient(
+                90deg,
+                rgba(255,255,255,0.025) 0%,
+                rgba(255,255,255,0.06) 50%,
+                rgba(255,255,255,0.025) 100%
+            );
+            background-size: 200% 100%;
+            animation: skel-shimmer 1.6s linear infinite;
+            border-radius: 6px;
+            display: inline-block;
+            vertical-align: middle;
+            color: transparent !important;
+            -webkit-user-select: none;
+            user-select: none;
+        }
+        .skel-line { height: 12px; width: 100%; border-radius: 4px; display: block; margin: 6px 0; }
+        .skel-line.short { width: 40%; }
+        .skel-line.med   { width: 65%; }
+        .skel-line.tiny  { width: 22%; }
+        .skel-num   { height: 32px; width: 60%; border-radius: 6px; display: block; margin: 4px 0 8px; }
+        .skel-num.lg{ height: 40px; }
+        .skel-pill  { height: 18px; width: 70px; border-radius: 6px; display: inline-block; }
+        .skel-row td { padding: 16px 14px; }
+        .skel-cell  { height: 14px; border-radius: 4px; }
+        /* Container for a skeleton "card" — matches glass-panel padding */
+        .skel-kpi-card {
+            position: relative; padding: 20px 22px; border-radius: 16px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        .skel-kpi-card::before {
+            content:''; position:absolute; left:0; top:0; bottom:0; width:2px;
+            background: linear-gradient(180deg, transparent 0%, rgba(201,169,98,0.35) 35%, rgba(201,169,98,0.35) 65%, transparent 100%);
+            opacity: 0.4;
+        }
+        .skel-dir-card {
+            position: relative; padding: 22px 24px; border-radius: 16px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+            border: 1px solid var(--border);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .skel { animation: none; background: rgba(255,255,255,0.04); }
+        }
+
+        /* ── TAB CROSS-FADE TRANSITION (P5) ── */
+        /* Every top-level view fades in when shown. Outgoing view is hidden
+           instantly via .hidden, but the incoming view animates from 0 → 1
+           opacity with a subtle upward shift, giving the perception of a
+           gentle "page turn" rather than a hard swap. */
+        [id^="view-"]:not(.hidden) {
+            animation: tab-fade-in 220ms var(--ease-out);
+        }
+        @keyframes tab-fade-in {
+            from { opacity: 0; transform: translateY(4px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            [id^="view-"]:not(.hidden) { animation: none; }
+        }
+
         /* ── SECTOR PILLS ── */
         .sector-pill{
             padding:4px 14px;border-radius:99px;
@@ -642,10 +709,42 @@
         /* ── PREMIUM NEWS CARDS ── */
         .news-card-hover {
             transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+            /* Slight inner-glow on hover; reads as "lifted" without actual translate */
         }
         .news-card-hover:hover {
             border-color: var(--accent-border) !important;
             box-shadow: 0 0 0 1px var(--accent-dim), var(--shadow-lg);
+        }
+
+        /* ── Typography refinement (P9) ──
+           Goal: cards should read like an editorial brief, not a forum post.
+           - Tighter tracking on the headline, more open line-height
+           - Timestamp row reads as a deliberate "metadata stamp", not body text
+           - Generous breathing room around the impact-row divider so eyes
+             pause naturally between sections. */
+        .news-card-hover .text-violet-400.font-mono {       /* the timestamp row */
+            color: var(--accent) !important;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            font-size: 10px;
+            margin-bottom: 14px !important;
+            opacity: 0.78;
+        }
+        .news-card-hover h3 {                               /* the headline */
+            font-size: 16.5px;
+            line-height: 1.42;
+            letter-spacing: -0.012em;
+            font-weight: 700;
+            color: var(--text-primary);
+            /* Cap line length for comfortable scanning even on wide screens */
+            max-width: 62ch;
+        }
+        .news-card-hover .stock-badge-container {           /* impact-row */
+            padding-top: 16px !important;
+            margin-top: 4px;
+        }
+        .news-card-hover .stock-badge-container .text-\[10px\] {
+            letter-spacing: 0.14em;
         }
 
         /* ── SKELETON SHIMMER ── */
@@ -1421,8 +1520,25 @@
                     .archive-filter-btn { cursor: pointer; }
                 </style>
                 <div id="archive-news-list" class="space-y-4 relative z-10">
-                    <div class="text-center py-20 text-slate-400 animate-pulse glass-panel rounded-2xl">Loading
-                        Archive...</div>
+                    <!-- Skeleton news cards while /api/news/all resolves -->
+                    <div class="glass-panel p-6 rounded-2xl">
+                        <span class="skel skel-line tiny" style="height:10px;width:90px"></span>
+                        <span class="skel skel-line" style="height:20px;margin-top:14px;width:85%"></span>
+                        <span class="skel skel-line" style="height:20px;width:62%"></span>
+                        <div style="display:flex;gap:8px;margin-top:14px"><span class="skel skel-pill"></span><span class="skel skel-pill"></span><span class="skel skel-pill" style="width:90px"></span></div>
+                    </div>
+                    <div class="glass-panel p-6 rounded-2xl">
+                        <span class="skel skel-line tiny" style="height:10px;width:90px"></span>
+                        <span class="skel skel-line" style="height:20px;margin-top:14px;width:78%"></span>
+                        <span class="skel skel-line" style="height:20px;width:48%"></span>
+                        <div style="display:flex;gap:8px;margin-top:14px"><span class="skel skel-pill"></span><span class="skel skel-pill" style="width:90px"></span></div>
+                    </div>
+                    <div class="glass-panel p-6 rounded-2xl">
+                        <span class="skel skel-line tiny" style="height:10px;width:90px"></span>
+                        <span class="skel skel-line" style="height:20px;margin-top:14px;width:92%"></span>
+                        <span class="skel skel-line" style="height:20px;width:55%"></span>
+                        <div style="display:flex;gap:8px;margin-top:14px"><span class="skel skel-pill"></span><span class="skel skel-pill"></span></div>
+                    </div>
                 </div>
             </div>
 
@@ -1542,7 +1658,11 @@
 
                 <!-- ── KPI HERO CARDS ── -->
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6" id="tr-kpi-row">
-                    <!-- 4 KPI cards injected here -->
+                    <!-- Skeletons replaced by real KPI cards once /api/backtest-stats resolves -->
+                    <div class="skel-kpi-card"><span class="skel skel-line tiny" style="height:10px"></span><span class="skel skel-num lg"></span><span class="skel skel-line med" style="height:10px;margin-top:8px"></span></div>
+                    <div class="skel-kpi-card"><span class="skel skel-line tiny" style="height:10px"></span><span class="skel skel-num lg"></span><span class="skel skel-line med" style="height:10px;margin-top:8px"></span></div>
+                    <div class="skel-kpi-card"><span class="skel skel-line tiny" style="height:10px"></span><span class="skel skel-num lg"></span><span class="skel skel-line med" style="height:10px;margin-top:8px"></span></div>
+                    <div class="skel-kpi-card"><span class="skel skel-line tiny" style="height:10px"></span><span class="skel skel-num lg"></span><span class="skel skel-line med" style="height:10px;margin-top:8px"></span></div>
                 </div>
 
                 <!-- ── CONFIDENCE BAND TABLE ── -->
@@ -1570,7 +1690,12 @@
                                 </tr>
                             </thead>
                             <tbody id="tr-confidence-body">
-                                <tr><td colspan="7" class="text-center py-10 text-[color:var(--text-tertiary)] animate-pulse">Loading track record...</td></tr>
+                                <!-- Skeleton rows shown until /api/backtest-stats renders real data -->
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:40px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:80%;height:6px"></span></td></tr>
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:40px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:65%;height:6px"></span></td></tr>
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:40px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:50%;height:6px"></span></td></tr>
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:40px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:35%;height:6px"></span></td></tr>
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:40px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:20%;height:6px"></span></td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1578,7 +1703,8 @@
 
                 <!-- ── DIRECTION SPLIT ── -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 mb-6" id="tr-direction-row">
-                    <!-- 2 direction cards injected here -->
+                    <div class="skel-dir-card"><span class="skel skel-line tiny" style="height:10px"></span><span class="skel skel-num"></span><span class="skel skel-line short" style="margin-top:14px"></span><span class="skel skel-line short"></span><span class="skel skel-line short"></span><span class="skel skel-line short"></span></div>
+                    <div class="skel-dir-card"><span class="skel skel-line tiny" style="height:10px"></span><span class="skel skel-num"></span><span class="skel skel-line short" style="margin-top:14px"></span><span class="skel skel-line short"></span><span class="skel skel-line short"></span><span class="skel skel-line short"></span></div>
                 </div>
 
                 <!-- ── RECENT CLOSED ── -->
@@ -1606,7 +1732,10 @@
                                 </tr>
                             </thead>
                             <tbody id="tr-recent-body">
-                                <tr><td colspan="8" class="text-center py-10 text-[color:var(--text-tertiary)] animate-pulse">Loading recent trades...</td></tr>
+                                <!-- Skeleton rows shown until recent_closed data arrives -->
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:80px;height:16px"></span></td><td><span class="skel skel-cell" style="width:70px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:55px"></span></td><td><span class="skel skel-cell" style="width:70px;height:18px"></span></td></tr>
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:80px;height:16px"></span></td><td><span class="skel skel-cell" style="width:70px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:55px"></span></td><td><span class="skel skel-cell" style="width:70px;height:18px"></span></td></tr>
+                                <tr class="skel-row"><td><span class="skel skel-cell" style="width:50px"></span></td><td><span class="skel skel-cell" style="width:80px;height:16px"></span></td><td><span class="skel skel-cell" style="width:70px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:30px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:60px"></span></td><td class="text-right"><span class="skel skel-cell" style="width:55px"></span></td><td><span class="skel skel-cell" style="width:70px;height:18px"></span></td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -1691,7 +1820,11 @@
                             </thead>
                             <tbody id="terminal-body">
                                 <tr>
-                                    <td colspan="9" class="text-center py-10 text-slate-500">Loading signals...</td>
+                                    <td colspan="9" style="padding:0">
+                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 60px 100px 80px 1fr;gap:12px;align-items:center;border-bottom:1px solid var(--border-subtle)"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:80%"></span></div>
+                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 60px 100px 80px 1fr;gap:12px;align-items:center;border-bottom:1px solid var(--border-subtle)"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:65%"></span></div>
+                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 60px 100px 80px 1fr;gap:12px;align-items:center"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50%"></span></div>
+                                    </td>
                                 </tr>
                             </tbody>
                         </table>
@@ -3500,6 +3633,28 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             renderBacktestRecent();
         }
 
+        // Count-up animator. easeOutCubic for a confident "land" rather than a linear ramp.
+        // formatFn receives the in-flight value and returns the string to display.
+        function animateNumber(el, to, {duration = 650, formatFn = (v) => v.toFixed(0)} = {}) {
+            if (!el) return;
+            if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                el.textContent = formatFn(to);
+                return;
+            }
+            const from = 0;
+            const startedAt = performance.now();
+            function frame(now) {
+                const elapsed = now - startedAt;
+                const t = Math.min(1, elapsed / duration);
+                const eased = 1 - Math.pow(1 - t, 3); // easeOutCubic
+                const v = from + (to - from) * eased;
+                el.textContent = formatFn(v);
+                if (t < 1) requestAnimationFrame(frame);
+                else el.textContent = formatFn(to);
+            }
+            requestAnimationFrame(frame);
+        }
+
         function renderBacktestKPIs() {
             const s = _backtestData.summary || {};
             const row = document.getElementById('tr-kpi-row');
@@ -3512,37 +3667,62 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                         <div class="tr-empty">
                             <div class="tr-empty-headline">First signals are still in play</div>
                             <div class="tr-empty-sub">No closed trades in this window yet. Every Alpha Lens signal is graded against a 2% target / 1% stop — the moment the first batch resolves, the scoreboard below populates.</div>
-                            <div class="tr-kpi-sub mt-4"><span class="tr-num">${s.total_signals || 0}</span> total signals tracked · <span class="tr-num">${s.active_or_pending || 0}</span> currently live</div>
+                            <div class="tr-kpi-sub mt-4"><span class="tr-num" data-cu-to="${s.total_signals || 0}" data-cu-fmt="int">0</span> total signals tracked · <span class="tr-num" data-cu-to="${s.active_or_pending || 0}" data-cu-fmt="int">0</span> currently live</div>
                         </div>
                     </div>`;
+                _runCountUps(row);
                 return;
             }
 
             const hr = s.hit_rate;
             const hrAccent = hr == null ? 'tr-kpi-accent' : (hr >= 60 ? 'tr-kpi-green' : (hr >= 50 ? 'tr-kpi-amber' : 'tr-kpi-red'));
             const pnlAccent = (s.avg_pnl == null) ? 'tr-kpi-accent' : (s.avg_pnl >= 0 ? 'tr-kpi-green' : 'tr-kpi-red');
+            const winSign = (s.avg_win != null && s.avg_win < 0) ? '-' : '+';
 
+            // Render with data-cu-* attrs the animator reads — keeps render and animation cleanly separated.
             row.innerHTML = `
                 <div class="tr-kpi tr-kpi-accent">
                     <div class="tr-kpi-label">Total Signals</div>
-                    <div class="tr-kpi-value">${(s.total_signals || 0).toLocaleString('en-IN')}</div>
+                    <div class="tr-kpi-value" data-cu-to="${s.total_signals || 0}" data-cu-fmt="intLocale">0</div>
                     <div class="tr-kpi-sub">${s.closed_signals || 0} closed · ${s.active_or_pending || 0} live</div>
                 </div>
                 <div class="tr-kpi ${hrAccent}">
                     <div class="tr-kpi-label">Hit Rate</div>
-                    <div class="tr-kpi-value lg">${hr == null ? '—' : hr.toFixed(1) + '%'}</div>
+                    <div class="tr-kpi-value lg" ${hr == null ? '' : `data-cu-to="${hr}" data-cu-fmt="pct1"`}>${hr == null ? '—' : '0%'}</div>
                     <div class="tr-kpi-sub">${s.hits || 0} hits · ${s.stops || 0} stops${s.expired ? ' · ' + s.expired + ' expired' : ''}</div>
                 </div>
                 <div class="tr-kpi tr-kpi-green">
                     <div class="tr-kpi-label">Avg Win</div>
-                    <div class="tr-kpi-value">${s.avg_win == null ? '—' : '+' + Math.abs(s.avg_win).toFixed(2) + '%'}</div>
+                    <div class="tr-kpi-value" ${s.avg_win == null ? '' : `data-cu-to="${Math.abs(s.avg_win)}" data-cu-fmt="pct2" data-cu-prefix="${winSign}"`}>${s.avg_win == null ? '—' : '+0.00%'}</div>
                     <div class="tr-kpi-sub">On winning trades only</div>
                 </div>
                 <div class="tr-kpi ${pnlAccent}">
                     <div class="tr-kpi-label">Avg P&L</div>
-                    <div class="tr-kpi-value">${_fmtPct(s.avg_pnl)}</div>
+                    <div class="tr-kpi-value" ${s.avg_pnl == null ? '' : `data-cu-to="${s.avg_pnl}" data-cu-fmt="pctSigned2"`}>${s.avg_pnl == null ? '—' : '0.00%'}</div>
                     <div class="tr-kpi-sub">Per closed signal, all-in</div>
                 </div>`;
+            _runCountUps(row);
+        }
+
+        // Sweep every element with [data-cu-to] inside `scope` and animate it once.
+        // Format keys are kept inline so this stays self-contained.
+        function _runCountUps(scope) {
+            scope.querySelectorAll('[data-cu-to]').forEach(el => {
+                if (el.dataset.cuDone === '1') return;
+                const to = parseFloat(el.dataset.cuTo);
+                if (Number.isNaN(to)) return;
+                const fmt = el.dataset.cuFmt || 'int';
+                const prefix = el.dataset.cuPrefix || '';
+                const formatters = {
+                    int:        (v) => prefix + Math.round(v).toString(),
+                    intLocale:  (v) => prefix + Math.round(v).toLocaleString('en-IN'),
+                    pct1:       (v) => prefix + v.toFixed(1) + '%',
+                    pct2:       (v) => prefix + v.toFixed(2) + '%',
+                    pctSigned2: (v) => (v >= 0 ? '+' : '') + v.toFixed(2) + '%',
+                };
+                animateNumber(el, to, { formatFn: formatters[fmt] || formatters.int });
+                el.dataset.cuDone = '1';
+            });
         }
 
         function renderBacktestConfidence() {
