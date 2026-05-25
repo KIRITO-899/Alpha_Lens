@@ -6851,6 +6851,110 @@ def admin_prune_news():
         return jsonify({"status": "error", "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/admin/reset-all-news', methods=['POST', 'GET'])
+def admin_reset_all_news():
+    """
+    NUCLEAR — wipes the live news + signal tables completely so we can start
+    fresh after a major model/prompt change. Use when you specifically want
+    the live data + win-rate stats to begin counting from zero, not to be
+    polluted by predictions made under the old (buggy) ensemble.
+
+    What gets wiped:
+      • news                  (hot table)
+      • stock_impact          (hot signal table)
+      • news_archive          (>90d archive)
+      • stock_impact_archive  (>90d archive)
+      • historical_patterns   (training memory for HistoricalSimilarityModel —
+                               wipe so it doesn't keep biasing toward the bad
+                               outcomes from the broken ensemble)
+
+    Also clears in-memory caches so the worker restarts with a blank slate
+    on its next cycle (SEEN_HEADLINES, RECENT_DIRECTIONS, RECENT_SIGNALS,
+    PUBLISHED_TIME_CACHE, ARTICLE_TEXT_CACHE).
+
+    Auth: X-Alpha-Lens-Token: <SQL_RUNNER_SECRET> OR ?token=<secret>
+    Safety: also requires ?confirm=YES_WIPE_EVERYTHING — without it returns 400.
+
+    POST is preferred but GET works too (curl convenience).
+    """
+    secret = os.environ.get("SQL_RUNNER_SECRET")
+    token = request.headers.get("X-Alpha-Lens-Token") or request.args.get("token")
+    if not secret or token != secret:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    confirm = request.args.get("confirm") or (request.get_json(silent=True) or {}).get("confirm")
+    if confirm != "YES_WIPE_EVERYTHING":
+        return jsonify({
+            "error": "Confirmation required",
+            "hint": "Pass ?confirm=YES_WIPE_EVERYTHING (or include it in the JSON body) to actually delete.",
+        }), 400
+
+    counts = {}
+    try:
+        def _wipe(conn, c):
+            wiped = {}
+            for tbl in ("stock_impact", "news_archive", "stock_impact_archive",
+                        "historical_patterns", "news"):
+                # Get a count first so we can report it back accurately.
+                try:
+                    c.execute(f"SELECT COUNT(*) FROM {tbl}")
+                    row = c.fetchone()
+                    wiped[tbl] = int(row[0]) if row else 0
+                except Exception:
+                    wiped[tbl] = 0
+                # Then delete — order matters: stock_impact before news to
+                # respect any FK relationship (sqlite uses FK only if
+                # enabled, but Postgres enforces if it's wired).
+                try:
+                    c.execute(f"DELETE FROM {tbl}")
+                except Exception as _de:
+                    wiped[tbl] = f"error: {_de}"
+            return wiped
+
+        counts = db_write(_wipe) or {}
+
+        # Reset in-memory state so the live worker doesn't keep stale
+        # headlines / signals / directions in its dedup + bias structures.
+        try:
+            SEEN_HEADLINES.clear()
+        except Exception:
+            pass
+        try:
+            RECENT_DIRECTIONS.clear()
+        except Exception:
+            pass
+        try:
+            RECENT_SIGNALS.clear()
+        except Exception:
+            pass
+        try:
+            PUBLISHED_TIME_CACHE.clear()
+        except Exception:
+            pass
+        try:
+            ARTICLE_TEXT_CACHE.clear()
+        except Exception:
+            pass
+
+        return jsonify({
+            "status": "success",
+            "wiped_rows": counts,
+            "in_memory_reset": [
+                "SEEN_HEADLINES", "RECENT_DIRECTIONS", "RECENT_SIGNALS",
+                "PUBLISHED_TIME_CACHE", "ARTICLE_TEXT_CACHE",
+            ],
+            "next_cycle_starts_at": "within ~3-5 minutes (next ai_news_worker tick)",
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "wiped_so_far": counts,
+        }), 500
+
+
 def db_sync_worker():
     """
     Background worker that runs periodically to sync all data from cloud PostgreSQL
