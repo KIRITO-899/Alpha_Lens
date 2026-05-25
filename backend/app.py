@@ -51,6 +51,10 @@ HTTP_SESSION = requests.Session()
 HTTP_SESSION.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
 ARTICLE_TEXT_CACHE = {}
 _ARTICLE_TEXT_CACHE_MAX = 500  # prevent unbounded memory growth
+# URL → canonical published-time string (RFC 2822). Empty string = scraped
+# successfully but no meta-tag found (so we don't retry). LRU-evicted.
+PUBLISHED_TIME_CACHE = {}
+_PUBLISHED_TIME_CACHE_MAX = 5000
 
 # Global write lock — ensures only one thread writes to SQLite at a time.
 # Reads do NOT need this lock (WAL mode allows concurrent reads).
@@ -1360,6 +1364,111 @@ def scrape_article_text(url):
         del ARTICLE_TEXT_CACHE[oldest_key]
     ARTICLE_TEXT_CACHE[url] = ""
     return ""
+
+def _format_to_rfc2822(time_str):
+    """Normalize any common datetime string (ISO 8601, +0530 offset, naive)
+    to RFC 2822 with explicit +0000 (matches what RSS feeds emit). Returns
+    None if the string can't be parsed."""
+    if not time_str:
+        return None
+    s = str(time_str).strip()
+    # Try ISO-style first (most meta tags use this — "2026-05-26T03:42:11+05:30")
+    try:
+        s_iso = s.replace('Z', '+00:00')
+        dt = datetime.fromisoformat(s_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S +0000')
+    except Exception:
+        pass
+    # Fall back to RFC 2822-style parser
+    try:
+        from email.utils import parsedate_to_datetime
+        dt = parsedate_to_datetime(s)
+        if dt:
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).strftime('%a, %d %b %Y %H:%M:%S +0000')
+    except Exception:
+        pass
+    return None
+
+
+def fetch_published_time(url):
+    """Fetch the canonical 'published time' from an article page by scraping
+    standard publisher meta tags. Order of precedence:
+        1. <meta property="article:published_time" content="...">  (OG / Facebook)
+        2. <meta itemprop="datePublished" content="...">           (Schema.org)
+        3. <meta name="pubdate" / "publishdate" / "DC.date.issued"> (legacy)
+        4. <meta property="og:published_time" content="...">
+        5. <time datetime="..." pubdate>                            (HTML5)
+        6. JSON-LD "datePublished" field                            (Schema.org JSON)
+
+    Returns an RFC-2822-formatted UTC string (matches RSS time format) or None.
+    Results are cached per URL — including misses ('') — to avoid re-scraping.
+    """
+    if not url or "google.com" in url:
+        return None
+    cached = PUBLISHED_TIME_CACHE.get(url)
+    if cached is not None:
+        return cached or None  # '' = cached miss, treat as None
+
+    raw = None
+    try:
+        resp = HTTP_SESSION.get(url, timeout=5)
+        if resp.status_code == 200:
+            soup = BeautifulSoup(resp.text, 'html.parser')
+            # 1-4: meta-tag patterns
+            meta_patterns = [
+                {'property': 'article:published_time'},
+                {'itemprop': 'datePublished'},
+                {'name': 'pubdate'},
+                {'name': 'publishdate'},
+                {'name': 'DC.date.issued'},
+                {'property': 'og:published_time'},
+                {'name': 'article:published_time'},
+            ]
+            for attrs in meta_patterns:
+                el = soup.find('meta', attrs=attrs)
+                if el and el.get('content'):
+                    raw = el.get('content')
+                    break
+            # 5: HTML5 <time pubdate datetime="...">
+            if not raw:
+                t = soup.find('time', attrs={'pubdate': True}) or \
+                    soup.find('time', attrs={'itemprop': 'datePublished'})
+                if t and t.get('datetime'):
+                    raw = t.get('datetime')
+            # 6: JSON-LD
+            if not raw:
+                for script in soup.find_all('script', attrs={'type': 'application/ld+json'}):
+                    try:
+                        data = json.loads(script.string or '{}')
+                    except Exception:
+                        continue
+                    candidates = data if isinstance(data, list) else [data]
+                    for item in candidates:
+                        if isinstance(item, dict) and item.get('datePublished'):
+                            raw = item.get('datePublished')
+                            break
+                    if raw:
+                        break
+    except Exception as e:
+        # Don't spam logs for every transient fail — debug-level only
+        pass
+
+    formatted = _format_to_rfc2822(raw) if raw else None
+
+    # LRU evict + cache (empty string = miss marker so we don't re-scrape)
+    if len(PUBLISHED_TIME_CACHE) >= _PUBLISHED_TIME_CACHE_MAX:
+        try:
+            oldest_key = next(iter(PUBLISHED_TIME_CACHE))
+            del PUBLISHED_TIME_CACHE[oldest_key]
+        except Exception:
+            pass
+    PUBLISHED_TIME_CACHE[url] = formatted or ''
+    return formatted
+
 
 def clean_json(raw_text):
     cleaned = raw_text.strip()
@@ -2854,6 +2963,38 @@ Return ONLY valid JSON matching this shape:
         new_article_ids = []
         headline_id_cache = {}
 
+        # ── Pre-fetch canonical published times in parallel ──
+        # The RSS pubDate is often a scheduled-publish placeholder ("Stocks to
+        # Watch Today" wires routinely tag 07:00 IST hours before they actually
+        # release). To avoid showing the user a future time OR our ingestion
+        # time, we scrape the article URL for the canonical timestamp from
+        # standard publisher meta tags (OG, Schema.org, JSON-LD). One HTTP call
+        # per unique URL, all in parallel, cached forever per URL.
+        canonical_pub_times = {}
+        _unique_url_by_headline = {}
+        for _s in screened_signals:
+            _hl = _s.get('headline')
+            _url = _s.get('url')
+            if _hl and _url and _hl not in _unique_url_by_headline:
+                _unique_url_by_headline[_hl] = _url
+        if _unique_url_by_headline:
+            _pt_workers = int(os.environ.get('PUB_TIME_WORKERS', '10'))
+            def _pt_fetch(item):
+                hl, url = item
+                try:
+                    return (hl, fetch_published_time(url))
+                except Exception:
+                    return (hl, None)
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_pt_workers) as _pt_pool:
+                    for hl, real_t in _pt_pool.map(_pt_fetch, _unique_url_by_headline.items()):
+                        if real_t:
+                            canonical_pub_times[hl] = real_t
+                print(f"   [PUB-TIME] Resolved canonical published time for {len(canonical_pub_times)}/{len(_unique_url_by_headline)} articles.")
+                sys.stdout.flush()
+            except Exception as _pt_err:
+                print(f"   [PUB-TIME] Prefetch error (non-fatal): {_pt_err}")
+
         for signal in screened_signals:
             headline = signal['headline']
             article_url = signal.get('url')
@@ -2884,13 +3025,14 @@ Return ONLY valid JSON matching this shape:
                     SEEN_HEADLINES.add(h_lower)
                     category = classify_category(headline)
                     _hl = headline
-                    _time = signal['time']
-                    # Future-timestamp guard — some RSS publishers ship a
-                    # scheduled-publish time that hasn't actually happened yet
-                    # (most commonly the "Stocks to Watch Today" 07:00 IST
-                    # wires that go out 3-4 hours before market open).
-                    # Anything > 5 min in the future gets rewritten to "now"
-                    # so the UI doesn't show timestamps in the future.
+                    # Time-of-publication precedence:
+                    #   1. canonical_pub_times[headline] — meta tag from article
+                    #      page (the publisher's own truth). Most accurate.
+                    #   2. signal['time'] — RSS pubDate (publisher's scheduled
+                    #      slot; sometimes lies about being in the future).
+                    # Either way we then apply the 5-min future-clamp as a
+                    # safety net so a publisher mistake doesn't reach the UI.
+                    _time = canonical_pub_times.get(headline) or signal['time']
                     try:
                         from email.utils import parsedate_to_datetime as _ptd
                         _parsed_dt = _ptd(_time) if _time else None
