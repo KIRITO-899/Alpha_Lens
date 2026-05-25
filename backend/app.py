@@ -5860,6 +5860,65 @@ def debug_worker_status():
     })
 
 
+@app.route('/api/whatsapp/webhook', methods=['GET', 'POST'])
+def whatsapp_webhook():
+    """
+    Meta WhatsApp Cloud API webhook endpoint.
+
+    GET  — Meta's verification challenge. Returns hub.challenge in plaintext
+           when hub.verify_token matches WHATSAPP_VERIFY_TOKEN env var.
+    POST — actual webhook events (incoming messages + delivery statuses).
+           Returns 200 immediately; payload processing happens async if needed.
+
+    Set in Render env:  WHATSAPP_VERIFY_TOKEN=<the token you typed in Meta>
+    Optional:           WHATSAPP_APP_SECRET=<for X-Hub-Signature-256 verify>
+    """
+    if request.method == 'GET':
+        mode      = request.args.get('hub.mode')
+        token     = request.args.get('hub.verify_token')
+        challenge = request.args.get('hub.challenge')
+        expected  = os.environ.get('WHATSAPP_VERIFY_TOKEN', '')
+
+        if not expected:
+            print("[WA] Verify GET hit but WHATSAPP_VERIFY_TOKEN env var is not set", flush=True)
+            return ('WHATSAPP_VERIFY_TOKEN env var not set on server', 500)
+
+        if mode == 'subscribe' and token == expected and challenge:
+            print(f"[WA] Webhook verification OK", flush=True)
+            return (challenge, 200, {'Content-Type': 'text/plain'})
+
+        print(f"[WA] Verify rejected — mode={mode!r}, token_match={token == expected}", flush=True)
+        return ('Verification failed', 403)
+
+    # POST — actual event delivery
+    try:
+        payload = request.get_json(silent=True) or {}
+        # Meta payload shape:
+        # { "object": "whatsapp_business_account",
+        #   "entry": [ { "changes": [ { "value": { "messages":[...], "statuses":[...] } } ] } ] }
+        for entry in payload.get('entry', []):
+            for change in entry.get('changes', []):
+                value = change.get('value', {}) or {}
+
+                # Inbound messages (STOP / START / free-text)
+                for msg in value.get('messages', []) or []:
+                    sender = msg.get('from', '')
+                    text   = ((msg.get('text') or {}).get('body') or '').strip().upper()
+                    print(f"[WA] inbound msg from {sender}: {text!r}", flush=True)
+                    # TODO: handle STOP/START → mark whatsapp_opt_in on user row
+
+                # Delivery / read statuses
+                for st in value.get('statuses', []) or []:
+                    sid    = st.get('id')
+                    status = st.get('status')
+                    print(f"[WA] status {sid}: {status}", flush=True)
+                    # TODO: update whatsapp_alert_log
+    except Exception as e:
+        print(f"[WA] Webhook POST handler error: {e}", flush=True)
+    # ALWAYS return 200 to Meta — otherwise they retry and eventually disable the subscription
+    return ('', 200)
+
+
 @app.route('/api/debug-gemini-keys', methods=['GET'])
 def debug_gemini_keys():
     """
