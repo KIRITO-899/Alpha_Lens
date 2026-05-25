@@ -2885,6 +2885,24 @@ Return ONLY valid JSON matching this shape:
                     category = classify_category(headline)
                     _hl = headline
                     _time = signal['time']
+                    # Future-timestamp guard — some RSS publishers ship a
+                    # scheduled-publish time that hasn't actually happened yet
+                    # (most commonly the "Stocks to Watch Today" 07:00 IST
+                    # wires that go out 3-4 hours before market open).
+                    # Anything > 5 min in the future gets rewritten to "now"
+                    # so the UI doesn't show timestamps in the future.
+                    try:
+                        from email.utils import parsedate_to_datetime as _ptd
+                        _parsed_dt = _ptd(_time) if _time else None
+                        if _parsed_dt is not None:
+                            if _parsed_dt.tzinfo is None:
+                                _parsed_dt = _parsed_dt.replace(tzinfo=timezone.utc)
+                            _now_utc = datetime.now(timezone.utc)
+                            if _parsed_dt > _now_utc + timedelta(minutes=5):
+                                _time = _now_utc.strftime('%a, %d %b %Y %H:%M:%S +0000')
+                                print(f"   [TIME] Clamped future news_time to now for: {_hl[:60]}...")
+                    except Exception:
+                        pass
                     _cat = category
                     # Preserve the full RSS snippet (deep_context wins if the
                     # full-text scraper already populated it). UI renders this
