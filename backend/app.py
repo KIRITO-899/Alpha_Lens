@@ -6407,6 +6407,31 @@ def debug_sql_runner():
         return jsonify({"status": "error", "error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/admin/prune-news', methods=['POST', 'GET'])
+def admin_prune_news():
+    """
+    On-demand trigger for the aggressive news prune. Uses the same
+    SQL_RUNNER_SECRET token as /api/debug-sql-runner.
+
+    POST or GET — header `X-Alpha-Lens-Token: <secret>` OR `?token=<secret>`.
+    Returns the row counts removed.
+    """
+    secret = os.environ.get("SQL_RUNNER_SECRET")
+    token = request.headers.get("X-Alpha-Lens-Token") or request.args.get("token")
+    if not secret or token != secret:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    try:
+        result = prune_low_value_news()
+        if result is None:
+            return jsonify({"status": "error", "error": "prune returned None (db_write likely failed — check server logs)"}), 500
+        dn, di = result
+        return jsonify({"status": "success", "deleted_news": dn, "deleted_impacts": di})
+    except Exception as e:
+        import traceback
+        return jsonify({"status": "error", "error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 def db_sync_worker():
     """
     Background worker that runs periodically to sync all data from cloud PostgreSQL
@@ -6694,6 +6719,118 @@ def archival_worker():
         time.sleep(RUN_EVERY_HOURS * 3600)
 
 
+def prune_low_value_news():
+    """
+    Aggressive prune of the hot `news` table so /api/news/all stays snappy and
+    the "All News" tab doesn't choke the browser rendering 7000+ cards.
+
+    Two passes, both targeting the OLDEST rows (lowest created_at):
+
+      Pass 1 — "Dead headlines": of the oldest 3000 news, delete those that
+               have ZERO stock_impact rows. The AI worker tried but never
+               produced a usable signal — pure noise to the user.
+
+      Pass 2 — "Stale signals": of the oldest 4000 news, delete those whose
+               stock_impact rows are ALL non-Active (target hit / stop-loss /
+               expired / reacted-against). The user can't trade them anymore,
+               so they're just bloat. The corresponding closed predictions are
+               deleted along with the news row.
+
+    NOT REVERSIBLE — these rows are dropped, not archived. The archival worker
+    (`archival_worker`) handles the reversible 90-day move to *_archive. This
+    routine exists to keep the hot table well under the size the frontend can
+    render without jank.
+
+    Returns (deleted_news_count, deleted_impact_count).
+    """
+    PRUNE_NO_PRED_LIMIT      = int(os.environ.get("PRUNE_NO_PRED_LIMIT", "3000"))
+    PRUNE_NO_ACTIVE_LIMIT    = int(os.environ.get("PRUNE_NO_ACTIVE_LIMIT", "4000"))
+
+    def _prune(conn, c):
+        deleted_news = 0
+        deleted_impacts = 0
+
+        # ── Pass 1: oldest N news with NO stock_impact rows at all ──
+        c.execute("""
+            SELECT n.id FROM news n
+            WHERE NOT EXISTS (
+                SELECT 1 FROM stock_impact si WHERE si.news_id = n.id
+            )
+            ORDER BY n.created_at ASC
+            LIMIT ?
+        """, (PRUNE_NO_PRED_LIMIT,))
+        ids_p1 = [r[0] for r in c.fetchall()]
+        if ids_p1:
+            placeholders = ','.join(['?'] * len(ids_p1))
+            c.execute(f"DELETE FROM news WHERE id IN ({placeholders})", tuple(ids_p1))
+            deleted_news += len(ids_p1)
+
+        # ── Pass 2: oldest N news whose impacts are ALL non-Active (closed/expired) ──
+        # News with zero impact rows is also matched here, but Pass 1 already cleared
+        # those from the oldest tail.
+        c.execute("""
+            SELECT n.id FROM news n
+            WHERE NOT EXISTS (
+                SELECT 1 FROM stock_impact si
+                WHERE si.news_id = n.id AND si.status = 'Active View'
+            )
+            ORDER BY n.created_at ASC
+            LIMIT ?
+        """, (PRUNE_NO_ACTIVE_LIMIT,))
+        ids_p2 = [r[0] for r in c.fetchall()]
+        if ids_p2:
+            placeholders = ','.join(['?'] * len(ids_p2))
+            c.execute(f"DELETE FROM stock_impact WHERE news_id IN ({placeholders})", tuple(ids_p2))
+            try:
+                deleted_impacts += (c.cursor.rowcount if hasattr(c, 'cursor') else 0) or 0
+            except Exception:
+                pass
+            c.execute(f"DELETE FROM news WHERE id IN ({placeholders})", tuple(ids_p2))
+            deleted_news += len(ids_p2)
+
+        return deleted_news, deleted_impacts
+
+    result = db_write(_prune)
+    if result:
+        dn, di = result
+        if dn or di:
+            print(f"[PRUNE] Removed {dn} news + {di} stock_impact rows (oldest dead/stale signals).", flush=True)
+        else:
+            print("[PRUNE] No prunable rows found this pass.", flush=True)
+    return result
+
+
+def news_prune_worker():
+    """
+    Background worker that runs prune_low_value_news() on a fixed cadence so
+    the "All News" view stays bounded between archival passes.
+
+    Defaults: prune once on startup (after a short warm-up), then every hour.
+    Tunable via PRUNE_RUN_EVERY_MIN.
+    """
+    if os.environ.get("PRUNE_DISABLED", "").lower() in ("1", "true", "yes"):
+        print("[PRUNE] Worker disabled via PRUNE_DISABLED env var.", flush=True)
+        return
+
+    RUN_EVERY_MIN = int(os.environ.get("PRUNE_RUN_EVERY_MIN", "60"))
+    print(f"[PRUNE] Worker started — runs every {RUN_EVERY_MIN}m.", flush=True)
+
+    # Initial warm-up delay so the rest of startup finishes first; then a single
+    # eager pass to clear any existing backlog from a fresh deploy.
+    time.sleep(45)
+    try:
+        prune_low_value_news()
+    except Exception as e:
+        print(f"[PRUNE] Startup pass failed: {e}", flush=True)
+
+    while True:
+        time.sleep(RUN_EVERY_MIN * 60)
+        try:
+            prune_low_value_news()
+        except Exception as e:
+            print(f"[PRUNE] Pass failed: {e}", flush=True)
+
+
 def start_background_workers():
     engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
     engine_thread.start()
@@ -6704,6 +6841,11 @@ def start_background_workers():
     # T3.16: archival worker
     arch_thread = threading.Thread(target=archival_worker, name="ArchivalWorker", daemon=True)
     arch_thread.start()
+
+    # Aggressive prune worker — keeps /api/news/all bounded so the "All News"
+    # tab doesn't choke the browser on thousands of low-value cards.
+    prune_thread = threading.Thread(target=news_prune_worker, name="NewsPruneWorker", daemon=True)
+    prune_thread.start()
 
     # Start the cloud-to-local database synchronizer if pointing to cloud
     db_url = os.environ.get("DATABASE_URL")
