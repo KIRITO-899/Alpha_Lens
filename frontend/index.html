@@ -155,11 +155,46 @@
         .font-mono{font-family:'JetBrains Mono',monospace !important}
 
         /* ── SCROLLBAR ── */
-        ::-webkit-scrollbar{width:4px;height:4px}
-        ::-webkit-scrollbar-track{background:rgba(255,255,255,0.02)}
-        ::-webkit-scrollbar-thumb{background:var(--accent-glow);border-radius:var(--radius-pill)}
-        ::-webkit-scrollbar-thumb:hover{background:var(--accent-border)}
-        ::selection{background:rgba(201,169,98,0.28);color:var(--text-primary)}
+        /* ── PREMIUM SCROLLBAR (#23) ──
+           Champagne-gold thumb, slim track, subtle glow on hover.
+           Firefox scrollbar-color + WebKit pseudo-elements together cover
+           every modern browser. */
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-glow) transparent;
+        }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.015);
+            border-radius: var(--radius-pill);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, var(--accent-muted) 0%, var(--accent) 60%, var(--accent-bright) 100%);
+            border-radius: var(--radius-pill);
+            border: 2px solid transparent;
+            background-clip: padding-box;
+            transition: background 200ms var(--ease-out), box-shadow 200ms var(--ease-out);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, var(--accent) 0%, var(--accent-bright) 100%);
+            background-clip: padding-box;
+            box-shadow: inset 0 0 0 1px rgba(232,213,163,0.3);
+        }
+        ::-webkit-scrollbar-corner { background: transparent; }
+
+        /* ── PREMIUM SELECTION (#24) ──
+           Branded gold highlight on text selection across the app.
+           Stronger gold + white text reads better than the previous low-opacity. */
+        ::selection {
+            background: linear-gradient(180deg, rgba(201,169,98,0.62), rgba(212,188,122,0.55));
+            background-color: rgba(201,169,98,0.55);
+            color: #FFFFFF;
+            text-shadow: 0 1px 0 rgba(0,0,0,0.25);
+        }
+        ::-moz-selection {
+            background: rgba(201,169,98,0.55);
+            color: #FFFFFF;
+        }
 
         /* ── CANVAS ── */
         #canvas-container{display:none}
@@ -612,6 +647,295 @@
         }
         @media (prefers-reduced-motion: reduce) {
             .skel { animation: none; background: rgba(255,255,255,0.04); }
+        }
+
+        /* ══════════════════════════════════════════════════════════════
+           PREMIUM UI LAYER v2 — Onboarding, card flip, equity curves,
+           cursor trail, liquid digits, parallax KPIs, dynamic live pulse,
+           typing reveal. Builds on top of v1 layer below.
+           ══════════════════════════════════════════════════════════════ */
+
+        /* ── #3: Cinematic onboarding ceremony ──
+           One-time-per-session entry animation. Champagne ALPHA LENS
+           materializes letter by letter, tagline rises, then dashboard
+           reveals. Skip with one tap. */
+        #onboarding-overlay {
+            position: fixed; inset: 0; z-index: 10000;
+            background:
+                radial-gradient(ellipse 80% 60% at 50% 40%, rgba(201,169,98,0.08), transparent 70%),
+                #050507;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            opacity: 1;
+            transition: opacity 600ms var(--ease-out);
+        }
+        #onboarding-overlay.fade-out { opacity: 0; pointer-events: none; }
+        #onboarding-overlay.hidden { display: none; }
+        .ob-wordmark {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 900;
+            font-size: clamp(36px, 6vw, 64px);
+            letter-spacing: 0.08em;
+            display: flex; gap: 0.04em;
+            margin-bottom: 14px;
+        }
+        .ob-wordmark .ob-char {
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(18px) scale(0.96);
+            background: linear-gradient(180deg, #E8D5A3 0%, #C9A962 50%, #9A7B3C 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            filter: drop-shadow(0 0 18px rgba(201,169,98,0.35));
+            animation: ob-char-in 600ms var(--ease-out) forwards;
+            animation-delay: calc(80ms * var(--char-i, 0));
+        }
+        .ob-wordmark .ob-space { width: 0.35em; display: inline-block; }
+        @keyframes ob-char-in {
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        .ob-tagline {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 0.32em;
+            text-transform: uppercase;
+            color: var(--text-tertiary);
+            opacity: 0;
+            transform: translateY(8px);
+            animation: ob-tag-in 700ms var(--ease-out) 900ms forwards;
+        }
+        @keyframes ob-tag-in {
+            to { opacity: 0.85; transform: translateY(0); }
+        }
+        .ob-progress {
+            margin-top: 36px;
+            width: 180px; height: 2px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 1px;
+            overflow: hidden;
+            opacity: 0;
+            animation: ob-tag-in 600ms var(--ease-out) 1100ms forwards;
+        }
+        .ob-progress::after {
+            content: '';
+            display: block;
+            height: 100%; width: 30%;
+            background: linear-gradient(90deg, transparent, var(--accent-bright), transparent);
+            animation: ob-progress-sweep 1.3s var(--ease-out) infinite;
+        }
+        @keyframes ob-progress-sweep {
+            0%   { transform: translateX(-100%); }
+            100% { transform: translateX(400%); }
+        }
+        .ob-skip {
+            position: absolute; bottom: 28px; right: 28px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+            color: var(--text-tertiary);
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,0.02);
+            padding: 8px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s var(--ease-out);
+        }
+        .ob-skip:hover { color: var(--text-primary); border-color: var(--accent-border); }
+        @media (prefers-reduced-motion: reduce) {
+            #onboarding-overlay { display: none; }
+        }
+
+        /* ── #6: 3D signal card flip on hover ──
+           News cards flip vertically to reveal AI reasoning on the back.
+           Subtle so it's not gimmicky on accidental hovers. */
+        .news-card-hover {
+            transform-style: preserve-3d;
+            perspective: 1200px;
+        }
+        .news-card-hover .nc-front,
+        .news-card-hover .nc-back {
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+            transition: transform 700ms cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .news-card-hover .nc-back {
+            position: absolute;
+            inset: 24px;
+            transform: rotateX(180deg);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            pointer-events: none;
+        }
+        /* Flip triggers on long-hover (data-flip="1" set via JS to debounce) */
+        .news-card-hover[data-flip="1"] .nc-front { transform: rotateX(180deg); }
+        .news-card-hover[data-flip="1"] .nc-back  { transform: rotateX(0deg); }
+        .nc-back-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px; font-weight: 700; letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--accent);
+            margin-bottom: 10px;
+        }
+        .nc-back-body {
+            font-size: 13px; line-height: 1.55;
+            color: var(--text-secondary);
+            max-height: 100%;
+            overflow: hidden;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .news-card-hover .nc-front,
+            .news-card-hover .nc-back { transition: none; }
+        }
+
+        /* ── #7: Animated equity-curve hero (Track Record) ──
+           SVG path draws itself across the available width when the
+           Track Record view becomes visible. */
+        .eq-curve-wrap {
+            position: relative;
+            height: 64px;
+            margin: 8px 0 18px;
+            overflow: hidden;
+        }
+        .eq-curve-svg { width: 100%; height: 100%; display: block; }
+        .eq-curve-path {
+            fill: none;
+            stroke: var(--accent);
+            stroke-width: 1.8;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+            filter: drop-shadow(0 0 6px rgba(201,169,98,0.4));
+            stroke-dasharray: 1000;
+            stroke-dashoffset: 1000;
+            transition: stroke-dashoffset 1.4s var(--ease-out);
+        }
+        .eq-curve-fill {
+            fill: url(#eq-curve-gradient);
+            opacity: 0;
+            transition: opacity 600ms var(--ease-out) 800ms;
+        }
+        .eq-curve-wrap.is-revealed .eq-curve-path { stroke-dashoffset: 0; }
+        .eq-curve-wrap.is-revealed .eq-curve-fill { opacity: 0.6; }
+
+        /* ── #8: Sparkline draw-in animation on hover ticker chip ── */
+        .thc-spark path {
+            stroke-dasharray: 600;
+            stroke-dashoffset: 600;
+            animation: thc-spark-draw 800ms var(--ease-out) 50ms forwards;
+        }
+        @keyframes thc-spark-draw {
+            to { stroke-dashoffset: 0; }
+        }
+
+        /* ── #9: Cursor glow trail ──
+           A soft champagne orb follows the cursor on dark surfaces.
+           Pure CSS+JS positioning, mix-blend-mode for that premium overlay. */
+        #cursor-glow {
+            position: fixed;
+            width: 280px; height: 280px;
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 9990;
+            background: radial-gradient(circle, rgba(201,169,98,0.12) 0%, rgba(201,169,98,0.04) 35%, transparent 65%);
+            mix-blend-mode: screen;
+            transform: translate3d(-9999px, -9999px, 0);
+            transition: opacity 250ms var(--ease-out);
+            opacity: 0;
+            will-change: transform;
+        }
+        #cursor-glow.show { opacity: 1; }
+        @media (hover: none), (prefers-reduced-motion: reduce) {
+            #cursor-glow { display: none; }
+        }
+
+        /* ── #10: Liquid number morphing ──
+           Refine the existing digit-flip with a smoother, slower easing
+           so numbers feel liquid instead of mechanical. */
+        .flip-digit {
+            transition: transform 480ms cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .flip-digit.flipping {
+            animation-name: digit-liquid-morph;
+            animation-duration: 480ms;
+            animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        @keyframes digit-liquid-morph {
+            0%   { transform: translateY(0)    scaleY(1)    rotateX(0);    opacity: 1; filter: blur(0); }
+            45%  { transform: translateY(-30%) scaleY(0.35) rotateX(-55deg); opacity: 0.35; filter: blur(2px); }
+            55%  { transform: translateY(30%)  scaleY(0.35) rotateX(55deg);  opacity: 0.35; filter: blur(2px); }
+            100% { transform: translateY(0)    scaleY(1)    rotateX(0);    opacity: 1; filter: blur(0); }
+        }
+
+        /* ── #11: Scroll-linked parallax on Track Record KPI cards ──
+           --scroll-y is set in JS on each scroll frame; CSS translates each
+           KPI very slightly opposite to scroll direction. */
+        #tr-kpi-row .tr-kpi {
+            will-change: transform;
+            transform: translateY(calc(var(--scroll-y, 0) * -0.06px));
+            transition: transform 80ms linear;
+        }
+        #tr-kpi-row .tr-kpi:nth-child(2) {
+            transform: translateY(calc(var(--scroll-y, 0) * -0.04px));
+        }
+        #tr-kpi-row .tr-kpi:nth-child(3) {
+            transform: translateY(calc(var(--scroll-y, 0) * -0.08px));
+        }
+        #tr-kpi-row .tr-kpi:nth-child(4) {
+            transform: translateY(calc(var(--scroll-y, 0) * -0.05px));
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #tr-kpi-row .tr-kpi { transform: none; }
+        }
+
+        /* ── #19: Dynamic LIVE badge intensity ──
+           Default badge pulses gently; .is-hot variant set by JS when
+           worker activity is recent (within 60s) pulses brighter+faster. */
+        .live-dot.is-hot {
+            animation: pulse-dot-hot 1.1s ease-in-out infinite;
+            filter: drop-shadow(0 0 6px currentColor);
+        }
+        .live-dot.is-stale {
+            animation: pulse-dot-stale 4s ease-in-out infinite;
+            opacity: 0.55;
+        }
+        @keyframes pulse-dot-hot {
+            0%, 100% { transform: scale(1);   filter: brightness(1)    drop-shadow(0 0 4px currentColor); }
+            50%      { transform: scale(1.5); filter: brightness(1.45) drop-shadow(0 0 12px currentColor); }
+        }
+        @keyframes pulse-dot-stale {
+            0%, 100% { transform: scale(1); opacity: 0.45; }
+            50%      { transform: scale(1.15); opacity: 0.85; }
+        }
+
+        /* ── #20: Typing reveal for AI verdict in drawer ── */
+        .sd-verdict {
+            display: inline-block;
+            position: relative;
+        }
+        .sd-verdict .sd-verdict-text { display: inline-block; overflow: hidden; vertical-align: bottom; }
+        .sd-verdict .sd-verdict-char {
+            display: inline-block;
+            opacity: 0;
+            transform: translateY(6px);
+            animation: sd-char-type 360ms var(--ease-out) forwards;
+            animation-delay: calc(40ms * var(--char-i, 0));
+        }
+        @keyframes sd-char-type {
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .sd-verdict .sd-caret {
+            display: inline-block;
+            width: 2px;
+            height: 0.95em;
+            background: var(--accent-bright);
+            margin-left: 3px;
+            vertical-align: text-bottom;
+            animation: sd-caret-blink 0.9s steps(2) infinite;
+        }
+        @keyframes sd-caret-blink {
+            0%, 50%  { opacity: 1; }
+            51%, 100%{ opacity: 0; }
         }
 
         /* ══════════════════════════════════════════════════════════════
@@ -1367,6 +1691,17 @@
 
 <body class="antialiased">
 
+    <!-- Cinematic onboarding ceremony (#3) — first session each day -->
+    <div id="onboarding-overlay" class="hidden" aria-hidden="true">
+        <div class="ob-wordmark" id="ob-wordmark"></div>
+        <div class="ob-tagline">Institutional intelligence · Indian markets</div>
+        <div class="ob-progress"></div>
+        <button class="ob-skip" onclick="dismissOnboarding()">SKIP</button>
+    </div>
+
+    <!-- Cursor glow trail (#9) -->
+    <div id="cursor-glow" aria-hidden="true"></div>
+
     <!-- Aurora layer: two slow-drifting radial blobs that sit behind everything (UI-9) -->
     <div id="aurora-mesh" aria-hidden="true"></div>
 
@@ -1983,6 +2318,9 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- ── #7 Animated equity-curve hero — draws across full width when revealed ── -->
+                <div class="eq-curve-wrap" id="tr-equity-curve" aria-hidden="true"></div>
 
                 <!-- ── KPI HERO CARDS ── -->
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6" id="tr-kpi-row">
@@ -2869,19 +3207,31 @@
                 } else {
                     impactedStocksHtml = `<span class="text-[10px] text-slate-500 uppercase tracking-widest">No direct equity impact</span>`;
                 }
+                // Card has two faces — front (default content) and back (AI reasoning).
+                // Back is only rendered if there's a meaningful aam_janta translation.
+                const aamJanta = (news.aam_janta_translation || '').trim();
+                const backHtml = aamJanta ? `
+                    <div class="nc-back">
+                        <div class="nc-back-label">AI Reasoning</div>
+                        <div class="nc-back-body">${escapeHtml(aamJanta.length > 320 ? aamJanta.slice(0, 320) + '…' : aamJanta)}</div>
+                    </div>
+                ` : '';
                 item.innerHTML = `
-                    <div class="flex items-center gap-1.5 text-[9px] text-violet-400 font-mono mb-2">
-                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        ${dateStr} · ${timeStr}
+                    <div class="nc-front">
+                        <div class="flex items-center gap-1.5 text-[9px] text-violet-400 font-mono mb-2">
+                            <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            ${dateStr} · ${timeStr}
+                        </div>
+                        <div class="flex items-start justify-between gap-4 mb-3">
+                            <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${escapeHtml(news.headline)}</h3>
+                        </div>
+                        <div class="stock-badge-container items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300"
+                             style="display: ${isNonStockMode ? 'none' : 'flex'}">
+                            <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                            <div class="flex flex-wrap gap-2">${impactedStocksHtml}</div>
+                        </div>
                     </div>
-                    <div class="flex items-start justify-between gap-4 mb-3">
-                        <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${escapeHtml(news.headline)}</h3>
-                    </div>
-                    <div class="stock-badge-container items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300"
-                         style="display: ${isNonStockMode ? 'none' : 'flex'}">
-                        <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-                        <div class="flex flex-wrap gap-2">${impactedStocksHtml}</div>
-                    </div>
+                    ${backHtml}
                 `;
                 container.appendChild(item);
             });
@@ -3712,6 +4062,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         }
 
         window.onload = () => {
+            maybeShowOnboarding();          // #3 cinematic onboarding (first session per tab)
             playInitialWelcome();
             checkAuthStatus();
             startSmartPolling();
@@ -3719,6 +4070,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             updatePortfolioAssistantState();
             updateWatchlistPrices();
             initPremiumFeatures();
+            installCardFlipHandlers();      // #6 3D card flip on long-hover
         };
 
         // Three.js particle background
@@ -3749,6 +4101,239 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             pollSignalNotifications();
             setInterval(pollSignalNotifications, 30000);
             initPremiumInteractions();
+            // v2 premium UI features (#9 trail, #11 parallax, #19 live-pulse intensity)
+            initCursorTrail();
+            initKpiParallax();
+            initLivePulseIntensity();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #3 — Cinematic onboarding ceremony
+        // Shown once per session (sessionStorage flag), letter-by-letter
+        // ALPHA LENS reveal, then fades out and removes itself.
+        // ══════════════════════════════════════════════════════════════
+        function maybeShowOnboarding() {
+            // Skip if user already saw it this session or prefers reduced motion
+            if (sessionStorage.getItem('al_onboarded') === '1') return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                sessionStorage.setItem('al_onboarded', '1');
+                return;
+            }
+            const overlay = document.getElementById('onboarding-overlay');
+            const wordmark = document.getElementById('ob-wordmark');
+            if (!overlay || !wordmark) return;
+
+            const text = 'ALPHA LENS';
+            wordmark.innerHTML = [...text].map((ch, i) => {
+                if (ch === ' ') return '<span class="ob-space"></span>';
+                return `<span class="ob-char" style="--char-i:${i}">${ch}</span>`;
+            }).join('');
+            overlay.classList.remove('hidden');
+            overlay.setAttribute('aria-hidden', 'false');
+
+            // Auto-dismiss after the animation finishes (~2.8s)
+            setTimeout(dismissOnboarding, 2800);
+        }
+        function dismissOnboarding() {
+            const overlay = document.getElementById('onboarding-overlay');
+            if (!overlay) return;
+            overlay.classList.add('fade-out');
+            sessionStorage.setItem('al_onboarded', '1');
+            setTimeout(() => { overlay.classList.add('hidden'); }, 700);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #9 — Cursor glow trail
+        // Soft champagne orb follows the cursor with rAF interpolation
+        // so it lags slightly behind (premium "trailing" feel).
+        // ══════════════════════════════════════════════════════════════
+        function initCursorTrail() {
+            const orb = document.getElementById('cursor-glow');
+            if (!orb) return;
+            if (window.matchMedia('(hover: none)').matches) return;  // mobile/touch — skip
+            let tx = -9999, ty = -9999, cx = -9999, cy = -9999;
+            let active = false;
+            const half = 140; // half of orb size
+
+            window.addEventListener('pointermove', (e) => {
+                tx = e.clientX; ty = e.clientY;
+                if (!active) {
+                    active = true;
+                    orb.classList.add('show');
+                }
+            }, { passive: true });
+
+            window.addEventListener('pointerleave', () => {
+                active = false;
+                orb.classList.remove('show');
+            }, { passive: true });
+
+            function loop() {
+                // Lerp — smoother than direct follow
+                cx += (tx - cx) * 0.16;
+                cy += (ty - cy) * 0.16;
+                orb.style.transform = `translate3d(${cx - half}px, ${cy - half}px, 0)`;
+                requestAnimationFrame(loop);
+            }
+            requestAnimationFrame(loop);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #11 — Scroll-linked parallax on Track Record KPI cards
+        // Sets --scroll-y CSS var on #tr-kpi-row based on its offset
+        // within the viewport. CSS handles per-card multiplier.
+        // ══════════════════════════════════════════════════════════════
+        function initKpiParallax() {
+            const row = document.getElementById('tr-kpi-row');
+            if (!row) return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+            let ticking = false;
+            function updateParallax() {
+                ticking = false;
+                const rect = row.getBoundingClientRect();
+                // Distance from viewport center (positive = below center, negative = above)
+                const vhCenter = window.innerHeight / 2;
+                const rowCenter = rect.top + rect.height / 2;
+                const offset = rowCenter - vhCenter;
+                // Clamp so the effect doesn't go crazy at extremes
+                const clamped = Math.max(-400, Math.min(400, offset));
+                row.style.setProperty('--scroll-y', clamped);
+            }
+            window.addEventListener('scroll', () => {
+                if (!ticking) {
+                    requestAnimationFrame(updateParallax);
+                    ticking = true;
+                }
+            }, { passive: true });
+            updateParallax();
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #19 — Dynamic LIVE badge pulse intensity
+        // Polls /api/debug-worker-status every 30s; if a worker cycle
+        // started within the last 60s, mark all .live-dot elements as
+        // "hot" (brighter+faster pulse). Otherwise "stale".
+        // ══════════════════════════════════════════════════════════════
+        function initLivePulseIntensity() {
+            async function tick() {
+                try {
+                    const r = await fetch('/api/debug-worker-status');
+                    if (!r.ok) return;
+                    const data = await r.json();
+                    const aiAge = data?.workers?.ai_news?.last_cycle_started_age_s;
+                    const yfAge = data?.workers?.yfinance?.last_cycle_finished_age_s;
+                    // "Hot" if either worker has been recently active
+                    const hot = (aiAge != null && aiAge < 180) || (yfAge != null && yfAge < 90);
+                    const stale = !hot && (
+                        (aiAge != null && aiAge > 600) || (yfAge != null && yfAge > 600)
+                    );
+                    document.querySelectorAll('.live-dot').forEach(el => {
+                        el.classList.toggle('is-hot', hot);
+                        el.classList.toggle('is-stale', stale);
+                    });
+                } catch (e) {/* swallow — non-critical */}
+            }
+            tick();
+            setInterval(tick, 30000);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #7 — Animated equity-curve hero on Track Record
+        // Builds a synthetic equity curve from the closed signals' P&L
+        // and animates the SVG path drawing itself.
+        // ══════════════════════════════════════════════════════════════
+        function renderEquityCurveHero(closedSignals) {
+            const host = document.getElementById('tr-equity-curve');
+            if (!host) return;
+            if (!Array.isArray(closedSignals) || closedSignals.length < 2) {
+                host.innerHTML = '';
+                return;
+            }
+            // Cumulative P&L over time (chronological order)
+            const chrono = [...closedSignals]
+                .filter(r => typeof r.pnl_pct === 'number')
+                .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+            if (chrono.length < 2) { host.innerHTML = ''; return; }
+            let cum = 0;
+            const values = chrono.map(r => { cum += r.pnl_pct; return cum; });
+            const w = 800, h = 64, pad = 4;
+            const min = Math.min(0, ...values), max = Math.max(0, ...values);
+            const span = (max - min) || 1;
+            const step = (w - pad * 2) / (values.length - 1);
+            const pts = values.map((v, i) => {
+                const x = pad + i * step;
+                const y = pad + (h - pad * 2) * (1 - (v - min) / span);
+                return [x, y];
+            });
+            const path = pts.map(([x, y], i) => (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1)).join(' ');
+            const fillPath = `${path} L${pts[pts.length-1][0].toFixed(1)},${h - pad} L${pad},${h - pad} Z`;
+            host.innerHTML = `
+                <svg class="eq-curve-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+                    <defs>
+                        <linearGradient id="eq-curve-gradient" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="rgba(201,169,98,0.3)" />
+                            <stop offset="100%" stop-color="rgba(201,169,98,0)" />
+                        </linearGradient>
+                    </defs>
+                    <path class="eq-curve-fill" d="${fillPath}" />
+                    <path class="eq-curve-path" d="${path}" />
+                </svg>
+            `;
+            // Trigger draw animation next frame
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => host.classList.add('is-revealed'));
+            });
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #6 — 3D signal card flip
+        // Click news card's "Why?" button (or long-hover) toggles flip.
+        // ══════════════════════════════════════════════════════════════
+        // Hover-debounced flip: a card flips after 700ms of sustained hover,
+        // un-flips on pointer leave. Avoids accidental flips on quick swipes.
+        function installCardFlipHandlers() {
+            if (window.__alpha_card_flip_init) return;
+            window.__alpha_card_flip_init = true;
+            let hoverTimer = null, activeCard = null;
+            document.addEventListener('pointerover', (e) => {
+                const card = e.target.closest('.news-card-hover');
+                if (!card || !card.querySelector('.nc-back')) return;
+                if (activeCard && activeCard !== card) {
+                    activeCard.removeAttribute('data-flip');
+                }
+                activeCard = card;
+                clearTimeout(hoverTimer);
+                hoverTimer = setTimeout(() => card.setAttribute('data-flip', '1'), 700);
+            });
+            document.addEventListener('pointerout', (e) => {
+                const card = e.target.closest('.news-card-hover');
+                if (!card || card.contains(e.relatedTarget)) return;
+                clearTimeout(hoverTimer);
+                card.removeAttribute('data-flip');
+                if (activeCard === card) activeCard = null;
+            });
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // #20 — Typing reveal for AI verdict in drawer
+        // Replaces a verdict element's text with per-character animated spans.
+        // ══════════════════════════════════════════════════════════════
+        function typeReveal(el, text) {
+            if (!el) return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                el.textContent = text;
+                return;
+            }
+            const chars = [...text].map((c, i) =>
+                `<span class="sd-verdict-char" style="--char-i:${i}">${c === ' ' ? '&nbsp;' : c}</span>`
+            ).join('');
+            el.innerHTML = `<span class="sd-verdict-text">${chars}</span><span class="sd-caret"></span>`;
+            // Remove caret after typing finishes
+            const total = text.length * 40 + 400;
+            setTimeout(() => {
+                const caret = el.querySelector('.sd-caret');
+                if (caret) caret.remove();
+            }, total);
         }
 
         function initPremiumInteractions() {
@@ -4082,6 +4667,20 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                     </div>`;
                 }).join('');
 
+            // #20 Typing reveal — pull the headline AI verdict (latest signal's impact)
+            // and surface it as a typed-out badge above the news list.
+            const latestImpact = latest && latest.impact ? latest.impact.toUpperCase() : null;
+            const verdictBlock = latestImpact ? `
+                <div class="sd-section">
+                    <div class="sd-section-label">AI Verdict</div>
+                    <div class="sd-price-row">
+                        <span class="sd-verdict ${latestImpact.includes('BULL') ? 'tr-pos' : (latestImpact.includes('BEAR') ? 'tr-neg' : 'tr-muted')}"
+                              style="font-family:'Space Grotesk',sans-serif;font-weight:900;font-size:22px;letter-spacing:-0.02em;"
+                              id="sd-verdict-target"></span>
+                    </div>
+                </div>
+            ` : '';
+
             document.getElementById('sd-body').innerHTML = `
                 <div class="sd-section">
                     <div class="sd-section-label">Live Quote</div>
@@ -4090,6 +4689,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                         <span class="sd-chg ${chgCls}">${chgStr}</span>
                     </div>
                 </div>
+                ${verdictBlock}
                 <div class="sd-section">
                     <div class="sd-section-label">AI Signals (recent)</div>
                     ${newsHtml}
@@ -4099,6 +4699,15 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                     <button class="tr-range-btn" data-magnetic onclick="addStockToWatchlist('${escapeHtml(fullTicker)}', '${escapeHtml(displayName)}'); closeStockDrawer();">+ Add to Watchlist</button>
                 </div>`}
             `;
+
+            // Fire the typing animation AFTER the DOM is updated, with a small
+            // delay so it lines up with the drawer's slide-in finishing.
+            if (latestImpact) {
+                setTimeout(() => {
+                    const tgt = document.getElementById('sd-verdict-target');
+                    if (tgt) typeReveal(tgt, latestImpact);
+                }, 200);
+            }
         }
 
         function closeStockDrawer() {
@@ -4309,6 +4918,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
 
         function renderBacktest() {
             if (!_backtestData) return;
+            // #7 — animated equity curve drawn from closed signals. Render first so it
+            // appears above the KPIs and the SVG draw-in plays as KPIs count up.
+            renderEquityCurveHero(_backtestData.recent_closed || []);
             renderBacktestKPIs();
             renderBacktestConfidence();
             renderBacktestDirection();
