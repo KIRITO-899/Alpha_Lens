@@ -75,7 +75,12 @@ class TechnicalAlignmentModel:
     def score(self, tech_data, direction):
         """Returns 0-100 based on technical alignment with advanced indicators."""
         if tech_data is None:
-            return 60  # Neutral-positive: don't sink ensemble when tech data unavailable
+            # Was 60 (above the 50/60 agreement threshold) — that meant a
+            # missing-data row counted as a free YES vote in the ensemble's
+            # agreement count, which is wrong. Truly neutral (50) is below
+            # the 60 agree-threshold so missing data no longer carries the
+            # vote.
+            return 50
         s = 50
         bull = (direction == 'BULLISH')
 
@@ -504,7 +509,7 @@ class AILogicModel:
                 pass
         return cls._sm_client
 
-    def score(self, headline, ticker, direction, tech_data, api_client, model_name, market_regime='NEUTRAL', get_client_fn=None, precalculated_score=None):
+    def score(self, headline, ticker, direction, tech_data, api_client, model_name, market_regime='NEUTRAL', get_client_fn=None, precalculated_score=None, catalyst_type=None, news_age_hours=None):
         import re, json as _json
         # ── Synthesis short-circuit (intentionally DISABLED by default) ──
         # Was unconditional: the screener's quality_score was echoed back here
@@ -557,18 +562,64 @@ class AILogicModel:
                 f"\n  Liquidity Sweep: {liquidity}"
             )
 
+        # News quality context — explicit signals for the AI to penalize
+        _cat_str = (catalyst_type or "UNCLASSIFIED").strip() or "UNCLASSIFIED"
+        if news_age_hours is None:
+            _age_str = "unknown"
+        else:
+            try:
+                _age_str = f"{float(news_age_hours):.1f} hours"
+            except Exception:
+                _age_str = "unknown"
+        _move_dir = "UP" if direction == "BULLISH" else "DOWN"
+        _stop_pct = "1.5%" if tech_data and tech_data.get("atr_pct", 2) < 2 else "2%"
+
         prompt = (
-            f'You are a quantitative portfolio manager at a top Indian hedge fund (NSE/BSE specialist).\n'
-            f'Evaluate this trade setup with STRICT criteria — only approve HIGH CONVICTION setups.\n\n'
-            f'News: "{headline}"\n'
-            f'Stock: {ticker} | Proposed Direction: {direction}\n'
-            f'Market Regime: {market_regime}\n'
+            f'You are a Chief Quantitative Portfolio Manager at a top Indian hedge fund (NSE/BSE).\n'
+            f'STRICT criteria: only approve HIGH CONVICTION setups. Most signals should NOT pass.\n\n'
+            f'──────────── TRADE PROPOSAL ────────────\n'
+            f'Headline:          "{headline}"\n'
+            f'Catalyst Type:      {_cat_str}\n'
+            f'News Age:           {_age_str}\n'
+            f'Stock:              {ticker}\n'
+            f'Proposed Direction: {direction}\n'
+            f'Market Regime:      {market_regime}\n'
             f'{tech_summary}\n\n'
-            f'Question: Will this stock move {"UP" if direction == "BULLISH" else "DOWN"} by 2%+ '
-            f'within 3 trading sessions WITHOUT hitting a {"1.5%" if tech_data and tech_data.get("atr_pct", 2) < 2 else "2%"} stop-loss?\n\n'
-            f'Consider: Is the news a genuine catalyst? Does the technical picture support {direction}?\n'
-            f'Is volume confirming the move? Is the market regime favorable?\n'
-            f'Score 80-95 only for HIGH CONVICTION setups. Score 30-50 for weak/contrary setups.\n'
+            f'──────────── EVALUATE IN ORDER ────────────\n\n'
+            f'STEP 1 — NEWS QUALITY (gate)\n'
+            f'  HARD catalysts (high alpha): earnings beat/miss, M&A/stake sale, regulatory '
+            f'approval/ban (SEBI/FDA/RBI/DCGI), large order win/cancel (>5% revenue), CEO/CFO/MD '
+            f'change, RBI rate decision, credit rating change, promoter buying/selling, block '
+            f'deal, capex announcement, plant shutdown, government policy with sector impact.\n'
+            f'  SOFT catalysts (no alpha — score ≤ 35): "stocks to watch today" listicles, '
+            f'analyst price-target reiteration, sector sympathy without specific catalyst, '
+            f'generic "Nifty may rise" commentary, repeat coverage of already-known events.\n'
+            f'  → Is this HARD or SOFT? If SOFT, score 25-35 and STOP.\n\n'
+            f'STEP 2 — FRESHNESS (gate)\n'
+            f'  News > 4 hours old is usually priced in by faster traders. Score ≤ 40 if news\n'
+            f'  age > 4h. Score ≤ 30 if > 8h. Fresh news (< 2h) = no age penalty.\n'
+            f'  → Current news age: {_age_str}\n\n'
+            f'STEP 3 — SATURATION (judge from headline)\n'
+            f'  Is this a unique scoop or one that 30 outlets have already covered? If the\n'
+            f'  headline looks like syndicated/wire content already widely seen, the move is\n'
+            f'  priced in. Score ≤ 45 if obviously viral.\n\n'
+            f'STEP 4 — TECHNICAL FIT\n'
+            f'  Does EMA alignment, MACD, RSI, OBV support {direction}? Volume > 1x avg?\n'
+            f'  Contrary technicals = score ≤ 40 regardless of news.\n\n'
+            f'STEP 5 — REGIME\n'
+            f'  RISK_OFF + BULLISH = headwind. RISK_ON + BEARISH = headwind. Don\'t fight regime.\n\n'
+            f'STEP 6 — LATE ENTRY\n'
+            f'  Has the stock likely already moved {_move_dir} 2%+ today in reaction to this?\n'
+            f'  If yes (judge from RSI extremes, range_position, volume ratio), score ≤ 40.\n\n'
+            f'──────────── QUESTION ────────────\n'
+            f'Will {ticker} move {_move_dir} by 2%+ within 3 trading sessions WITHOUT first\n'
+            f'hitting a {_stop_pct} stop-loss?\n\n'
+            f'──────────── SCORING BANDS ────────────\n'
+            f'  85-95: HARD catalyst + fresh (<2h) + supportive technicals + favorable regime\n'
+            f'  70-84: HARD catalyst + 2 of (fresh, tech, regime)\n'
+            f'  50-69: Mixed evidence — proceed with caution\n'
+            f'  35-49: Weak setup — likely fails\n'
+            f'  ≤ 34: SOFT catalyst, stale, contrary technicals, or obvious late entry\n\n'
             f'Return ONLY valid JSON: {{"score": <0-100>}}'
         )
 
@@ -703,15 +754,19 @@ class EnsemblePredictor:
 
     def predict(self, headline, ticker, direction, tech_data, market_regime,
                 db_connect_fn, api_client=None, model_name=None, min_score=50,
-                get_client_fn=None, precalculated_score=None):
+                get_client_fn=None, precalculated_score=None,
+                catalyst_type=None, news_age_hours=None):
         s2 = self.m2.score(headline, ticker, direction, db_connect_fn)
         s3 = self.m3.score(tech_data, direction)
         s4 = self.m4.score(ticker, direction, market_regime)
         s6 = self.m6.score(direction)
-        # Pass market_regime and get_client_fn to AI model so it can factor macro conditions
+        # Pass market_regime + news quality context to AI so it can reason
+        # about catalyst hardness, freshness, and viral pricing-in
         s7 = self.m7.score(headline, ticker, direction, tech_data, api_client, model_name,
                            market_regime=market_regime, get_client_fn=get_client_fn,
-                           precalculated_score=precalculated_score)
+                           precalculated_score=precalculated_score,
+                           catalyst_type=catalyst_type,
+                           news_age_hours=news_age_hours)
 
         w_hist = self.WEIGHTS['historical']
         w_tech = self.WEIGHTS['technical']
@@ -746,19 +801,31 @@ class EnsemblePredictor:
                 s7_val * w_ai
             )
 
-            # ── MARKET REGIME PENALTY ──
-            # In a RISK_OFF (falling) market, BULLISH signals are heavily penalized.
-            # In a RISK_ON (rising) market, BEARISH signals lose some confidence.
+            # ── MARKET REGIME PENALTY (SYMMETRIC) ──
+            # Previously: -15 for bulls in risk-off vs -8 for bears in risk-on.
+            # That 7-point asymmetry was a structural bearish bias — the math
+            # itself favored approving bearish signals. Live 30d data showed
+            # 5/5 closed signals bearish (none bullish), which is exactly the
+            # outcome you'd predict from that asymmetry running over time.
+            # Both sides now get the same penalty when fighting the regime.
+            # Env-tunable so we can tighten or loosen without a redeploy.
+            _regime_pen = int(os.environ.get("REGIME_PENALTY", "10"))
             regime_penalty = 0
             if market_regime == 'RISK_OFF' and direction == 'BULLISH':
-                regime_penalty = -15  # Strongly penalize bulls in a falling market
-                print(f"   [Ensemble] RISK_OFF regime → BULLISH penalty -15 applied for {ticker}")
+                regime_penalty = -_regime_pen
+                print(f"   [Ensemble] RISK_OFF regime → BULLISH penalty {regime_penalty} for {ticker}")
             elif market_regime == 'RISK_ON' and direction == 'BEARISH':
-                regime_penalty = -8   # Moderate penalty for bears in a rising market
+                regime_penalty = -_regime_pen
+                print(f"   [Ensemble] RISK_ON regime → BEARISH penalty {regime_penalty} for {ticker}")
 
             final = max(0, min(100, final + regime_penalty))
 
-            agree = sum(1 for s in valid_models if s > 50)
+            # Was: s > 50 (above neutral midpoint = "agrees"). Problem: a
+            # model scoring 51 is essentially "I have no opinion but if
+            # forced lean yes" — that's not real agreement. 60 means the
+            # model is actually supportive, not just indifferent.
+            _agree_thr = int(os.environ.get("ENSEMBLE_AGREE_SCORE_THRESHOLD", "60"))
+            agree = sum(1 for s in valid_models if s > _agree_thr)
             veto = self.m3.has_veto(tech_data, direction)
             approved = final >= min_score and agree >= min_agree and not veto
 

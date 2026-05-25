@@ -2874,17 +2874,6 @@ Return ONLY valid JSON matching this shape:
             print(f"   [AI] Skipping {len(articles_batch)} articles — AI-only mode, no fallback.")
             return [_no_impact_row(a, 0, "AI_UNAVAILABLE") for a in articles_batch]
 
-        # ── Headline saturation counter ──
-        # Count how many RSS feeds carried the same headline this cycle. If a
-        # headline appears in many feeds simultaneously, the news is already
-        # viral — institutions traded it minutes ago and most of the alpha is
-        # gone. We use this in the save loop to reject over-saturated signals.
-        headline_saturation = {}
-        for a in raw_articles:
-            _h = (a.get("headline") or "").lower().strip()
-            if _h:
-                headline_saturation[_h] = headline_saturation.get(_h, 0) + 1
-
         # Filter out already seen headlines in memory before AI screening
         new_articles = []
         seen_this_batch = set()
@@ -3109,71 +3098,12 @@ Return ONLY valid JSON matching this shape:
             if not ticker or base_direction not in ("BULLISH", "BEARISH") or not is_supported_equity_ticker(ticker):
                 continue
 
-            # ──────────────────────────────────────────────────────────
-            # NEWS-CREDIBILITY FILTERS (run before the expensive ensemble)
-            # Each gate is independently env-tunable — disable any one by
-            # setting its env var to the appropriate skip value.
-            # ──────────────────────────────────────────────────────────
-
-            # 1) CATALYST WHITELIST — only trade hard catalysts (earnings,
-            # M&A, regulatory, large orders, etc.). Soft catalysts ("stocks
-            # to watch", analyst views, sector sympathy) are filtered out
-            # because they historically don't produce sustained moves.
-            # Set CATALYST_WHITELIST_DISABLED=1 to bypass.
-            if os.environ.get("CATALYST_WHITELIST_DISABLED", "0").lower() not in ("1", "true", "yes"):
-                _catalyst = (signal.get("catalyst_type") or "").upper()
-                if _catalyst:
-                    # Hard catalysts — keywords that must appear in the
-                    # catalyst_type. We use substring match so variants like
-                    # 'EARNINGS_BEAT', 'EARNINGS_MISS', 'EARNINGS_GUIDANCE'
-                    # all pass via 'EARNINGS'.
-                    _hard_catalysts = [
-                        'EARNINGS', 'M&A', 'MERGER', 'ACQUISITION', 'STAKE',
-                        'REGULATORY', 'SEBI', 'FDA', 'DCGI', 'RBI', 'BAN',
-                        'APPROVAL', 'MANAGEMENT', 'CEO', 'CFO', 'BOARD',
-                        'ORDER_WIN', 'LARGE_ORDER', 'CONTRACT',
-                        'RATING', 'UPGRADE', 'DOWNGRADE', 'CREDIT',
-                        'PROMOTER', 'INSIDER', 'BLOCK_DEAL',
-                        'CAPEX', 'PLANT', 'CAPACITY',
-                        'POLICY', 'TARIFF', 'PLI', 'SUBSIDY',
-                        'COMMODITY_SHOCK', 'CRUDE', 'CURRENCY_SHOCK',
-                        'DEFAULT', 'NCLT', 'INSOLVENCY',
-                        'DIVIDEND', 'BUYBACK', 'BONUS', 'SPLIT',
-                    ]
-                    if not any(hc in _catalyst for hc in _hard_catalysts):
-                        print(f"   [CATALYST] {ticker} REJECTED — soft catalyst '{_catalyst}' not in hard-catalyst whitelist")
-                        continue
-
-            # 2) HEADLINE SATURATION — if 3+ RSS feeds carried the same
-            # headline this cycle, it's already viral. The move has likely
-            # been priced in by faster traders. Tunable threshold.
-            _max_saturation = int(os.environ.get("MAX_HEADLINE_SATURATION", "3"))
-            _sat = headline_saturation.get(headline.lower().strip(), 1)
-            if _sat >= _max_saturation:
-                print(f"   [SATURATION] {ticker} REJECTED — headline appeared in {_sat} feeds (max {_max_saturation - 1})")
-                continue
-
-            # 3) FRESHNESS — reject news older than MAX_NEWS_AGE_HOURS from
-            # canonical publication time. Stale news = priced in, no edge.
-            # Uses the canonical_pub_times from the meta-tag scrape if
-            # available, else falls back to RSS pubDate.
-            _max_age_h = float(os.environ.get("MAX_NEWS_AGE_HOURS", "4"))
-            _pub_t_str = canonical_pub_times.get(headline) or signal.get("time", "")
-            if _pub_t_str:
-                try:
-                    from email.utils import parsedate_to_datetime as _ptd2
-                    _pub_dt = _ptd2(_pub_t_str)
-                    if _pub_dt:
-                        if _pub_dt.tzinfo is None:
-                            _pub_dt = _pub_dt.replace(tzinfo=timezone.utc)
-                        _age_h = (datetime.now(timezone.utc) - _pub_dt).total_seconds() / 3600.0
-                        # Only enforce when age is positive (future-clamped news
-                        # would have negative age and shouldn't be rejected here).
-                        if _age_h > _max_age_h:
-                            print(f"   [FRESHNESS] {ticker} REJECTED — news is {_age_h:.1f}h old (max {_max_age_h}h)")
-                            continue
-                except Exception:
-                    pass
+            # News-quality assessment is no longer a mechanical filter here —
+            # it now happens INSIDE the AILogicModel prompt. The AI sees the
+            # catalyst_type, the news age (hours since canonical publication),
+            # and the headline itself, and is asked to penalize soft catalysts,
+            # stale news, and already-viral coverage. One model with full
+            # context beats three mechanical gates with no nuance.
 
             # ── Full Text Scraping (Context Boost) ──
             body_text = signal.get("deep_context") or signal.get("summary") or ""
@@ -3325,6 +3255,25 @@ Return ONLY valid JSON matching this shape:
                 _dynamic_target = TRADE_TARGET_PCT
                 print(f"   [ATR] {ticker}: no ATR — falling back to static {_dynamic_stop:.1f}%/{_dynamic_target:.1f}%")
 
+            # ── News-quality context for AI prompt ──
+            # Pass the catalyst classification and a calculated news-age so
+            # the AI can penalize soft / stale / over-saturated coverage in
+            # its own reasoning (instead of mechanical pre-filters we just
+            # removed). canonical_pub_times is from the meta-tag scraper.
+            _signal_catalyst = signal.get("catalyst_type") or ""
+            _news_age_h = None
+            try:
+                _pub_t = canonical_pub_times.get(headline) or signal.get("time", "")
+                if _pub_t:
+                    from email.utils import parsedate_to_datetime as _ptd_age
+                    _pdt = _ptd_age(_pub_t)
+                    if _pdt:
+                        if _pdt.tzinfo is None:
+                            _pdt = _pdt.replace(tzinfo=timezone.utc)
+                        _news_age_h = round(max(0.0, (datetime.now(timezone.utc) - _pdt).total_seconds() / 3600.0), 1)
+            except Exception:
+                _news_age_h = None
+
             # Predict using Ensemble
             result = ensemble.predict(
                 headline=ai_input,
@@ -3337,7 +3286,9 @@ Return ONLY valid JSON matching this shape:
                 model_name=MODEL_NAME,
                 min_score=MIN_CONFIDENCE,
                 get_client_fn=get_and_rotate_client,
-                precalculated_score=signal.get("quality_score")
+                precalculated_score=signal.get("quality_score"),
+                catalyst_type=_signal_catalyst,
+                news_age_hours=_news_age_h,
             )
 
             if result['approved']:
