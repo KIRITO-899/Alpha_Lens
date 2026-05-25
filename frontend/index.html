@@ -122,7 +122,7 @@
       // Fire the two heaviest first-paint fetches as soon as <head> parses.
       // window.__alphaWarmFetches resolves with both responses ready.
       window.__alphaWarmFetches = {
-        news:    fetch('/api/news/all?limit=7500').then(r => r.ok ? r.json() : null).catch(() => null),
+        news:    fetch('/api/news/all?limit=7500&lite=1').then(r => r.ok ? r.json() : null).catch(() => null),
         indices: fetch('/api/indices').then(r => r.ok ? r.json() : null).catch(() => null),
       };
 
@@ -3011,7 +3011,7 @@
                     window.__alphaWarmFetches.news = null;  // consume once
                 }
                 if (!payload) {
-                    const response = await fetch('/api/news/all?limit=7500');
+                    const response = await fetch('/api/news/all?limit=7500&lite=1');
                     payload = await response.json();
                 }
                 // Handle both old array format and new {market_open, news} format
@@ -3266,28 +3266,127 @@
         }
 
 
+        // ── All News virtualization state ──
+        // We hold the filtered list in memory but only mount cards into the
+        // DOM in batches as the sentinel scrolls into view. With ~500 cards
+        // this is the difference between a 4s freeze and instant render.
+        let _archiveFiltered = [];
+        let _archiveRendered = 0;
+        let _archiveObserver = null;
+        const _ARCHIVE_BATCH_SIZE = 30;
+
+        function _buildArchiveCard(news, cardIdx) {
+            const item = document.createElement('div');
+            item.className = "glass-panel news-card-hover p-6 rounded-2xl cursor-pointer";
+            item.style.setProperty('--i', Math.min(cardIdx, 12));
+            item.setAttribute('data-stagger-i', String(cardIdx));
+            item.onclick = (e) => {
+                if (e.target.closest('.ticker-hover-target')) return;
+                loadArticleIntoMainViewer(news); switchTab('top-news');
+            };
+            const dt = getNewsDate(news);
+            const dateStr = !isNaN(dt) ? dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+            const timeStr = !isNaN(dt) ? dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+            let impactedStocksHtml = '';
+            if (news.affected_stocks && news.affected_stocks.length > 0) {
+                const seenBadgeTickers = new Set();
+                news.affected_stocks.forEach(stock => {
+                    const tkKey = (stock.ticker || '').toUpperCase();
+                    if (seenBadgeTickers.has(tkKey)) return;
+                    seenBadgeTickers.add(tkKey);
+                    const impact = (stock.impact || '').toLowerCase();
+                    let color = impact.includes('bullish') ? 'text-green-400 border-green-500/30 bg-green-900/10' :
+                        impact.includes('slightly bearish') ? 'text-orange-400 border-orange-500/30 bg-orange-900/10' :
+                            'text-red-400 border-red-500/30 bg-red-900/10';
+                    impactedStocksHtml += `
+                        <div class="flex flex-col gap-1">
+                            <span class="ticker-hover-target text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}" data-ticker="${escapeHtml(stock.ticker)}">${escapeHtml(stock.ticker)}</span>
+                            ${getConfidenceBadge(stock.confidence_score)}
+                        </div>`;
+                });
+            } else {
+                impactedStocksHtml = `<span class="text-[10px] text-slate-500 uppercase tracking-widest">No direct equity impact</span>`;
+            }
+            // Body snippet — first ~200 chars of news.body. Backend lite mode
+            // already trims server-side; this is a safety belt for very old
+            // rows or non-lite responses.
+            const rawBody = (news.body || '').trim();
+            const bodySnippet = rawBody ? (rawBody.length > 220 ? rawBody.slice(0, 220).trim() + '…' : rawBody) : '';
+            const bodyHtml = bodySnippet ? `
+                <p class="text-[11px] text-slate-400 leading-relaxed mt-2 mb-3 line-clamp-3">${escapeHtml(bodySnippet)}</p>
+            ` : '';
+            const aamJanta = (news.aam_janta_translation || '').trim();
+            const backHtml = aamJanta ? `
+                <div class="nc-back">
+                    <div class="nc-back-label">AI Reasoning</div>
+                    <div class="nc-back-body">${escapeHtml(aamJanta.length > 320 ? aamJanta.slice(0, 320) + '…' : aamJanta)}</div>
+                </div>
+            ` : '';
+            item.innerHTML = `
+                <div class="nc-front">
+                    <div class="flex items-center gap-1.5 text-[9px] text-violet-400 font-mono mb-2">
+                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        ${dateStr} · ${timeStr}
+                    </div>
+                    <div class="flex items-start justify-between gap-4 mb-1">
+                        <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${escapeHtml(news.headline)}</h3>
+                    </div>
+                    ${bodyHtml}
+                    <div class="stock-badge-container items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300"
+                         style="display: ${isNonStockMode ? 'none' : 'flex'}">
+                        <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                        <div class="flex flex-wrap gap-2">${impactedStocksHtml}</div>
+                    </div>
+                </div>
+                ${backHtml}
+            `;
+            return item;
+        }
+
+        function _renderArchiveBatch(container) {
+            const end = Math.min(_archiveRendered + _ARCHIVE_BATCH_SIZE, _archiveFiltered.length);
+            const frag = document.createDocumentFragment();
+            for (let i = _archiveRendered; i < end; i++) {
+                frag.appendChild(_buildArchiveCard(_archiveFiltered[i], i));
+            }
+            // Remove the old sentinel before appending more cards
+            const oldSentinel = document.getElementById('archive-load-sentinel');
+            if (oldSentinel) oldSentinel.remove();
+            container.appendChild(frag);
+            _archiveRendered = end;
+            // Add a fresh sentinel if more cards remain
+            if (_archiveRendered < _archiveFiltered.length) {
+                const sentinel = document.createElement('div');
+                sentinel.id = 'archive-load-sentinel';
+                sentinel.style.cssText = 'height:48px;display:flex;align-items:center;justify-content:center;color:#64748b;font-size:11px;letter-spacing:0.1em;text-transform:uppercase;';
+                sentinel.textContent = `Loading more · ${_archiveRendered} / ${_archiveFiltered.length}`;
+                container.appendChild(sentinel);
+                if (_archiveObserver) _archiveObserver.observe(sentinel);
+            }
+        }
+
         function renderArchiveView() {
             const container = document.getElementById('archive-news-list');
             if (!container) return;
             container.innerHTML = '';
-            // Filter by DB insertion time (created_at), NOT stale RSS publish dates
+            _archiveRendered = 0;
+            // Tear down any prior observer — we'll create a fresh one for the
+            // current list so the sentinel reference doesn't leak across renders.
+            if (_archiveObserver) {
+                try { _archiveObserver.disconnect(); } catch (_) {}
+                _archiveObserver = null;
+            }
+
             const sevenDaysAgo = Date.now() - (168 * 60 * 60 * 1000);
             let recentNews = globalNewsData.filter(news => parseSQLiteDate(news.created_at).getTime() >= sevenDaysAgo);
-
-            // Apply filtering logic
             if (currentArchiveFilter !== 'all') {
                 if (currentArchiveFilter.startsWith('cat:')) {
                     const targetCat = currentArchiveFilter.split(':')[1].toLowerCase();
-                    recentNews = recentNews.filter(news => {
-                        const cat = (news.category || 'general').toLowerCase();
-                        return cat === targetCat;
-                    });
+                    recentNews = recentNews.filter(news => (news.category || 'general').toLowerCase() === targetCat);
                 } else {
                     recentNews = recentNews.filter(news => {
                         const hasStocks = news.affected_stocks && news.affected_stocks.length > 0;
-                        if (currentArchiveFilter === 'none') {
-                            return !hasStocks;
-                        }
+                        if (currentArchiveFilter === 'none') return !hasStocks;
                         if (hasStocks) {
                             return news.affected_stocks.some(stock => (stock.impact || '').toLowerCase() === currentArchiveFilter);
                         }
@@ -3295,75 +3394,27 @@
                     });
                 }
             }
+            _archiveFiltered = recentNews;
+
             const countEl = document.getElementById('news-count');
-            if (countEl) countEl.innerText = `${recentNews.length} Articles`;
-            if (recentNews.length === 0) {
+            if (countEl) countEl.innerText = `${_archiveFiltered.length} Articles`;
+            if (_archiveFiltered.length === 0) {
                 container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">No news found in the last 7 days. The AI engine may still be processing feeds.</div>';
                 return;
             }
-            recentNews.forEach((news, cardIdx) => {
-                const item = document.createElement('div');
-                item.className = "glass-panel news-card-hover p-6 rounded-2xl cursor-pointer";
-                // Stagger entry (UI-1): first 12 cards waterfall in
-                item.style.setProperty('--i', Math.min(cardIdx, 12));
-                item.setAttribute('data-stagger-i', String(cardIdx));
-                item.onclick = (e) => {
-                    // Don't open article if user clicked on a ticker badge — that opens the stock drawer instead
-                    if (e.target.closest('.ticker-hover-target')) return;
-                    loadArticleIntoMainViewer(news); switchTab('top-news');
-                };
-                const dt = getNewsDate(news);
-                const dateStr = !isNaN(dt) ? dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-                const timeStr = !isNaN(dt) ? dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
-                let impactedStocksHtml = '';
-                if (news.affected_stocks && news.affected_stocks.length > 0) {
-                    const seenBadgeTickers = new Set();
-                    news.affected_stocks.forEach(stock => {
-                        const tkKey = (stock.ticker || '').toUpperCase();
-                        if (seenBadgeTickers.has(tkKey)) return;  // skip duplicates
-                        seenBadgeTickers.add(tkKey);
-                        const impact = (stock.impact || '').toLowerCase();
-                        let color = impact.includes('bullish') ? 'text-green-400 border-green-500/30 bg-green-900/10' :
-                            impact.includes('slightly bearish') ? 'text-orange-400 border-orange-500/30 bg-orange-900/10' :
-                                'text-red-400 border-red-500/30 bg-red-900/10';
-                        // ticker-hover-target opts the chip into UI-7 preview + UI-5 drawer (delegated)
-                        impactedStocksHtml += `
-                            <div class="flex flex-col gap-1">
-                                <span class="ticker-hover-target text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}" data-ticker="${escapeHtml(stock.ticker)}">${escapeHtml(stock.ticker)}</span>
-                                ${getConfidenceBadge(stock.confidence_score)}
-                            </div>`;
-                    });
-                } else {
-                    impactedStocksHtml = `<span class="text-[10px] text-slate-500 uppercase tracking-widest">No direct equity impact</span>`;
+
+            // Spin up an observer that fires when the sentinel scrolls into view.
+            // rootMargin pre-loads a screen ahead so the user never sees the loader
+            // unless they're scrolling unreasonably fast.
+            _archiveObserver = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (entry.isIntersecting) {
+                        _renderArchiveBatch(container);
+                    }
                 }
-                // Card has two faces — front (default content) and back (AI reasoning).
-                // Back is only rendered if there's a meaningful aam_janta translation.
-                const aamJanta = (news.aam_janta_translation || '').trim();
-                const backHtml = aamJanta ? `
-                    <div class="nc-back">
-                        <div class="nc-back-label">AI Reasoning</div>
-                        <div class="nc-back-body">${escapeHtml(aamJanta.length > 320 ? aamJanta.slice(0, 320) + '…' : aamJanta)}</div>
-                    </div>
-                ` : '';
-                item.innerHTML = `
-                    <div class="nc-front">
-                        <div class="flex items-center gap-1.5 text-[9px] text-violet-400 font-mono mb-2">
-                            <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                            ${dateStr} · ${timeStr}
-                        </div>
-                        <div class="flex items-start justify-between gap-4 mb-3">
-                            <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${escapeHtml(news.headline)}</h3>
-                        </div>
-                        <div class="stock-badge-container items-center gap-3 pt-3 border-t border-white/5 transition-opacity duration-300"
-                             style="display: ${isNonStockMode ? 'none' : 'flex'}">
-                            <svg class="w-3.5 h-3.5 text-slate-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
-                            <div class="flex flex-wrap gap-2">${impactedStocksHtml}</div>
-                        </div>
-                    </div>
-                    ${backHtml}
-                `;
-                container.appendChild(item);
-            });
+            }, { rootMargin: '600px 0px', threshold: 0.01 });
+
+            _renderArchiveBatch(container);
         }
 
         // ==========================================
