@@ -373,8 +373,13 @@ def route_cache(ttl_seconds: int):
         return wrapper
     return deco
 
-# Minimum AI confidence to accept a prediction
-MIN_CONFIDENCE = 50
+# Minimum AI confidence to accept a prediction.
+# Was 50 — let too much noise through. Live 30d stats showed 0% hit rate
+# across all confidence bands (90+ included), so the score wasn't predictive
+# at low cutoffs. 75 cuts approved-signal volume ~half, but the survivors
+# carry stronger model agreement. Env-tunable so we can dial it back if the
+# market regime flips and signal count crashes.
+MIN_CONFIDENCE = int(os.environ.get("MIN_CONFIDENCE", "75"))
 
 # Signal evaluation rules used by startup repair and the live price worker.
 TRADE_TARGET_PCT = 2.0
@@ -1307,6 +1312,21 @@ SEEN_HEADLINES = set()
 # Prevents the same ticker+direction from generating duplicate signals within 24 hours.
 # Format: { "SBIN.NS_BULLISH": datetime_utc }
 RECENT_SIGNALS: dict = {}
+
+# ── Directional Bias Circuit-Breaker ──
+# Tracks directions of recently APPROVED signals (rolling window). When the
+# stream is dominated by one direction (e.g. 5/5 bearish like our live data
+# showed), demand extra confidence on the dominant side. This prevents the
+# model from going 100% one-way during a bull/bear news cycle.
+#
+# Tunables:
+#   BIAS_WINDOW         — how many recent signals to consider (default 20)
+#   BIAS_THRESHOLD_PCT  — bias trigger threshold (default 70)
+#   BIAS_CONF_BOOST     — extra confidence required on the biased side (default 10)
+import collections as _collections
+RECENT_DIRECTIONS: _collections.deque = _collections.deque(
+    maxlen=int(os.environ.get("BIAS_WINDOW", "20"))
+)
 
 # NOTE: SM_GEMINI_CLIENT (aimlapi.com) removed — key expired.
 # quant_ai_screener now uses the google-genai 'client' (same as Phase 2)
@@ -2245,7 +2265,8 @@ def _get_yahoo_official_close(ticker):
 
 def ai_news_worker():
     print("[SYSTEM] Alpha Lens v6.0 AI ENSEMBLE Engine Started!")
-    print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 5-Model Ensemble (>= 50 score & 3/5 vote, no technical-model veto)")
+    _min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "4"))
+    print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 5-Model Ensemble (>= {MIN_CONFIDENCE} score & {_min_agree}/5 vote, no technical-model veto)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = {TRADE_STOP_PCT}% stop : {TRADE_TARGET_PCT}% target")
     import sys as _sys
@@ -2274,6 +2295,26 @@ def ai_news_worker():
             if row[0]:
                 SEEN_HEADLINES.add(row[0].lower().strip())
         print(f"   [SEEN_HEADLINES] Loaded {len(SEEN_HEADLINES)} headlines that already exist in database.")
+
+        # Pre-seed the directional bias window from the most-recent N approved
+        # signals. Without this, every redeploy resets the rolling window and
+        # the circuit-breaker is blind until 10 new signals accumulate. Loaded
+        # newest-first then reversed so the deque order matches chronological.
+        try:
+            _bias_win = int(os.environ.get("BIAS_WINDOW", "20"))
+            c.execute(f"""
+                SELECT impact FROM stock_impact
+                ORDER BY id DESC LIMIT {_bias_win}
+            """)
+            _recent_impacts = [r[0] for r in c.fetchall() if r and r[0]]
+            for _imp in reversed(_recent_impacts):
+                _dir = 'BULLISH' if 'bull' in _imp.lower() else ('BEARISH' if 'bear' in _imp.lower() else None)
+                if _dir:
+                    RECENT_DIRECTIONS.append(_dir)
+            print(f"   [BIAS] Pre-seeded {len(RECENT_DIRECTIONS)} recent directions from DB.")
+        except Exception as _be:
+            print(f"   [BIAS] Pre-seed failed (non-fatal): {_be}")
+
         conn.close()
     except Exception as e:
         print(f"   [DB Init Error] {e}")
@@ -3017,18 +3058,29 @@ Return ONLY valid JSON matching this shape:
 
             # ── ATR-BASED DYNAMIC STOP & TARGET ──
             # ATR (Average True Range) measures a stock's typical daily price swing.
-            # We set stop = max(1.0, atr_pct * 1.0) and target = max(2.0, atr_pct * 2.0)
-            # This gives a consistent 2:1 Reward:Risk ratio regardless of stock volatility.
+            # Stop = atr_pct * 1.0 (capped 1.0-2.5%), Target = atr_pct * 2.0 (capped 2-5%).
+            # Locks the R:R at ~2:1 while scaling with each stock's actual volatility.
+            #
+            # No-ATR policy: REQUIRE_ATR=1 (default) skips the signal entirely if
+            # ATR data isn't available. Previously we fell back to the static
+            # 1%/2% defaults — but on a high-vol stock that means we were
+            # setting a stop INSIDE intraday noise, which explains a chunk of
+            # the 100% stop-hit rate in the live data. Set REQUIRE_ATR=0 to
+            # restore the old fallback behaviour.
             _atr_pct = 0.0
             if tech_data and tech_data.get('atr_pct'):
                 _atr_pct = float(tech_data['atr_pct'])
             if _atr_pct > 0:
                 _dynamic_stop   = round(min(2.5, max(1.0, _atr_pct * 1.0)), 2)  # cap at 2.5%
                 _dynamic_target = round(min(5.0, max(2.0, _atr_pct * 2.0)), 2)  # cap at 5% (2:1 Reward:Risk)
+                print(f"   [ATR] {ticker}: ATR={_atr_pct:.2f}% → stop={_dynamic_stop:.2f}% target={_dynamic_target:.2f}%")
             else:
-                _dynamic_stop   = TRADE_STOP_PCT    # fallback to config default
+                if os.environ.get("REQUIRE_ATR", "1").lower() in ("1", "true", "yes"):
+                    print(f"   [ATR] {ticker}: no ATR data — SKIPPING signal (REQUIRE_ATR=1).")
+                    continue
+                _dynamic_stop   = TRADE_STOP_PCT
                 _dynamic_target = TRADE_TARGET_PCT
-            print(f"   [ATR] {ticker}: ATR={_atr_pct:.2f}% → stop={_dynamic_stop:.2f}% target={_dynamic_target:.2f}%")
+                print(f"   [ATR] {ticker}: no ATR — falling back to static {_dynamic_stop:.1f}%/{_dynamic_target:.1f}%")
 
             # Predict using Ensemble
             result = ensemble.predict(
@@ -3046,6 +3098,22 @@ Return ONLY valid JSON matching this shape:
             )
 
             if result['approved']:
+                # ── Directional bias circuit-breaker ──
+                # If recent approved signals are dominated by one direction, demand
+                # extra confidence on that side. Live 30d data showed 5/5 bearish
+                # — that pattern would now require +10 confidence to push another
+                # bearish through, naturally rebalancing the stream over time.
+                if len(RECENT_DIRECTIONS) >= 10:
+                    _same = sum(1 for d in RECENT_DIRECTIONS if d == result['direction'])
+                    _bias_pct = (_same / len(RECENT_DIRECTIONS)) * 100.0
+                    _bias_threshold = float(os.environ.get("BIAS_THRESHOLD_PCT", "70"))
+                    if _bias_pct >= _bias_threshold:
+                        _bias_boost = int(os.environ.get("BIAS_CONF_BOOST", "10"))
+                        _required = MIN_CONFIDENCE + _bias_boost
+                        if result['final_score'] < _required:
+                            print(f"   [BIAS] {ticker} {result['direction']} REJECTED — last {len(RECENT_DIRECTIONS)} signals are {_bias_pct:.0f}% {result['direction']}; need score >= {_required} (got {result['final_score']})")
+                            continue
+
                 view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
                 quality = signal.get("quality_score")
                 quality_note = f" Stock-pick quality: {quality}/100." if quality else ""
@@ -3054,6 +3122,9 @@ Return ONLY valid JSON matching this shape:
                 approved_signals.append((news_id, ticker, result['direction'], _dynamic_target,
                                          view, reason, base_price, current_price_now,
                                          result['final_score'], tech_context_str, result['detail'], _pub_dt_utc_str))
+                # Record this direction in the rolling bias window so the
+                # circuit-breaker above can see the trend on subsequent signals.
+                RECENT_DIRECTIONS.append(result['direction'])
 
                 # ── WhatsApp alert dispatch (high-conviction only) ──
                 # Spawned on a daemon thread so Meta Cloud API latency NEVER
