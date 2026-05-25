@@ -434,20 +434,22 @@ def get_oi_buildup(ticker):
       'SHORT_COVERING' — price up + OI down (bullish but weak follow-through)
       'SHORT_BUILDUP'  — price down + OI up (bearish, institutional shorts)
       'LONG_UNWINDING' — price down + OI down (bearish but weak follow-through)
-      'NEUTRAL'        — no clear pattern
-      'NOT_FNO'        — stock not in F&O segment (most small/mid-caps)
-      'UNKNOWN'        — F&O data source unavailable
+      'NEUTRAL'        — no clear pattern (price move below threshold)
+      'NOT_FNO'        — stock not in F&O segment
+      'UNKNOWN'        — bhavcopy fetch failed or unavailable
 
-    Implementation note: currently returns 'UNKNOWN' as a placeholder. The
-    TechnicalAlignmentModel treats 'UNKNOWN' as neutral (no scoring impact),
-    so this is safe to ship. When NSE F&O bhavcopy fetching is wired in,
-    this function becomes the single integration point. See:
-      - https://www.nseindia.com/api/snapshot-derivatives-equity
-      - daily bhavcopy: https://archives.nseindia.com/content/fo/bhav_<DATE>.csv
-    Both require careful session handling because NSE blocks unauthenticated
-    requests. Recommend caching daily and storing in stock_impact.ensemble_detail.
+    Delegates to oi_data.get_oi_buildup_for_ticker, which downloads NSE's
+    daily F&O bhavcopy once per process (cached 4h) and aggregates OI across
+    all stock-future expiries. Safe — never raises; returns 'UNKNOWN' on any
+    failure so the ensemble degrades gracefully.
     """
-    return 'UNKNOWN'
+    try:
+        import oi_data
+        return oi_data.get_oi_buildup_for_ticker(ticker)
+    except Exception as e:
+        # Never let an OI fetch break the technical-context build
+        print(f"[OI] get_oi_buildup({ticker!r}) failed: {e}")
+        return 'UNKNOWN'
 
 
 def compute_fibonacci_levels(highs, lows, lookback=60):
