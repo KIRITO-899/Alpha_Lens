@@ -310,12 +310,144 @@ def compute_vwap(highs, lows, closes, volumes):
     cumulative_tp_vol = 0
     for i in range(len(closes)):
         typical_price = (highs[i] + lows[i] + closes[i]) / 3
-        vol = volumes[i]
+        vol = volumes[i] or 0
         cumulative_tp_vol += typical_price * vol
         total_volume += vol
     if total_volume == 0:
         return None
     return round(cumulative_tp_vol / total_volume, 2)
+
+
+def compute_anchored_vwap(highs, lows, closes, volumes, anchor_bars_back):
+    """
+    Compute VWAP anchored to a specific point in the past.
+
+    `anchor_bars_back` = how many bars back the anchor is. Examples:
+      - 5  → VWAP over the most recent 5 bars (a recent-event anchor proxy)
+      - 20 → VWAP over the most recent 20 bars (intermediate anchor)
+      - len(closes) → identical to compute_vwap (full history)
+
+    Institutions use Anchored VWAP from significant events: earnings,
+    52-week lows, breakout days, news catalysts. With daily bars we
+    approximate by anchoring N bars back.
+
+    Returns the anchored VWAP price or None.
+    """
+    if not closes or anchor_bars_back is None or anchor_bars_back <= 0:
+        return None
+    anchor_bars_back = min(anchor_bars_back, len(closes))
+    h = highs[-anchor_bars_back:]
+    l = lows[-anchor_bars_back:]
+    c = closes[-anchor_bars_back:]
+    v = volumes[-anchor_bars_back:]
+    return compute_vwap(h, l, c, v)
+
+
+def compute_keltner_channels(highs, lows, closes, period=20, atr_mult=1.5):
+    """
+    Keltner Channels = EMA(close, period) ± atr_mult × ATR(period).
+    Needed for the TTM Squeeze indicator.
+
+    Returns (upper, middle, lower) or (None, None, None).
+    """
+    if len(closes) < period * 2 + 1:
+        return None, None, None
+    middle = compute_ema(closes, period)
+    atr = compute_atr(highs, lows, closes, period)
+    if middle is None or atr is None:
+        return None, None, None
+    upper = middle + atr_mult * atr
+    lower = middle - atr_mult * atr
+    return round(upper, 2), round(middle, 2), round(lower, 2)
+
+
+def compute_ttm_squeeze(highs, lows, closes, bb_period=20, bb_std=2.0,
+                        kc_period=20, kc_mult=1.5):
+    """
+    TTM Squeeze — detect volatility contraction (squeeze on) and breakout (squeeze fire).
+
+    The squeeze is ON when Bollinger Bands are completely INSIDE Keltner Channels.
+    That means the market is unusually quiet vs its own trend volatility — a coil
+    that historically resolves with a sharp directional move.
+
+    The squeeze FIRES when the BB widens back outside KC.  Direction of the fire
+    is inferred from the slope of the last 10 closes (linear regression).
+
+    Returns dict:
+      in_squeeze        : bool — currently coiled
+      squeeze_release   : 'BULLISH' / 'BEARISH' / None — just fired this bar
+      momentum          : float — slope/y_mean signed magnitude proxy
+    """
+    default = {'in_squeeze': False, 'squeeze_release': None, 'momentum': 0.0}
+    min_bars_needed = max(bb_period, kc_period * 2 + 1) + 1
+    if len(closes) < min_bars_needed:
+        return default
+
+    def _squeeze_at(h, l, c):
+        """Is BB inside KC at this snapshot of price history?"""
+        sma = sum(c[-bb_period:]) / bb_period
+        std = (sum((x - sma) ** 2 for x in c[-bb_period:]) / bb_period) ** 0.5
+        bb_upper = sma + bb_std * std
+        bb_lower = sma - bb_std * std
+        kc_upper, _, kc_lower = compute_keltner_channels(h, l, c, kc_period, kc_mult)
+        if kc_upper is None or kc_lower is None:
+            return None
+        return bb_upper < kc_upper and bb_lower > kc_lower
+
+    sq_now = _squeeze_at(highs, lows, closes)
+    sq_prev = _squeeze_at(highs[:-1], lows[:-1], closes[:-1])
+    if sq_now is None or sq_prev is None:
+        return default
+
+    # Momentum proxy: slope of last 10 closes normalized by mean
+    momentum = 0.0
+    if len(closes) >= 10:
+        recent = closes[-10:]
+        n = 10
+        x_mean = (n - 1) / 2
+        y_mean = sum(recent) / n
+        num = sum((i - x_mean) * (recent[i] - y_mean) for i in range(n))
+        den = sum((i - x_mean) ** 2 for i in range(n))
+        if den > 0 and y_mean != 0:
+            momentum = (num / den) / y_mean
+
+    release = None
+    if sq_prev and not sq_now:
+        if momentum > 0.0005:
+            release = 'BULLISH'
+        elif momentum < -0.0005:
+            release = 'BEARISH'
+
+    return {
+        'in_squeeze': sq_now,
+        'squeeze_release': release,
+        'momentum': round(momentum, 5),
+    }
+
+
+def get_oi_buildup(ticker):
+    """
+    Detect Open Interest build-up pattern for F&O-eligible stocks.
+
+    Returns one of:
+      'LONG_BUILDUP'   — price up + OI up   (bullish, institutional longs)
+      'SHORT_COVERING' — price up + OI down (bullish but weak follow-through)
+      'SHORT_BUILDUP'  — price down + OI up (bearish, institutional shorts)
+      'LONG_UNWINDING' — price down + OI down (bearish but weak follow-through)
+      'NEUTRAL'        — no clear pattern
+      'NOT_FNO'        — stock not in F&O segment (most small/mid-caps)
+      'UNKNOWN'        — F&O data source unavailable
+
+    Implementation note: currently returns 'UNKNOWN' as a placeholder. The
+    TechnicalAlignmentModel treats 'UNKNOWN' as neutral (no scoring impact),
+    so this is safe to ship. When NSE F&O bhavcopy fetching is wired in,
+    this function becomes the single integration point. See:
+      - https://www.nseindia.com/api/snapshot-derivatives-equity
+      - daily bhavcopy: https://archives.nseindia.com/content/fo/bhav_<DATE>.csv
+    Both require careful session handling because NSE blocks unauthenticated
+    requests. Recommend caching daily and storing in stock_impact.ensemble_detail.
+    """
+    return 'UNKNOWN'
 
 
 def compute_fibonacci_levels(highs, lows, lookback=60):
@@ -560,9 +692,30 @@ def get_stock_technical_context(ticker, lookback_days=90):
         # ── OBV Trend ──
         obv_trend = compute_obv_trend(closes, volumes)
 
-        # ── VWAP ──
+        # ── VWAP (rolling 20-day) ──
         vwap = compute_vwap(highs[-20:], lows[-20:], closes[-20:], volumes[-20:])
         above_vwap = current_price > vwap if vwap else None
+
+        # ── Anchored VWAP (recent 5-bar) ──
+        # Acts as a "news-event anchor" proxy. When a fresh catalyst lands,
+        # institutions watch this short-window VWAP to gauge whether the
+        # post-event order flow is sustaining the move.
+        anchored_vwap_5 = compute_anchored_vwap(highs, lows, closes, volumes, 5)
+        above_anchored_vwap = (current_price > anchored_vwap_5) if anchored_vwap_5 else None
+
+        # ── TTM Squeeze ──
+        # Bollinger Bands inside Keltner Channels = volatility contraction.
+        # When BB widens back outside KC, the squeeze "fires" — historically a
+        # premier directional trigger.
+        ttm = compute_ttm_squeeze(highs, lows, closes)
+        ttm_in_squeeze = ttm.get('in_squeeze', False)
+        ttm_release = ttm.get('squeeze_release')  # 'BULLISH' / 'BEARISH' / None
+        ttm_momentum = ttm.get('momentum', 0.0)
+
+        # ── OI Build-up (F&O stocks only) ──
+        # Currently returns 'UNKNOWN' — placeholder until NSE F&O data wired.
+        # The score model treats 'UNKNOWN' as neutral so this is safe to ship.
+        oi_buildup = get_oi_buildup(ticker)
 
         # ── Fibonacci Retracement ──
         fib_levels = compute_fibonacci_levels(highs, lows, lookback=60)
@@ -648,6 +801,14 @@ def get_stock_technical_context(ticker, lookback_days=90):
             # VWAP
             "vwap": vwap,
             "above_vwap": above_vwap,
+            "anchored_vwap_5": anchored_vwap_5,
+            "above_anchored_vwap": above_anchored_vwap,
+            # TTM Squeeze
+            "ttm_in_squeeze": ttm_in_squeeze,
+            "ttm_release": ttm_release,
+            "ttm_momentum": ttm_momentum,
+            # F&O OI Build-up
+            "oi_buildup": oi_buildup,
             # Fibonacci
             "fib_levels": fib_levels,
             "fib_position": fib_position,
@@ -768,6 +929,9 @@ def format_technical_context_for_prompt(tech_data):
         f"ATR: {tech_data['atr']} ({tech_data['atr_pct']}% of price)",
         f"Bollinger: %B={tech_data['bb_percent_b']} Bandwidth={tech_data['bb_bandwidth']} {'⚡SQUEEZE' if tech_data['bb_squeeze'] else ''}",
         f"OBV Trend: {tech_data['obv_trend']} | VWAP: ₹{tech_data['vwap']} (Price {'above' if tech_data['above_vwap'] else 'below'})",
+        f"Anchored VWAP (5-bar): ₹{tech_data.get('anchored_vwap_5')} (Price {'above' if tech_data.get('above_anchored_vwap') else 'below'})",
+        f"TTM Squeeze: {'IN_SQUEEZE' if tech_data.get('ttm_in_squeeze') else 'NO_SQUEEZE'}" + (f" → FIRING {tech_data['ttm_release']}" if tech_data.get('ttm_release') else "") + f" (momentum={tech_data.get('ttm_momentum', 0)})",
+        f"OI Buildup (F&O): {tech_data.get('oi_buildup', 'UNKNOWN')}",
         f"Volume Profile: POC=₹{tech_data.get('vp_poc')} | VAH=₹{tech_data.get('vp_vah')} | VAL=₹{tech_data.get('vp_val')}",
         f"Liquidity Sweep: {tech_data.get('liquidity_sweep', 'NONE')}",
         f"Fibonacci Position: {tech_data['fib_position']}",

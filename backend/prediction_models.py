@@ -167,12 +167,50 @@ class TechnicalAlignmentModel:
             s += 5 if not bull else -3
 
         # ── 8. VWAP Position (institutional reference) ──
+        # Two VWAP views: the 20-bar (medium-term reference for systematic algos)
+        # and the 5-bar anchored VWAP (short-term flow / news-event reaction).
+        # Both pointing the same way as the signal = strong institutional confirm.
         above_vwap = tech_data.get('above_vwap')
+        above_avwap = tech_data.get('above_anchored_vwap')
         if above_vwap is not None:
             if bull and above_vwap: s += 4
             elif bull and not above_vwap: s -= 3
             elif not bull and not above_vwap: s += 4
             elif not bull and above_vwap: s -= 3
+        if above_avwap is not None:
+            # Anchored VWAP is the fresher signal (5-bar window). Confirmation
+            # here is worth slightly more than the rolling 20-bar VWAP.
+            if bull and above_avwap: s += 5
+            elif bull and not above_avwap: s -= 4
+            elif not bull and not above_avwap: s += 5
+            elif not bull and above_avwap: s -= 4
+
+        # ── 8b. TTM Squeeze ──
+        # "In squeeze" alone = small bonus (anticipation, market is coiling).
+        # "Squeeze fires" in the direction of our signal = HIGH-conviction trigger.
+        # "Squeeze fires" AGAINST our direction = strong contra-evidence.
+        ttm_squeeze = tech_data.get('ttm_in_squeeze', False)
+        ttm_release = tech_data.get('ttm_release')  # 'BULLISH' / 'BEARISH' / None
+        if ttm_squeeze:
+            s += 3  # Coiled — small directional-agnostic bonus
+        if ttm_release == 'BULLISH':
+            s += 10 if bull else -10
+        elif ttm_release == 'BEARISH':
+            s += 10 if not bull else -10
+
+        # ── 8c. F&O Open Interest Build-up (F&O stocks only) ──
+        # 'UNKNOWN' and 'NOT_FNO' are neutral (no score impact) so this section
+        # is safe even before the NSE F&O data source is wired.
+        oi = tech_data.get('oi_buildup', 'UNKNOWN')
+        if oi == 'LONG_BUILDUP':
+            s += 10 if bull else -8     # Strong bull confirmation / strong bear contradiction
+        elif oi == 'SHORT_BUILDUP':
+            s += 10 if not bull else -8 # Strong bear confirmation / strong bull contradiction
+        elif oi == 'SHORT_COVERING':
+            s += 3 if bull else -3      # Bullish but weaker (forced buying, not conviction)
+        elif oi == 'LONG_UNWINDING':
+            s += 3 if not bull else -3  # Bearish but weaker (profit-taking, not new shorts)
+        # 'NEUTRAL', 'UNKNOWN', 'NOT_FNO' → no change
 
         # ── 9. Fibonacci Position ──
         fib_pos = tech_data.get('fib_position', 'UNKNOWN')
@@ -634,10 +672,18 @@ class EnsemblePredictor:
 
     WEIGHTS = {
         'historical': 0.15,
-        'technical': 0.20,
-        'sector': 0.10,   # Re-enabled: sector momentum is critical for direction accuracy
+        # Bumped from 0.20 → 0.25 alongside VWAP+AVWAP, TTM Squeeze, and
+        # OI-buildup additions to TechnicalAlignmentModel. The technical
+        # model is now substantially richer (more institutional indicators),
+        # so it warrants more weight in the final decision.
+        'technical': 0.25,
+        # Cut from 0.10 → 0.05 to keep weights summing to 1.0. Sector
+        # momentum still matters but it's the least signal-dense of the
+        # five models — most of its information is already captured in
+        # the technical model's RS/trend context.
+        'sector': 0.05,
         'indian_market': 0.15,
-        'ai_logic': 0.40,  # Reduced from 0.50: better balance across all models
+        'ai_logic': 0.40,
     }
 
     def __init__(self):
