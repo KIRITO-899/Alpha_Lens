@@ -1528,7 +1528,7 @@
                                 Track Record
                             </h1>
                             <p class="text-sm text-[color:var(--text-secondary)] mt-3 max-w-xl">
-                                Every AI signal we publish is graded against a 2% target / 1% stop. Below is the honest scoreboard — hits, misses, and the edge at each confidence band.
+                                Every AI signal we publish is graded against an adaptive <span class="text-[color:var(--accent-bright)] font-semibold">1:2 risk-to-reward</span> — stop and target sized to each stock's ATR. Below is the honest scoreboard — hits, misses, and the edge at each confidence band.
                             </p>
                         </div>
                         <div class="flex items-center gap-2 self-start md:self-end" id="tr-range-tabs">
@@ -1618,7 +1618,7 @@
                         <svg class="w-4 h-4 mt-0.5 shrink-0" style="color:var(--accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         <div class="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
                             <span class="font-bold text-[color:var(--accent-bright)]">Methodology.</span>
-                            Every signal carries a price target of +2% (bullish) / −2% (bearish) and a stop at the inverse 1%. Outcome is the first level the live tape touches. <span class="text-[color:var(--text-primary)] font-semibold">Expired</span> signals (not resolved within 72h) are excluded from hit-rate. No survivorship bias — every signal we publish appears here.
+                            Every signal runs an adaptive <span class="text-[color:var(--text-primary)] font-semibold">1:2 risk-to-reward</span> — stop sized to the stock's recent <span class="text-[color:var(--text-primary)] font-semibold">ATR (Average True Range)</span> × 1, target sized to ATR × 2. Volatile names get wider levels, quieter names tighter. Stop floor 1.0%, ceiling 2.5%; target floor 2.0%, ceiling 5.0%. Outcome is the first level the live tape touches. <span class="text-[color:var(--text-primary)] font-semibold">Expired</span> signals (unresolved within 72h) are excluded from hit-rate. No survivorship bias — every signal we publish appears here.
                         </div>
                     </div>
                 </div>
