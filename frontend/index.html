@@ -386,29 +386,182 @@
         .conf-mid{color:var(--amber)}
         .conf-low{color:var(--red)}
 
-        /* ── HEATMAP ── */
-        .heatmap-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:4px}
-        .hm-tile{
-            border-radius:10px;padding:10px 6px;
-            display:flex;flex-direction:column;align-items:center;justify-content:center;
-            text-align:center;cursor:pointer;
-            transition:transform 0.18s cubic-bezier(0.4,0,0.2,1),box-shadow 0.18s;
-            min-height:68px;position:relative;overflow:hidden;
+        /* ── TRACK RECORD (premium backtest dashboard) ── */
+        .tr-hero{
+            background:
+                radial-gradient(ellipse 60% 100% at 0% 0%, rgba(201,169,98,0.06) 0%, transparent 60%),
+                radial-gradient(ellipse 60% 100% at 100% 100%, rgba(16,217,140,0.04) 0%, transparent 60%),
+                linear-gradient(180deg, rgba(20,18,14,0.85) 0%, rgba(14,14,18,0.88) 100%);
+            border:1px solid var(--border-accent);
+            box-shadow:
+                0 20px 60px rgba(0,0,0,0.55),
+                0 0 0 1px rgba(201,169,98,0.05) inset,
+                0 1px 0 rgba(255,255,255,0.04) inset;
         }
-        .hm-tile:hover{transform:scale(1.06);z-index:10;box-shadow:0 8px 24px rgba(0,0,0,0.5)}
-        .hm-tile::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:rgba(255,255,255,0.1)}
-        .hm-tile.bull-strong{background:rgba(16,217,140,0.14);border:1px solid rgba(16,217,140,0.3)}
-        .hm-tile.bull-mid{background:rgba(16,217,140,0.06);border:1px solid rgba(16,217,140,0.15)}
-        .hm-tile.bear-strong{background:rgba(255,51,102,0.14);border:1px solid rgba(255,51,102,0.3)}
-        .hm-tile.bear-mid{background:rgba(255,51,102,0.06);border:1px solid rgba(255,51,102,0.15)}
-        .hm-tile.neutral{background:rgba(255,255,255,0.02);border:1px solid var(--border)}
-        .hm-sym{font-size:10px;font-weight:800;color:var(--text-primary);letter-spacing:-.02em;font-family:'Space Grotesk',sans-serif}
-        .hm-name{font-size:7.5px;color:var(--text-tertiary);margin-top:2px;font-weight:500}
-        .hm-pct{font-size:11px;font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums;font-family:'JetBrains Mono',monospace}
-        .hm-pct.up{color:var(--green)}
-        .hm-pct.dn{color:var(--red)}
-        .hm-pct.flat{color:var(--text-tertiary)}
-        .hm-signal-dot{position:absolute;top:5px;right:5px;width:5px;height:5px;border-radius:50%;box-shadow:0 0 6px currentColor}
+        .tr-hero-bloom{position:absolute;border-radius:50%;filter:blur(80px);pointer-events:none}
+        .tr-hero-bloom-a{width:380px;height:380px;background:rgba(201,169,98,0.10);top:-160px;left:-100px}
+        .tr-hero-bloom-b{width:300px;height:300px;background:rgba(16,217,140,0.06);bottom:-140px;right:-80px}
+        .tr-pro-pill{
+            display:inline-flex;align-items:center;
+            font-family:'Space Grotesk',sans-serif;
+            font-size:9px;font-weight:800;letter-spacing:0.22em;
+            padding:3px 9px;border-radius:99px;
+            background:linear-gradient(135deg, var(--accent) 0%, var(--accent-bright) 100%);
+            color:#0b0a08;
+            box-shadow:0 0 14px rgba(201,169,98,0.35), 0 1px 0 rgba(255,255,255,0.3) inset;
+        }
+        .tr-nav-pro{
+            font-family:'Space Grotesk',sans-serif;
+            font-size:8px;font-weight:800;letter-spacing:0.18em;
+            padding:1px 5px;border-radius:4px;line-height:1.4;
+            background:linear-gradient(135deg, var(--accent) 0%, var(--accent-bright) 100%);
+            color:#0b0a08;
+        }
+        .tr-range-btn{
+            font-family:'JetBrains Mono',monospace;
+            font-size:11px;font-weight:700;letter-spacing:0.08em;
+            padding:7px 14px;border-radius:8px;
+            background:rgba(255,255,255,0.02);
+            border:1px solid var(--border);
+            color:var(--text-tertiary);
+            cursor:pointer;
+            transition:all 0.18s var(--ease-out);
+        }
+        .tr-range-btn:hover{color:var(--text-primary);border-color:var(--border-bright);background:rgba(255,255,255,0.04)}
+        .tr-range-active{
+            color:#0b0a08 !important;
+            background:linear-gradient(135deg, var(--accent) 0%, var(--accent-bright) 100%) !important;
+            border-color:var(--accent-bright) !important;
+            box-shadow:0 0 16px var(--accent-glow), 0 1px 0 rgba(255,255,255,0.25) inset;
+        }
+        .tr-kpi{
+            position:relative;padding:20px 22px;border-radius:16px;
+            background:linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+            border:1px solid var(--border);
+            overflow:hidden;
+            transition:transform 0.22s var(--ease-out), border-color 0.22s var(--ease-out);
+        }
+        .tr-kpi:hover{transform:translateY(-2px);border-color:var(--border-bright)}
+        .tr-kpi::before{
+            content:'';position:absolute;left:0;top:0;bottom:0;width:2px;
+            background:linear-gradient(180deg, transparent 0%, currentColor 35%, currentColor 65%, transparent 100%);
+            opacity:0.55;
+        }
+        .tr-kpi-accent{color:var(--accent)}
+        .tr-kpi-green{color:var(--green)}
+        .tr-kpi-red{color:var(--red)}
+        .tr-kpi-amber{color:var(--amber)}
+        .tr-kpi-label{
+            font-family:'JetBrains Mono',monospace;
+            font-size:10px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;
+            color:var(--text-tertiary);
+            margin-bottom:8px;
+        }
+        .tr-kpi-value{
+            font-family:'Space Grotesk',sans-serif;
+            font-size:36px;font-weight:900;letter-spacing:-0.03em;line-height:1;
+            color:var(--text-primary);
+            font-variant-numeric:tabular-nums;
+        }
+        .tr-kpi-value.lg{font-size:42px}
+        .tr-kpi-sub{
+            margin-top:8px;font-size:11px;color:var(--text-secondary);line-height:1.4;
+        }
+        .tr-kpi-pct{
+            font-family:'JetBrains Mono',monospace;
+            font-size:11px;font-weight:700;
+            padding:2px 7px;border-radius:5px;
+            background:rgba(255,255,255,0.04);
+            color:var(--text-secondary);
+            margin-left:6px;
+        }
+
+        /* premium tables */
+        .tr-table{border-collapse:separate;border-spacing:0;font-size:12.5px}
+        .tr-table thead th{
+            font-family:'JetBrains Mono',monospace;
+            font-size:9.5px;font-weight:700;letter-spacing:0.18em;text-transform:uppercase;
+            color:var(--text-tertiary);
+            padding:10px 14px 14px;
+            border-bottom:1px solid var(--border-medium);
+        }
+        .tr-table tbody td{
+            padding:14px;
+            border-bottom:1px solid var(--border-subtle);
+            color:var(--text-primary);
+            vertical-align:middle;
+        }
+        .tr-table tbody tr:last-child td{border-bottom:none}
+        .tr-table tbody tr{transition:background 0.15s var(--ease-out)}
+        .tr-table tbody tr:hover{background:rgba(201,169,98,0.025)}
+        .tr-band-label{font-family:'JetBrains Mono',monospace;font-weight:700;letter-spacing:0.04em;color:var(--text-primary)}
+        .tr-num{font-family:'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;font-weight:600}
+        .tr-num-strong{font-family:'Space Grotesk',sans-serif;font-weight:800;font-size:14px;letter-spacing:-0.01em}
+        .tr-pos{color:var(--green)}
+        .tr-neg{color:var(--red)}
+        .tr-muted{color:var(--text-tertiary)}
+        .tr-bar-track{
+            position:relative;height:6px;border-radius:99px;
+            background:rgba(255,255,255,0.04);
+            overflow:hidden;
+        }
+        .tr-bar-fill{
+            position:absolute;left:0;top:0;bottom:0;border-radius:99px;
+            background:linear-gradient(90deg, var(--accent-muted) 0%, var(--accent) 60%, var(--accent-bright) 100%);
+            box-shadow:0 0 12px var(--accent-glow);
+            transition:width 0.6s var(--ease-out);
+        }
+
+        /* direction cards */
+        .tr-dir-card{
+            padding:22px 24px;border-radius:16px;position:relative;overflow:hidden;
+            background:linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
+            border:1px solid var(--border);
+        }
+        .tr-dir-card.bull{border-color:var(--green-border);background:linear-gradient(180deg, rgba(16,217,140,0.06) 0%, rgba(16,217,140,0.01) 100%)}
+        .tr-dir-card.bear{border-color:var(--red-border);background:linear-gradient(180deg, rgba(255,51,102,0.06) 0%, rgba(255,51,102,0.01) 100%)}
+        .tr-dir-head{
+            font-family:'JetBrains Mono',monospace;
+            font-size:10px;font-weight:800;letter-spacing:0.22em;text-transform:uppercase;
+        }
+        .tr-dir-head.bull{color:var(--green)}
+        .tr-dir-head.bear{color:var(--red)}
+        .tr-dir-row{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-top:1px solid var(--border-subtle)}
+        .tr-dir-row:first-of-type{border-top:none}
+        .tr-dir-row .tr-dir-label{font-size:11px;color:var(--text-tertiary);font-family:'JetBrains Mono',monospace;letter-spacing:0.08em;text-transform:uppercase}
+
+        /* outcome pill */
+        .tr-outcome{
+            display:inline-flex;align-items:center;gap:6px;
+            font-family:'JetBrains Mono',monospace;
+            font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+            padding:3px 9px;border-radius:6px;
+            border:1px solid;
+        }
+        .tr-outcome.hit{color:var(--green);border-color:var(--green-border);background:var(--green-dim)}
+        .tr-outcome.stop{color:var(--red);border-color:var(--red-border);background:var(--red-dim)}
+        .tr-outcome.expired{color:var(--text-tertiary);border-color:var(--border);background:rgba(255,255,255,0.02)}
+        .tr-dir-pill{
+            display:inline-flex;align-items:center;gap:6px;
+            font-family:'JetBrains Mono',monospace;
+            font-size:10px;font-weight:700;letter-spacing:0.1em;
+        }
+        .tr-dir-pill .dot{width:6px;height:6px;border-radius:50%;display:inline-block;box-shadow:0 0 6px currentColor}
+        .tr-dir-pill.bull{color:var(--green)}
+        .tr-dir-pill.bear{color:var(--red)}
+
+        .tr-method{
+            background:linear-gradient(180deg, rgba(201,169,98,0.04) 0%, rgba(201,169,98,0.01) 100%);
+            border:1px solid var(--accent-border);
+        }
+        .tr-empty{
+            text-align:center;padding:60px 20px;color:var(--text-tertiary);
+        }
+        .tr-empty-headline{
+            font-family:'Space Grotesk',sans-serif;font-size:22px;font-weight:800;color:var(--text-primary);
+            margin-bottom:8px;letter-spacing:-0.02em;
+        }
+        .tr-empty-sub{font-size:13px;max-width:420px;margin:0 auto;line-height:1.55}
 
         /* ── SECTOR PILLS ── */
         .sector-pill{
@@ -979,7 +1132,7 @@
                 <a href="#" id="nav-portfolio" onclick="switchTab('portfolio'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Portfolio</a>
                 <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;"
-                    class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Heatmap</a>
+                    class="nav-link text-slate-300 hover:text-white transition stock-mode-element flex items-center gap-1.5">Track Record<span class="tr-nav-pro">PRO</span></a>
                 <a href="#" id="nav-terminal" onclick="switchTab('terminal'); return false;"
                     class="nav-link text-white/50 hover:text-white transition flex items-center gap-2">
                     <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span>Signal Terminal
@@ -1357,27 +1510,119 @@
             </div>
 
             <!-- ============================================== -->
-            <!-- VIEW 5: MAJOR STOCKS AFFECTED                 -->
+            <!-- VIEW 5: TRACK RECORD — backtest dashboard      -->
             <!-- ============================================== -->
-            <div id="view-stocks" class="hidden max-w-6xl mx-auto w-full stock-mode-element">
-                <div class="glass-panel p-6 md:p-8 rounded-xl relative overflow-hidden mb-8 mt-4">
-                    <h1
-                        class="text-3xl md:text-4xl font-display font-black text-white tracking-tight relative z-10 mb-2">
-                        Market Action Heatmap</h1>
-                    <p
-                        class="text-sm text-violet-400 font-mono uppercase tracking-widest flex justify-between items-center">
-                        <span>Extracted from last 7 days of news</span>
-                        <span id="stock-count"
-                            class="text-slate-300 bg-black/40 px-3 py-1 rounded-full border border-white/5">Loading...</span>
-                    </p>
-                </div>
-                <div
-                    class="glass-panel p-6 md:p-8 rounded-xl relative overflow-hidden stock-table-container transition-opacity duration-300">
-                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="all-stocks-grid">
-                        <div class="text-center py-10 col-span-full text-slate-400 animate-pulse">Scanning news for
-                            affected equities...</div>
+            <div id="view-stocks" class="hidden max-w-7xl mx-auto w-full stock-mode-element">
+
+                <!-- ── HERO HEADER ── -->
+                <div class="glass-panel p-7 md:p-10 rounded-2xl relative overflow-hidden mb-6 mt-4 tr-hero">
+                    <div class="tr-hero-bloom tr-hero-bloom-a"></div>
+                    <div class="tr-hero-bloom tr-hero-bloom-b"></div>
+                    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-5 relative z-10">
+                        <div>
+                            <div class="flex items-center gap-2 mb-3">
+                                <span class="tr-pro-pill">PRO</span>
+                                <span class="text-[10px] font-mono uppercase tracking-[0.22em] text-[color:var(--accent)]/80">Independently Verified</span>
+                            </div>
+                            <h1 class="font-display text-4xl md:text-5xl font-black text-white tracking-tight leading-none">
+                                Track Record
+                            </h1>
+                            <p class="text-sm text-[color:var(--text-secondary)] mt-3 max-w-xl">
+                                Every AI signal we publish is graded against a 2% target / 1% stop. Below is the honest scoreboard — hits, misses, and the edge at each confidence band.
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2 self-start md:self-end" id="tr-range-tabs">
+                            <button onclick="setBacktestRange('7d')" data-range="7d" class="tr-range-btn">7D</button>
+                            <button onclick="setBacktestRange('30d')" data-range="30d" class="tr-range-btn tr-range-active">30D</button>
+                            <button onclick="setBacktestRange('90d')" data-range="90d" class="tr-range-btn">90D</button>
+                            <button onclick="setBacktestRange('all')" data-range="all" class="tr-range-btn">ALL</button>
+                        </div>
                     </div>
                 </div>
+
+                <!-- ── KPI HERO CARDS ── -->
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mb-6" id="tr-kpi-row">
+                    <!-- 4 KPI cards injected here -->
+                </div>
+
+                <!-- ── CONFIDENCE BAND TABLE ── -->
+                <div class="glass-panel p-6 md:p-8 rounded-2xl relative overflow-hidden mb-6">
+                    <div class="flex items-baseline justify-between mb-5">
+                        <div>
+                            <h2 class="font-display text-xl md:text-2xl font-black text-white tracking-tight">Edge by Confidence</h2>
+                            <p class="text-[11px] font-mono text-[color:var(--text-tertiary)] uppercase tracking-[0.16em] mt-1">
+                                Higher AI conviction → higher hit rate
+                            </p>
+                        </div>
+                        <span class="text-[10px] font-mono text-[color:var(--text-muted)] uppercase tracking-wider hidden md:inline">Proof of edge</span>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="tr-table w-full" id="tr-confidence-table">
+                            <thead>
+                                <tr>
+                                    <th class="text-left">Confidence Band</th>
+                                    <th class="text-right">Signals</th>
+                                    <th class="text-right">Hits</th>
+                                    <th class="text-right">Stops</th>
+                                    <th class="text-right">Hit Rate</th>
+                                    <th class="text-right">Avg P&L</th>
+                                    <th class="w-[30%]"></th>
+                                </tr>
+                            </thead>
+                            <tbody id="tr-confidence-body">
+                                <tr><td colspan="7" class="text-center py-10 text-[color:var(--text-tertiary)] animate-pulse">Loading track record...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ── DIRECTION SPLIT ── -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 mb-6" id="tr-direction-row">
+                    <!-- 2 direction cards injected here -->
+                </div>
+
+                <!-- ── RECENT CLOSED ── -->
+                <div class="glass-panel p-6 md:p-8 rounded-2xl relative overflow-hidden mb-6">
+                    <div class="flex items-baseline justify-between mb-5">
+                        <div>
+                            <h2 class="font-display text-xl md:text-2xl font-black text-white tracking-tight">Recently Closed Trades</h2>
+                            <p class="text-[11px] font-mono text-[color:var(--text-tertiary)] uppercase tracking-[0.16em] mt-1">
+                                Last 30 signals that hit target, stop, or expired
+                            </p>
+                        </div>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="tr-table tr-trades-table w-full" id="tr-recent-table">
+                            <thead>
+                                <tr>
+                                    <th class="text-left">Date</th>
+                                    <th class="text-left">Ticker</th>
+                                    <th class="text-left">Dir</th>
+                                    <th class="text-right">Conf</th>
+                                    <th class="text-right">Entry</th>
+                                    <th class="text-right">Exit</th>
+                                    <th class="text-right">P&L</th>
+                                    <th class="text-left">Outcome</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tr-recent-body">
+                                <tr><td colspan="8" class="text-center py-10 text-[color:var(--text-tertiary)] animate-pulse">Loading recent trades...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- ── METHODOLOGY ── -->
+                <div class="glass-panel p-5 md:p-6 rounded-2xl tr-method mb-6">
+                    <div class="flex items-start gap-3">
+                        <svg class="w-4 h-4 mt-0.5 shrink-0" style="color:var(--accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <div class="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
+                            <span class="font-bold text-[color:var(--accent-bright)]">Methodology.</span>
+                            Every signal carries a price target of +2% (bullish) / −2% (bearish) and a stop at the inverse 1%. Outcome is the first level the live tape touches. <span class="text-[color:var(--text-primary)] font-semibold">Expired</span> signals (not resolved within 72h) are excluded from hit-rate. No survivorship bias — every signal we publish appears here.
+                        </div>
+                    </div>
+                </div>
+
             </div>
 
             <!-- ============================================== -->
@@ -1455,46 +1700,6 @@
             </div>
 
             <!-- ============================================== -->
-            <!-- VIEW 7: NIFTY 50 HEATMAP (premium overlay)    -->
-            <!-- ============================================== -->
-            <div id="view-heatmap" class="hidden max-w-7xl mx-auto w-full mt-4">
-                <div class="glass-panel p-6 md:p-8 rounded-xl relative overflow-hidden mb-6">
-                    <div class="absolute -left-20 -top-20 w-96 h-96 bg-violet-600/5 rounded-full blur-[100px]"></div>
-                    <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 relative z-10">
-                        <div>
-                            <h1 class="text-3xl md:text-4xl font-display font-black text-white tracking-tight">
-                                Nifty 50 Signal Heatmap</h1>
-                            <p class="text-sm text-violet-400 font-mono uppercase tracking-widest mt-1">AI signal
-                                overlay on market constituents</p>
-                        </div>
-                        <div class="flex items-center gap-3">
-                            <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider"><span
-                                    class="w-3 h-3 rounded bg-emerald-500/40 border border-emerald-500/50"></span><span
-                                    class="text-slate-400">Bullish</span></span>
-                            <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider"><span
-                                    class="w-3 h-3 rounded bg-rose-500/40 border border-rose-500/50"></span><span
-                                    class="text-slate-400">Bearish</span></span>
-                            <span class="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider"><span
-                                    class="w-3 h-3 rounded bg-slate-600/40 border border-slate-500/30"></span><span
-                                    class="text-slate-400">Neutral</span></span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Sector filter -->
-                <div class="flex flex-wrap gap-2 mb-4 px-1" id="heatmap-sector-filters">
-                    <button onclick="setHeatmapSector('all')" class="sector-pill active" data-sec="all">All
-                        Sectors</button>
-                </div>
-
-                <div class="glass-panel p-4 md:p-6 rounded-xl">
-                    <div class="heatmap-grid" id="heatmap-grid">
-                        <div class="text-center py-10 text-slate-400 animate-pulse" style="grid-column:1/-1;">Loading
-                            heatmap...</div>
-                    </div>
-                </div>
-            </div>
-
         </main>
     </div>
 
@@ -1506,7 +1711,7 @@
         let currentArchiveFilter = 'all';
         let selectedHeadlineKey = '';
         let marketOpen = true;  // Updated from API — controls whether stock changes are shown
-        const tabs = ['top-news', 'all-news', 'portfolio', 'stocks', 'terminal', 'heatmap'];
+        const tabs = ['top-news', 'all-news', 'portfolio', 'stocks', 'terminal'];
 
         function getNewsKey(newsItem) {
             return (newsItem?.headline || '').trim().toLowerCase();
@@ -1854,7 +2059,7 @@
             }
             // Lazy-load premium views
             if (targetTabId === 'terminal') fetchTerminalData();
-            if (targetTabId === 'heatmap' || targetTabId === 'stocks') fetchHeatmapData();
+            if (targetTabId === 'stocks') fetchBacktestStats();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
@@ -3061,14 +3266,12 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         animate();
 
         // ══════════════════════════════════════════════════════════════
-        // PREMIUM FEATURES: Ticker Bar, Signal Terminal, Heatmap, Toasts
+        // PREMIUM FEATURES: Ticker Bar, Signal Terminal, Track Record, Toasts
         // ══════════════════════════════════════════════════════════════
 
         let _terminalData = [];
         let _terminalSort = { key: 'confidence', asc: false };
         let _terminalFilter = 'all';
-        let _heatmapData = [];
-        let _heatmapSector = 'all';
         let _lastNotifId = 0;
 
         function initPremiumFeatures() {
@@ -3239,55 +3442,232 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             }
         }
 
-        // ── NIFTY 50 HEATMAP ──
-        async function fetchHeatmapData() {
-            try {
-                const res = await fetch('/api/heatmap-data');
-                const data = await res.json();
-                _heatmapData = data.stocks || [];
-                buildSectorFilters();
-                renderHeatmap();
-            } catch(e) { console.log('Heatmap fetch error', e); }
-        }
+        // ══════════════════════════════════════════════════════════════
+        // TRACK RECORD — premium backtest dashboard
+        // ══════════════════════════════════════════════════════════════
+        let _backtestRange = '30d';
+        let _backtestData = null;
+        let _backtestLoading = false;
 
-        function buildSectorFilters() {
-            const sectors = [...new Set(_heatmapData.map(s => s.sector))].sort();
-            const container = document.getElementById('heatmap-sector-filters');
-            container.innerHTML = '<button onclick="setHeatmapSector(\'all\')" class="sector-pill active" data-sec="all">All Sectors</button>' +
-                sectors.map(s => `<button onclick="setHeatmapSector('${s}')" class="sector-pill" data-sec="${s}">${s}</button>`).join('');
-        }
-
-        function setHeatmapSector(sec) {
-            _heatmapSector = sec;
-            document.querySelectorAll('#heatmap-sector-filters .sector-pill').forEach(b => {
-                b.classList.toggle('active', b.getAttribute('data-sec') === sec);
+        function setBacktestRange(range) {
+            if (_backtestRange === range) return;
+            _backtestRange = range;
+            document.querySelectorAll('#tr-range-tabs .tr-range-btn').forEach(b => {
+                b.classList.toggle('tr-range-active', b.getAttribute('data-range') === range);
             });
-            renderHeatmap();
+            fetchBacktestStats();
         }
 
-        function renderHeatmap() {
-            let stocks = _heatmapData;
-            if (_heatmapSector !== 'all') stocks = stocks.filter(s => s.sector === _heatmapSector);
-            const grid = document.getElementById('heatmap-grid');
-            if (!stocks.length) {
-                grid.innerHTML = '<div class="text-center py-10 text-slate-400" style="grid-column:1/-1;">No data</div>';
+        async function fetchBacktestStats() {
+            if (_backtestLoading) return;
+            _backtestLoading = true;
+            try {
+                const res = await fetch('/api/backtest-stats?range=' + encodeURIComponent(_backtestRange));
+                const data = await res.json();
+                _backtestData = data;
+                renderBacktest();
+            } catch(e) {
+                console.error('Backtest fetch error', e);
+                renderBacktestError();
+            } finally {
+                _backtestLoading = false;
+            }
+        }
+
+        function _fmtPct(v, withSign = true) {
+            if (v == null || Number.isNaN(v)) return '—';
+            const sign = (withSign && v > 0) ? '+' : '';
+            return sign + Number(v).toFixed(2) + '%';
+        }
+        function _fmtPrice(v) {
+            if (v == null || Number.isNaN(v)) return '—';
+            return '₹' + Number(v).toLocaleString('en-IN', {maximumFractionDigits: 2});
+        }
+        function _fmtDate(s) {
+            if (!s) return '—';
+            try {
+                const d = parseSQLiteDate(s);
+                return d.toLocaleDateString('en-IN', {day:'2-digit', month:'short'});
+            } catch { return s.slice(0, 10); }
+        }
+        function _pnlCls(v) { return v == null ? 'tr-muted' : (v >= 0 ? 'tr-pos' : 'tr-neg'); }
+
+        function renderBacktest() {
+            if (!_backtestData) return;
+            renderBacktestKPIs();
+            renderBacktestConfidence();
+            renderBacktestDirection();
+            renderBacktestRecent();
+        }
+
+        function renderBacktestKPIs() {
+            const s = _backtestData.summary || {};
+            const row = document.getElementById('tr-kpi-row');
+            if (!row) return;
+
+            // If no closed signals yet, show an empty-state hero
+            if (!s.ruled_signals) {
+                row.innerHTML = `
+                    <div class="tr-kpi tr-kpi-accent col-span-full">
+                        <div class="tr-empty">
+                            <div class="tr-empty-headline">First signals are still in play</div>
+                            <div class="tr-empty-sub">No closed trades in this window yet. Every Alpha Lens signal is graded against a 2% target / 1% stop — the moment the first batch resolves, the scoreboard below populates.</div>
+                            <div class="tr-kpi-sub mt-4"><span class="tr-num">${s.total_signals || 0}</span> total signals tracked · <span class="tr-num">${s.active_or_pending || 0}</span> currently live</div>
+                        </div>
+                    </div>`;
                 return;
             }
-            grid.innerHTML = stocks.map(s => {
-                let tileCls = 'neutral';
-                if (s.direction === 'BULLISH' && s.has_signal) tileCls = s.confidence >= 70 ? 'bull-strong' : 'bull-mid';
-                else if (s.direction === 'BEARISH' && s.has_signal) tileCls = s.confidence >= 70 ? 'bear-strong' : 'bear-mid';
-                const pct = s.diff_pct || 0;
-                const pctStr = (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%';
-                const pctCls = pct > 0.05 ? 'up' : (pct < -0.05 ? 'dn' : 'flat');
-                const dot = s.has_signal ? `<div class="hm-signal-dot" style="background:${s.direction==='BULLISH'?'#10b981':'#f43f5e'}"></div>` : '';
-                return `<div class="hm-tile ${tileCls}" title="${s.name} — ${s.sector}\n${s.direction} ${s.confidence?s.confidence+'/100':''}">
-                    ${dot}
-                    <div class="hm-sym">${s.symbol}</div>
-                    <div class="hm-name">${s.sector}</div>
-                    <div class="hm-pct ${pctCls}">${pctStr}</div>
+
+            const hr = s.hit_rate;
+            const hrAccent = hr == null ? 'tr-kpi-accent' : (hr >= 60 ? 'tr-kpi-green' : (hr >= 50 ? 'tr-kpi-amber' : 'tr-kpi-red'));
+            const pnlAccent = (s.avg_pnl == null) ? 'tr-kpi-accent' : (s.avg_pnl >= 0 ? 'tr-kpi-green' : 'tr-kpi-red');
+
+            row.innerHTML = `
+                <div class="tr-kpi tr-kpi-accent">
+                    <div class="tr-kpi-label">Total Signals</div>
+                    <div class="tr-kpi-value">${(s.total_signals || 0).toLocaleString('en-IN')}</div>
+                    <div class="tr-kpi-sub">${s.closed_signals || 0} closed · ${s.active_or_pending || 0} live</div>
+                </div>
+                <div class="tr-kpi ${hrAccent}">
+                    <div class="tr-kpi-label">Hit Rate</div>
+                    <div class="tr-kpi-value lg">${hr == null ? '—' : hr.toFixed(1) + '%'}</div>
+                    <div class="tr-kpi-sub">${s.hits || 0} hits · ${s.stops || 0} stops${s.expired ? ' · ' + s.expired + ' expired' : ''}</div>
+                </div>
+                <div class="tr-kpi tr-kpi-green">
+                    <div class="tr-kpi-label">Avg Win</div>
+                    <div class="tr-kpi-value">${s.avg_win == null ? '—' : '+' + Math.abs(s.avg_win).toFixed(2) + '%'}</div>
+                    <div class="tr-kpi-sub">On winning trades only</div>
+                </div>
+                <div class="tr-kpi ${pnlAccent}">
+                    <div class="tr-kpi-label">Avg P&L</div>
+                    <div class="tr-kpi-value">${_fmtPct(s.avg_pnl)}</div>
+                    <div class="tr-kpi-sub">Per closed signal, all-in</div>
                 </div>`;
+        }
+
+        function renderBacktestConfidence() {
+            const bands = _backtestData.by_confidence || [];
+            const tbody = document.getElementById('tr-confidence-body');
+            if (!tbody) return;
+
+            const populatedBands = bands.filter(b => b.signals > 0);
+            if (populatedBands.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="tr-empty">
+                    <div class="tr-empty-sub">No closed signals in this window yet. Confidence-band performance will populate as trades resolve.</div>
+                </td></tr>`;
+                return;
+            }
+
+            const maxHr = Math.max(...populatedBands.map(b => b.hit_rate || 0), 0);
+            tbody.innerHTML = bands.map(b => {
+                if (b.signals === 0) {
+                    return `<tr>
+                        <td class="tr-band-label">${b.band}%</td>
+                        <td class="text-right tr-num tr-muted">—</td>
+                        <td class="text-right tr-num tr-muted">—</td>
+                        <td class="text-right tr-num tr-muted">—</td>
+                        <td class="text-right tr-num tr-muted">—</td>
+                        <td class="text-right tr-num tr-muted">—</td>
+                        <td><div class="tr-bar-track"><div class="tr-bar-fill" style="width:0%;opacity:0.2"></div></div></td>
+                    </tr>`;
+                }
+                const barW = maxHr > 0 ? Math.max(4, (b.hit_rate / 100) * 100) : 0;
+                return `<tr>
+                    <td class="tr-band-label">${b.band}%</td>
+                    <td class="text-right tr-num">${b.signals}</td>
+                    <td class="text-right tr-num tr-pos">${b.hits}</td>
+                    <td class="text-right tr-num tr-neg">${b.stops}</td>
+                    <td class="text-right tr-num-strong">${b.hit_rate == null ? '—' : b.hit_rate.toFixed(1) + '%'}</td>
+                    <td class="text-right tr-num ${_pnlCls(b.avg_pnl)}">${_fmtPct(b.avg_pnl)}</td>
+                    <td><div class="tr-bar-track"><div class="tr-bar-fill" style="width:${barW}%"></div></div></td>
+                </tr>`;
             }).join('');
+        }
+
+        function renderBacktestDirection() {
+            const dirs = _backtestData.by_direction || {};
+            const row = document.getElementById('tr-direction-row');
+            if (!row) return;
+
+            const cardFor = (label, data, cls) => {
+                if (!data || !data.signals) {
+                    return `<div class="tr-dir-card ${cls}">
+                        <div class="tr-dir-head ${cls}">${label} Signals</div>
+                        <div class="tr-empty py-6"><div class="tr-empty-sub">No closed ${label.toLowerCase()} signals in this window.</div></div>
+                    </div>`;
+                }
+                return `<div class="tr-dir-card ${cls}">
+                    <div class="flex items-baseline justify-between mb-4">
+                        <div class="tr-dir-head ${cls}">${label} Signals</div>
+                        <div class="tr-num-strong" style="color:${cls==='bull'?'var(--green)':'var(--red)'}">${data.hit_rate == null ? '—' : data.hit_rate.toFixed(1) + '%'}</div>
+                    </div>
+                    <div class="tr-dir-row">
+                        <div class="tr-dir-label">Closed</div>
+                        <div class="tr-num">${data.signals}</div>
+                    </div>
+                    <div class="tr-dir-row">
+                        <div class="tr-dir-label">Hits</div>
+                        <div class="tr-num tr-pos">${data.hits}</div>
+                    </div>
+                    <div class="tr-dir-row">
+                        <div class="tr-dir-label">Stops</div>
+                        <div class="tr-num tr-neg">${data.stops}</div>
+                    </div>
+                    <div class="tr-dir-row">
+                        <div class="tr-dir-label">Avg P&L</div>
+                        <div class="tr-num ${_pnlCls(data.avg_pnl)}">${_fmtPct(data.avg_pnl)}</div>
+                    </div>
+                </div>`;
+            };
+
+            row.innerHTML = cardFor('Bullish', dirs.bullish, 'bull') + cardFor('Bearish', dirs.bearish, 'bear');
+        }
+
+        function renderBacktestRecent() {
+            const rows = _backtestData.recent_closed || [];
+            const tbody = document.getElementById('tr-recent-body');
+            if (!tbody) return;
+            if (!rows.length) {
+                tbody.innerHTML = `<tr><td colspan="8" class="tr-empty">
+                    <div class="tr-empty-sub">No trades have closed in this window yet. Recent results will appear here as signals hit target, stop, or expire.</div>
+                </td></tr>`;
+                return;
+            }
+            tbody.innerHTML = rows.map(r => {
+                const ticker = (r.ticker || '').replace('.NS', '').replace('.BO', '');
+                const dirCls = r.direction === 'BULLISH' ? 'bull' : (r.direction === 'BEARISH' ? 'bear' : '');
+                const dirArrow = r.direction === 'BULLISH' ? '▲' : (r.direction === 'BEARISH' ? '▼' : '◆');
+
+                let outcomeCls = 'expired', outcomeTxt = 'Expired';
+                if (r.status === 'Predicted Target Hit') { outcomeCls = 'hit'; outcomeTxt = '✓ Target'; }
+                else if (r.status === 'Stop Loss Hit') { outcomeCls = 'stop'; outcomeTxt = '✕ Stop'; }
+                else if (r.status === 'Reacted Against Prediction') { outcomeCls = 'stop'; outcomeTxt = '↘ Reacted'; }
+
+                return `<tr>
+                    <td class="tr-num tr-muted">${_fmtDate(r.created_at)}</td>
+                    <td><span class="font-display font-black text-white tracking-tight">${ticker}</span></td>
+                    <td><span class="tr-dir-pill ${dirCls}"><span class="dot" style="background:currentColor"></span>${r.direction}</span></td>
+                    <td class="text-right tr-num">${r.confidence || '—'}</td>
+                    <td class="text-right tr-num tr-muted">${_fmtPrice(r.base_price)}</td>
+                    <td class="text-right tr-num">${_fmtPrice(r.current_price)}</td>
+                    <td class="text-right tr-num-strong ${_pnlCls(r.pnl_pct)}">${_fmtPct(r.pnl_pct)}</td>
+                    <td><span class="tr-outcome ${outcomeCls}">${outcomeTxt}</span></td>
+                </tr>`;
+            }).join('');
+        }
+
+        function renderBacktestError() {
+            ['tr-kpi-row','tr-direction-row'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerHTML = '';
+            });
+            const cb = document.getElementById('tr-confidence-body');
+            if (cb) cb.innerHTML = `<tr><td colspan="7" class="tr-empty">
+                <div class="tr-empty-headline">Couldn't load track record</div>
+                <div class="tr-empty-sub">There was an issue reaching the backtest service. Try refreshing in a moment.</div>
+            </td></tr>`;
+            const rb = document.getElementById('tr-recent-body');
+            if (rb) rb.innerHTML = `<tr><td colspan="8" class="tr-empty"><div class="tr-empty-sub">—</div></td></tr>`;
         }
 
         // ── REAL-TIME TOAST NOTIFICATIONS ──

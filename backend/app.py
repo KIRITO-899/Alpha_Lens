@@ -5502,62 +5502,168 @@ NIFTY50_UNIVERSE = [
     ("LTIM","LTIMindtree","IT"),  # Bug #19 fix: was LTI, correct NSE ticker is LTIM
 ]
 
-@app.route('/api/heatmap-data', methods=['GET'])
-def get_heatmap_data():
+@app.route('/api/backtest-stats', methods=['GET'])
+def get_backtest_stats():
+    """
+    Aggregate signal performance for the Track Record page.
+
+    Query params:
+      range = "7d" | "30d" | "90d" | "all" (default 30d)
+
+    A signal is "closed" when status is one of:
+      Predicted Target Hit, Stop Loss Hit, Reacted Against Prediction, Expired
+
+    Hit rate counts (Predicted Target Hit) / (closed minus Expired). Expired
+    signals are excluded from the denominator because they never resolved — we
+    don't pretend they were misses.
+
+    Returns:
+      summary: total / closed / hits / stops / hit_rate / avg_win / avg_pnl
+      by_confidence: list of {band, signals, hits, stops, hit_rate, avg_pnl}
+      by_direction: {bullish: {...}, bearish: {...}}
+      recent_closed: last 30 closed signals with details
+      range, generated_at
+    """
     try:
+        range_param = (request.args.get('range') or '30d').lower()
+        days_map = {'7d': 7, '30d': 30, '90d': 90, 'all': 365 * 10}
+        days = days_map.get(range_param, 30)
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime('%Y-%m-%d %H:%M:%S')
+
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=48)).strftime('%Y-%m-%d %H:%M:%S')
         c.execute("""
-            SELECT ticker, impact, confidence_score, status,
-                   base_price, current_price, estimated_change_percent, created_at
-            FROM stock_impact
-            WHERE created_at >= ?
-            ORDER BY confidence_score DESC, created_at DESC
+            SELECT si.id, si.ticker, si.impact, si.confidence_score, si.status,
+                   si.base_price, si.current_price, si.estimated_change_percent,
+                   si.created_at, n.headline
+            FROM stock_impact si
+            LEFT JOIN news n ON si.news_id = n.id
+            WHERE si.created_at >= ?
+            ORDER BY si.created_at DESC
         """, (cutoff,))
-        db_signals = {}
-        for row in c.fetchall():
-            t = (row['ticker'] or '').replace('.NS', '').replace('.BO', '')
-            if t not in db_signals:
-                db_signals[t] = dict(row)
+        rows = [dict(r) for r in c.fetchall()]
         conn.close()
 
-        result = []
-        for (sym, name, sector) in NIFTY50_UNIVERSE:
-            sig = db_signals.get(sym, {})
-            impact = (sig.get('impact') or '').lower()
-            is_bull = 'bullish' in impact
-            is_bear = 'bearish' in impact
-            has_signal = bool(impact)
+        CLOSED_STATUSES = {'Predicted Target Hit', 'Stop Loss Hit', 'Reacted Against Prediction', 'Expired'}
+        HIT_STATUSES = {'Predicted Target Hit'}
+        STOP_STATUSES = {'Stop Loss Hit', 'Reacted Against Prediction'}
 
-            bp = sig.get('base_price') or 0
-            cp = sig.get('current_price') or 0
-            est = sig.get('estimated_change_percent')
-            status = sig.get('status', '')
+        def signed_pnl(row):
+            """Return signed P&L % for a signal — positive when the AI was right.
 
-            if status in ('Predicted Target Hit', 'Stop Loss Hit') and est is not None:
-                diff_pct = round(float(est), 2)
-            elif bp > 0 and cp > 0:
-                diff_pct = round((cp - bp) / bp * 100, 2)
-            else:
-                diff_pct = 0.0
+            For a BULLISH call: gain on price up, loss on price down (use raw move).
+            For a BEARISH call: gain on price down, loss on price up (invert sign).
+            Falls back to estimated_change_percent if computable; otherwise None.
+            """
+            impact = (row.get('impact') or '').lower()
+            est = row.get('estimated_change_percent')
+            bp = row.get('base_price') or 0
+            cp = row.get('current_price') or 0
+            raw = None
+            if est is not None:
+                raw = float(est)
+            elif bp and cp:
+                raw = (cp - bp) / bp * 100
+            if raw is None:
+                return None
+            return raw if 'bull' in impact else -raw
 
-            result.append({
-                'symbol': sym,
-                'name': name,
-                'sector': sector,
-                'has_signal': has_signal,
-                'direction': 'BULLISH' if is_bull else ('BEARISH' if is_bear else 'NEUTRAL'),
-                'confidence': sig.get('confidence_score') or 0,
-                'diff_pct': diff_pct,
-                'status': status,
+        # Hero summary
+        total = len(rows)
+        closed_rows = [r for r in rows if r['status'] in CLOSED_STATUSES]
+        ruled_rows = [r for r in closed_rows if r['status'] != 'Expired']  # judgement denominator
+        hits = [r for r in ruled_rows if r['status'] in HIT_STATUSES]
+        stops = [r for r in ruled_rows if r['status'] in STOP_STATUSES]
+
+        hit_rate = round(100.0 * len(hits) / len(ruled_rows), 1) if ruled_rows else None
+
+        hit_pnls = [p for r in hits if (p := signed_pnl(r)) is not None]
+        all_pnls = [p for r in ruled_rows if (p := signed_pnl(r)) is not None]
+        avg_win = round(sum(hit_pnls) / len(hit_pnls), 2) if hit_pnls else None
+        avg_pnl = round(sum(all_pnls) / len(all_pnls), 2) if all_pnls else None
+
+        # Confidence bands
+        bands_def = [
+            ('50-59', 50, 60),
+            ('60-69', 60, 70),
+            ('70-79', 70, 80),
+            ('80-89', 80, 90),
+            ('90+',   90, 101),
+        ]
+        by_confidence = []
+        for label, lo, hi in bands_def:
+            band_rows = [r for r in ruled_rows if lo <= (r.get('confidence_score') or 0) < hi]
+            band_hits = [r for r in band_rows if r['status'] in HIT_STATUSES]
+            band_pnls = [p for r in band_rows if (p := signed_pnl(r)) is not None]
+            by_confidence.append({
+                'band': label,
+                'signals': len(band_rows),
+                'hits': len(band_hits),
+                'stops': len([r for r in band_rows if r['status'] in STOP_STATUSES]),
+                'hit_rate': round(100.0 * len(band_hits) / len(band_rows), 1) if band_rows else None,
+                'avg_pnl': round(sum(band_pnls) / len(band_pnls), 2) if band_pnls else None,
             })
 
-        return jsonify({'stocks': result, 'market_open': is_market_open()})
+        # Direction split
+        def dir_block(direction_keyword):
+            d_rows = [r for r in ruled_rows if direction_keyword in (r.get('impact') or '').lower()]
+            d_hits = [r for r in d_rows if r['status'] in HIT_STATUSES]
+            d_pnls = [p for r in d_rows if (p := signed_pnl(r)) is not None]
+            return {
+                'signals': len(d_rows),
+                'hits': len(d_hits),
+                'stops': len([r for r in d_rows if r['status'] in STOP_STATUSES]),
+                'hit_rate': round(100.0 * len(d_hits) / len(d_rows), 1) if d_rows else None,
+                'avg_pnl': round(sum(d_pnls) / len(d_pnls), 2) if d_pnls else None,
+            }
+        by_direction = {
+            'bullish': dir_block('bull'),
+            'bearish': dir_block('bear'),
+        }
+
+        # Recent closed (latest 30)
+        recent_closed = []
+        for r in closed_rows[:30]:
+            pnl = signed_pnl(r)
+            recent_closed.append({
+                'id': r['id'],
+                'ticker': r['ticker'],
+                'direction': 'BULLISH' if 'bull' in (r.get('impact') or '').lower() else (
+                    'BEARISH' if 'bear' in (r.get('impact') or '').lower() else 'NEUTRAL'
+                ),
+                'confidence': r.get('confidence_score') or 0,
+                'base_price': r.get('base_price'),
+                'current_price': r.get('current_price'),
+                'pnl_pct': round(pnl, 2) if pnl is not None else None,
+                'status': r['status'],
+                'created_at': r['created_at'],
+                'headline': (r.get('headline') or '')[:140],
+            })
+
+        return jsonify({
+            'range': range_param,
+            'generated_at': datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),
+            'summary': {
+                'total_signals': total,
+                'closed_signals': len(closed_rows),
+                'ruled_signals': len(ruled_rows),
+                'hits': len(hits),
+                'stops': len(stops),
+                'expired': len(closed_rows) - len(ruled_rows),
+                'active_or_pending': total - len(closed_rows),
+                'hit_rate': hit_rate,
+                'avg_win': avg_win,
+                'avg_pnl': avg_pnl,
+            },
+            'by_confidence': by_confidence,
+            'by_direction': by_direction,
+            'recent_closed': recent_closed,
+        })
     except Exception as e:
-        print(f"[heatmap-data] Error: {e}")
-        return jsonify({'stocks': [], 'market_open': False})
+        print(f"[backtest-stats] Error: {e}")
+        import traceback; traceback.print_exc()
+        return jsonify({'error': str(e)}), 500
 
 
 # ══════════════════════════════════════════════════════════════
