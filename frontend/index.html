@@ -614,6 +614,323 @@
             .skel { animation: none; background: rgba(255,255,255,0.04); }
         }
 
+        /* ══════════════════════════════════════════════════════════════
+           PREMIUM UI LAYER — Aurora, panel spotlight, magnetic buttons,
+           pill morph, stagger, smooth skeleton swap, digit flips
+           ══════════════════════════════════════════════════════════════ */
+
+        /* ── UI-9: Live aurora background ──
+           Two large drifting radial blobs behind everything.
+           Sits below grid texture (body::before z-index -2) and the
+           spotlight overlay (body::after z-index -1) — see z-index: -3. */
+        #aurora-mesh {
+            position: fixed;
+            inset: -10%;
+            pointer-events: none;
+            z-index: -3;
+            filter: blur(80px);
+            opacity: 0.55;
+        }
+        #aurora-mesh::before,
+        #aurora-mesh::after {
+            content: '';
+            position: absolute;
+            border-radius: 50%;
+        }
+        #aurora-mesh::before {
+            width: 50vw; height: 50vw;
+            top: -10%; left: -10%;
+            background: radial-gradient(circle, rgba(201,169,98,0.22) 0%, transparent 60%);
+            animation: aurora-drift-a 32s ease-in-out infinite;
+        }
+        #aurora-mesh::after {
+            width: 55vw; height: 55vw;
+            bottom: -15%; right: -12%;
+            background: radial-gradient(circle, rgba(16,217,140,0.16) 0%, transparent 60%);
+            animation: aurora-drift-b 38s ease-in-out infinite;
+        }
+        @keyframes aurora-drift-a {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33%      { transform: translate(18vw, 12vh) scale(1.1); }
+            66%      { transform: translate(-8vw, 22vh) scale(0.95); }
+        }
+        @keyframes aurora-drift-b {
+            0%, 100% { transform: translate(0, 0) scale(1); }
+            33%      { transform: translate(-14vw, -18vh) scale(1.08); }
+            66%      { transform: translate(6vw, -8vh) scale(0.94); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            #aurora-mesh::before, #aurora-mesh::after { animation: none; }
+        }
+
+        /* ── UI-11: Per-panel cursor spotlight ──
+           Each .glass-panel gets a local soft-gold light that follows
+           the cursor when hovered. ::before is already taken for the
+           gradient corner highlight, so this rides on ::after.
+           --px/--py are set in pixels relative to the panel via JS. */
+        .glass-panel::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            pointer-events: none;
+            z-index: 0;
+            opacity: 0;
+            transition: opacity 280ms var(--ease-out);
+            background: radial-gradient(
+                420px circle at var(--px, 50%) var(--py, 50%),
+                rgba(201,169,98,0.10) 0%,
+                rgba(201,169,98,0.04) 30%,
+                transparent 60%
+            );
+        }
+        .glass-panel:hover::after { opacity: 1; }
+        @media (prefers-reduced-motion: reduce) {
+            .glass-panel::after { transition: none; }
+        }
+
+        /* ── UI-2: Magnetic buttons ──
+           Pointer-driven offset stored in --mx/--my (px). The transform
+           on hover composes any existing transform with the magnetic
+           pull. data-magnetic on the element opts it in. */
+        [data-magnetic] {
+            transition: transform 220ms var(--ease-out), box-shadow 220ms var(--ease-out);
+            will-change: transform;
+        }
+        [data-magnetic].is-pulling {
+            transform: translate(var(--mx, 0px), var(--my, 0px));
+            transition: transform 60ms linear, box-shadow 220ms var(--ease-out);
+        }
+        @media (prefers-reduced-motion: reduce) {
+            [data-magnetic].is-pulling { transform: none; }
+        }
+
+        /* ── UI-8: Filter pill morph ──
+           Smoother transitions on active state + ripple-on-press. */
+        .sector-pill, .tr-range-btn {
+            transition:
+                color 220ms var(--ease-out),
+                background 220ms var(--ease-out),
+                border-color 220ms var(--ease-out),
+                box-shadow 280ms var(--ease-out),
+                transform 120ms var(--ease-out);
+            position: relative;
+            overflow: hidden;
+        }
+        .sector-pill:active, .tr-range-btn:active { transform: scale(0.96); }
+        /* a subtle radial flash on click — built off CSS-only :focus-visible */
+        .sector-pill::before, .tr-range-btn::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            border-radius: inherit;
+            background: radial-gradient(circle at 50% 50%, rgba(201,169,98,0.35) 0%, transparent 60%);
+            opacity: 0;
+            transform: scale(0.6);
+            transition: opacity 0.5s, transform 0.5s;
+            pointer-events: none;
+        }
+        .sector-pill.pill-flash::before, .tr-range-btn.pill-flash::before {
+            opacity: 1; transform: scale(1.6);
+            transition: opacity 0.55s, transform 0.55s;
+        }
+
+        /* ── UI-1: Staggered card entry ──
+           Card/row gets data-stagger-i which sets --i. CSS multiplies
+           by 40ms for a top-to-bottom waterfall. */
+        [data-stagger-i] {
+            animation: stagger-in 380ms var(--ease-out) both;
+            animation-delay: calc(var(--i, 0) * 40ms);
+        }
+        @keyframes stagger-in {
+            from { opacity: 0; transform: translateY(8px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            [data-stagger-i] { animation: none; }
+        }
+
+        /* ── UI-4: Skeleton → content smooth swap ──
+           Containers that swap skeleton for content add .ui-swap.
+           Both old & new states cross-fade over 250ms. */
+        .ui-swap { transition: opacity 250ms var(--ease-out); }
+        .ui-swap-leaving { opacity: 0; }
+        .ui-swap-entering { animation: ui-swap-fade-in 320ms var(--ease-out) both; }
+        @keyframes ui-swap-fade-in {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+
+        /* ── UI-3: Number flip animation ──
+           Wrap a number in .flip-num and call flipNumber(el, newText).
+           Each digit is its own .flip-digit; on change the digit flips
+           vertically with a 320ms ease. */
+        .flip-num { display: inline-flex; }
+        .flip-digit {
+            display: inline-block;
+            position: relative;
+            min-width: 0.55em;
+            text-align: center;
+            transform-style: preserve-3d;
+            transition: transform 320ms var(--ease-out);
+            font-variant-numeric: tabular-nums;
+        }
+        .flip-digit.flipping {
+            animation: digit-flip 360ms var(--ease-out) both;
+        }
+        @keyframes digit-flip {
+            0%   { transform: translateY(0)    rotateX(0);   opacity: 1; }
+            45%  { transform: translateY(-40%) rotateX(-80deg); opacity: 0.2; }
+            55%  { transform: translateY(40%)  rotateX(80deg);  opacity: 0.2; }
+            100% { transform: translateY(0)    rotateX(0);   opacity: 1; }
+        }
+
+        /* ── UI-7: Hover-preview ticker chips ──
+           Popover that appears above ticker badges on hover. */
+        .ticker-hover-target { cursor: pointer; position: relative; }
+        #ticker-hover-card {
+            position: fixed;
+            z-index: 9999;
+            min-width: 240px;
+            max-width: 280px;
+            padding: 14px 16px;
+            background: linear-gradient(180deg, rgba(20,20,24,0.98), rgba(14,14,18,0.98));
+            border: 1px solid var(--accent-border);
+            border-radius: 12px;
+            box-shadow: 0 18px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(201,169,98,0.08) inset, var(--shadow-accent);
+            opacity: 0;
+            transform: translateY(6px) scale(0.96);
+            transform-origin: center top;
+            pointer-events: none;
+            transition: opacity 180ms var(--ease-out), transform 220ms var(--ease-out);
+        }
+        #ticker-hover-card.show {
+            opacity: 1;
+            transform: translateY(0) scale(1);
+        }
+        #ticker-hover-card .thc-ticker {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 900; font-size: 17px;
+            color: var(--text-primary); letter-spacing: -0.02em;
+        }
+        #ticker-hover-card .thc-price {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 700; font-size: 15px;
+            font-variant-numeric: tabular-nums;
+        }
+        #ticker-hover-card .thc-chg {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px; font-weight: 700;
+        }
+        #ticker-hover-card .thc-verdict {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 9.5px; font-weight: 800;
+            letter-spacing: 0.16em; text-transform: uppercase;
+            padding: 3px 8px; border-radius: 5px;
+            border: 1px solid; display: inline-flex; align-items: center; gap: 5px;
+        }
+        #ticker-hover-card .thc-spark {
+            width: 100%; height: 38px; margin-top: 8px;
+        }
+        #ticker-hover-card .thc-row { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+        #ticker-hover-card .thc-meta {
+            font-size: 10px; color: var(--text-tertiary);
+            margin-top: 8px; padding-top: 8px;
+            border-top: 1px solid var(--border-subtle);
+            font-family: 'JetBrains Mono', monospace; letter-spacing: 0.08em; text-transform: uppercase;
+        }
+
+        /* ── UI-5: Universal stock drawer ── */
+        #stock-drawer-backdrop {
+            position: fixed; inset: 0; z-index: 9998;
+            background: rgba(8,8,10,0.55);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 280ms var(--ease-out);
+        }
+        #stock-drawer-backdrop.show { opacity: 1; pointer-events: auto; }
+        #stock-drawer {
+            position: fixed; top: 0; right: 0; bottom: 0; z-index: 9999;
+            width: min(440px, 96vw);
+            background: linear-gradient(180deg, rgba(18,18,22,0.985), rgba(11,11,14,0.985));
+            border-left: 1px solid var(--accent-border);
+            box-shadow: -32px 0 80px rgba(0,0,0,0.7), -1px 0 0 rgba(201,169,98,0.08) inset;
+            transform: translateX(100%);
+            transition: transform 360ms cubic-bezier(0.16, 1, 0.3, 1);
+            display: flex; flex-direction: column;
+            overflow: hidden;
+        }
+        #stock-drawer.show { transform: translateX(0); }
+        #stock-drawer .sd-head {
+            padding: 22px 24px 18px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex; justify-content: space-between; align-items: flex-start; gap: 14px;
+        }
+        #stock-drawer .sd-ticker {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 900; font-size: 26px; letter-spacing: -0.025em;
+            color: var(--text-primary);
+        }
+        #stock-drawer .sd-name {
+            font-size: 11px; color: var(--text-tertiary);
+            font-family: 'JetBrains Mono', monospace; letter-spacing: 0.14em;
+            text-transform: uppercase; margin-top: 2px;
+        }
+        #stock-drawer .sd-close {
+            font-family: 'JetBrains Mono', monospace; font-size: 11px;
+            font-weight: 700; color: var(--text-tertiary);
+            cursor: pointer; padding: 6px 10px; border-radius: 6px;
+            border: 1px solid var(--border); transition: all 0.18s;
+        }
+        #stock-drawer .sd-close:hover { color: var(--text-primary); border-color: var(--border-bright); }
+        #stock-drawer .sd-body {
+            flex: 1; overflow-y: auto;
+            padding: 20px 24px 28px;
+        }
+        #stock-drawer .sd-section { margin-bottom: 22px; }
+        #stock-drawer .sd-section-label {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 10px; font-weight: 800; letter-spacing: 0.2em;
+            text-transform: uppercase; color: var(--accent);
+            margin-bottom: 10px;
+        }
+        #stock-drawer .sd-price-row {
+            display: flex; align-items: baseline; gap: 10px;
+        }
+        #stock-drawer .sd-price {
+            font-family: 'Space Grotesk', sans-serif;
+            font-weight: 900; font-size: 30px; letter-spacing: -0.02em;
+            color: var(--text-primary); font-variant-numeric: tabular-nums;
+        }
+        #stock-drawer .sd-chg {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 13px; font-weight: 700;
+        }
+        #stock-drawer .sd-fund-grid {
+            display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px 18px;
+        }
+        #stock-drawer .sd-fund-row {
+            display: flex; justify-content: space-between; gap: 8px;
+            font-size: 12px; padding: 6px 0;
+            border-bottom: 1px solid var(--border-subtle);
+        }
+        #stock-drawer .sd-fund-row .l { color: var(--text-tertiary); font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em; font-size: 10px; text-transform: uppercase; }
+        #stock-drawer .sd-fund-row .v { color: var(--text-primary); font-family: 'JetBrains Mono', monospace; font-weight: 700; }
+        #stock-drawer .sd-news-item {
+            padding: 12px 14px; border-radius: 10px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid var(--border-subtle);
+            margin-bottom: 8px;
+        }
+        #stock-drawer .sd-news-item .h { font-size: 13px; color: var(--text-primary); line-height: 1.4; }
+        #stock-drawer .sd-news-item .m { font-size: 10px; color: var(--text-tertiary); margin-top: 6px; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em; text-transform: uppercase; }
+        #stock-drawer .sd-empty {
+            text-align: center; padding: 40px 16px;
+            color: var(--text-tertiary); font-size: 12px;
+        }
+
         /* ── TAB CROSS-FADE TRANSITION (P5) ── */
         /* Every top-level view fades in when shown. Outgoing view is hidden
            instantly via .hidden, but the incoming view animates from 0 → 1
@@ -1050,6 +1367,27 @@
 
 <body class="antialiased">
 
+    <!-- Aurora layer: two slow-drifting radial blobs that sit behind everything (UI-9) -->
+    <div id="aurora-mesh" aria-hidden="true"></div>
+
+    <!-- Universal stock drawer (UI-5) — populated on demand by openStockDrawer(ticker) -->
+    <div id="stock-drawer-backdrop" aria-hidden="true"></div>
+    <aside id="stock-drawer" aria-hidden="true" aria-label="Stock detail drawer">
+        <div class="sd-head">
+            <div>
+                <div class="sd-ticker" id="sd-ticker">—</div>
+                <div class="sd-name" id="sd-name">—</div>
+            </div>
+            <div class="sd-close" onclick="closeStockDrawer()">ESC ✕</div>
+        </div>
+        <div class="sd-body" id="sd-body">
+            <div class="sd-empty">Loading…</div>
+        </div>
+    </aside>
+
+    <!-- Hover-preview popover (UI-7) — repositioned on mouseenter of any .ticker-hover-target -->
+    <div id="ticker-hover-card" aria-hidden="true"></div>
+
     <!-- ============================================== -->
     <!-- ELEGANT LOGO FADE OVERLAY                     -->
     <!-- ============================================== -->
@@ -1255,7 +1593,7 @@
                 </button>
 
                 <div id="auth-section">
-                    <button onclick="openAuthModal()"
+                    <button onclick="openAuthModal()" data-magnetic
                         class="btn-glow px-5 py-2 rounded-full text-xs font-display font-bold tracking-wide">Access
                         Terminal</button>
                 </div>
@@ -1638,10 +1976,10 @@
                             </p>
                         </div>
                         <div class="flex items-center gap-2 self-start md:self-end" id="tr-range-tabs">
-                            <button onclick="setBacktestRange('7d')" data-range="7d" class="tr-range-btn">7D</button>
-                            <button onclick="setBacktestRange('30d')" data-range="30d" class="tr-range-btn tr-range-active">30D</button>
-                            <button onclick="setBacktestRange('90d')" data-range="90d" class="tr-range-btn">90D</button>
-                            <button onclick="setBacktestRange('all')" data-range="all" class="tr-range-btn">ALL</button>
+                            <button onclick="setBacktestRange('7d')" data-range="7d" data-magnetic class="tr-range-btn">7D</button>
+                            <button onclick="setBacktestRange('30d')" data-range="30d" data-magnetic class="tr-range-btn tr-range-active">30D</button>
+                            <button onclick="setBacktestRange('90d')" data-range="90d" data-magnetic class="tr-range-btn">90D</button>
+                            <button onclick="setBacktestRange('all')" data-range="all" data-magnetic class="tr-range-btn">ALL</button>
                         </div>
                     </div>
                 </div>
@@ -2083,7 +2421,7 @@
                 `;
             } else {
                 authSection.innerHTML = `
-                    <button onclick="openAuthModal()" class="btn-glow px-5 py-1.5 rounded-full text-sm font-display font-bold text-black tracking-wide shadow-lg hover:scale-105 transition-transform">Access Terminal</button>
+                    <button onclick="openAuthModal()" data-magnetic class="btn-glow px-5 py-1.5 rounded-full text-sm font-display font-bold text-black tracking-wide shadow-lg hover:scale-105 transition-transform">Access Terminal</button>
                 `;
             }
         }
@@ -2496,10 +2834,17 @@
                 container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">No news found in the last 7 days. The AI engine may still be processing feeds.</div>';
                 return;
             }
-            recentNews.forEach(news => {
+            recentNews.forEach((news, cardIdx) => {
                 const item = document.createElement('div');
                 item.className = "glass-panel news-card-hover p-6 rounded-2xl cursor-pointer";
-                item.onclick = () => { loadArticleIntoMainViewer(news); switchTab('top-news'); };
+                // Stagger entry (UI-1): first 12 cards waterfall in
+                item.style.setProperty('--i', Math.min(cardIdx, 12));
+                item.setAttribute('data-stagger-i', String(cardIdx));
+                item.onclick = (e) => {
+                    // Don't open article if user clicked on a ticker badge — that opens the stock drawer instead
+                    if (e.target.closest('.ticker-hover-target')) return;
+                    loadArticleIntoMainViewer(news); switchTab('top-news');
+                };
                 const dt = getNewsDate(news);
                 const dateStr = !isNaN(dt) ? dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
                 const timeStr = !isNaN(dt) ? dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
@@ -2514,9 +2859,10 @@
                         let color = impact.includes('bullish') ? 'text-green-400 border-green-500/30 bg-green-900/10' :
                             impact.includes('slightly bearish') ? 'text-orange-400 border-orange-500/30 bg-orange-900/10' :
                                 'text-red-400 border-red-500/30 bg-red-900/10';
+                        // ticker-hover-target opts the chip into UI-7 preview + UI-5 drawer (delegated)
                         impactedStocksHtml += `
                             <div class="flex flex-col gap-1">
-                                <span class="text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}">${escapeHtml(stock.ticker)}</span>
+                                <span class="ticker-hover-target text-[10px] uppercase tracking-widest font-bold border px-2 py-1 rounded ${color}" data-ticker="${escapeHtml(stock.ticker)}">${escapeHtml(stock.ticker)}</span>
                                 ${getConfidenceBadge(stock.confidence_score)}
                             </div>`;
                     });
@@ -2757,7 +3103,7 @@
                 const card = document.createElement('div');
                 card.className = "flex items-center justify-between p-3 bg-black/40 border border-white/5 rounded-xl hover:border-violet-500/20 transition-colors group";
                 card.innerHTML = `
-                    <div class="flex flex-col">
+                    <div class="flex flex-col ticker-hover-target" data-ticker="${escapeHtml(stock.ticker)}" style="cursor:pointer">
                         <span class="font-bold font-display text-white tracking-widest text-sm">${escapeHtml(stock.ticker)}</span>
                         <span class="text-[9px] text-slate-400 uppercase tracking-widest max-w-[150px] truncate">${escapeHtml(stock.name)}</span>
                     </div>
@@ -3408,6 +3754,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         function initPremiumInteractions() {
             if (window.__alphaPremiumInteractionsReady) return;
             window.__alphaPremiumInteractionsReady = true;
+            const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
             window.addEventListener('pointermove', (event) => {
                 const x = Math.round((event.clientX / window.innerWidth) * 100);
@@ -3417,19 +3764,362 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             }, { passive: true });
 
             document.addEventListener('pointermove', (event) => {
+                if (reducedMotion) return;
+
+                // Existing parallax tilt for hero/insight tiles
                 const card = event.target.closest('.premium-hero, .headline-tile, .insight-tile, .index-card');
-                if (!card || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-                const rect = card.getBoundingClientRect();
-                const px = ((event.clientX - rect.left) / rect.width) - 0.5;
-                const py = ((event.clientY - rect.top) / rect.height) - 0.5;
-                card.style.transform = `perspective(900px) rotateX(${py * -2.2}deg) rotateY(${px * 2.2}deg) translateY(-2px)`;
+                if (card) {
+                    const rect = card.getBoundingClientRect();
+                    const px = ((event.clientX - rect.left) / rect.width) - 0.5;
+                    const py = ((event.clientY - rect.top) / rect.height) - 0.5;
+                    card.style.transform = `perspective(900px) rotateX(${py * -2.2}deg) rotateY(${px * 2.2}deg) translateY(-2px)`;
+                }
+
+                // UI-11: per-panel cursor spotlight — set --px/--py in pixels on every panel under the cursor
+                const panel = event.target.closest('.glass-panel');
+                if (panel) {
+                    const pRect = panel.getBoundingClientRect();
+                    panel.style.setProperty('--px', (event.clientX - pRect.left) + 'px');
+                    panel.style.setProperty('--py', (event.clientY - pRect.top) + 'px');
+                }
+
+                // UI-2: magnetic buttons — translate toward cursor when within range
+                const mag = event.target.closest('[data-magnetic]');
+                if (mag) {
+                    const mRect = mag.getBoundingClientRect();
+                    const cx = mRect.left + mRect.width / 2;
+                    const cy = mRect.top + mRect.height / 2;
+                    const dx = event.clientX - cx;
+                    const dy = event.clientY - cy;
+                    const dist = Math.hypot(dx, dy);
+                    const radius = Math.max(mRect.width, mRect.height) * 0.9 + 20;
+                    if (dist < radius) {
+                        const strength = Math.min(1, (radius - dist) / radius);
+                        const pull = 0.32 * strength; // max ~32% of distance
+                        mag.style.setProperty('--mx', (dx * pull) + 'px');
+                        mag.style.setProperty('--my', (dy * pull) + 'px');
+                        mag.classList.add('is-pulling');
+                    }
+                }
             }, { passive: true });
 
             document.addEventListener('pointerout', (event) => {
                 const card = event.target.closest('.premium-hero, .headline-tile, .insight-tile, .index-card');
                 if (card) card.style.transform = '';
+                const mag = event.target.closest('[data-magnetic]');
+                if (mag && !mag.contains(event.relatedTarget)) {
+                    mag.classList.remove('is-pulling');
+                    mag.style.setProperty('--mx', '0px');
+                    mag.style.setProperty('--my', '0px');
+                }
             }, { passive: true });
+
+            // UI-8: pill morph — radial flash on click for sector pills and range buttons
+            document.addEventListener('click', (event) => {
+                const pill = event.target.closest('.sector-pill, .tr-range-btn');
+                if (!pill) return;
+                pill.classList.remove('pill-flash');
+                // restart animation
+                void pill.offsetWidth;
+                pill.classList.add('pill-flash');
+                setTimeout(() => pill.classList.remove('pill-flash'), 600);
+            });
+
+            // UI-7 + UI-5: ticker hover preview and click-to-open drawer (delegated)
+            installTickerInteractions();
         }
+
+        // ══════════════════════════════════════════════════════════════
+        // UI-1: STAGGER HELPER
+        // Tag each child with data-stagger-i = "<index>" up to a cap so
+        // the CSS waterfall keeps a tasteful total duration.
+        // ══════════════════════════════════════════════════════════════
+        function applyStagger(rootEl, selector = ':scope > *', cap = 12) {
+            if (!rootEl) return;
+            const items = rootEl.querySelectorAll(selector);
+            items.forEach((el, idx) => {
+                el.style.setProperty('--i', Math.min(idx, cap));
+                // Force re-trigger animation on re-render
+                el.removeAttribute('data-stagger-i');
+                requestAnimationFrame(() => el.setAttribute('data-stagger-i', String(idx)));
+            });
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // UI-4: SKELETON → CONTENT smooth swap
+        // Wraps the "replace innerHTML with real content" pattern with
+        // a brief leave/enter fade.
+        // ══════════════════════════════════════════════════════════════
+        function smoothSwap(containerEl, newHtml, opts = {}) {
+            if (!containerEl) return;
+            const stagger = opts.stagger; // optional selector to stagger after swap
+            const apply = () => {
+                containerEl.classList.remove('ui-swap-leaving');
+                containerEl.classList.add('ui-swap-entering');
+                containerEl.innerHTML = newHtml;
+                if (stagger) applyStagger(containerEl, stagger, opts.staggerCap || 12);
+                setTimeout(() => containerEl.classList.remove('ui-swap-entering'), 360);
+            };
+            if (containerEl.dataset.uiSwapInit !== '1') {
+                containerEl.classList.add('ui-swap');
+                containerEl.dataset.uiSwapInit = '1';
+            }
+            // If the container is showing skeletons or content, fade them out first.
+            containerEl.classList.add('ui-swap-leaving');
+            setTimeout(apply, 180);
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // UI-3: DIGIT FLIP
+        // flipNumber(el, newStr) — replaces text but animates each digit
+        // that actually changed. Safe for prices ("₹1,242.50") and pcts.
+        // ══════════════════════════════════════════════════════════════
+        function _digitsOf(str) {
+            // Wrap each char in a span so we can selectively flip changed digits.
+            return [...String(str)].map(ch => `<span class="flip-digit">${ch === ' ' ? '&nbsp;' : ch}</span>`).join('');
+        }
+        function flipNumber(el, newStr) {
+            if (!el) return;
+            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+                el.textContent = newStr;
+                return;
+            }
+            if (!el.classList.contains('flip-num')) {
+                el.classList.add('flip-num');
+                el.innerHTML = _digitsOf(newStr);
+                return;
+            }
+            const oldDigits = el.querySelectorAll('.flip-digit');
+            const newChars = [...String(newStr)];
+            // If length changed, do a full rerender with all flipping
+            if (oldDigits.length !== newChars.length) {
+                el.innerHTML = _digitsOf(newStr);
+                el.querySelectorAll('.flip-digit').forEach(d => {
+                    d.classList.add('flipping');
+                    setTimeout(() => d.classList.remove('flipping'), 380);
+                });
+                return;
+            }
+            // Same length — flip only the digits that changed
+            oldDigits.forEach((d, i) => {
+                const newCh = newChars[i] === ' ' ? ' ' : newChars[i];
+                if (d.textContent === newCh) return;
+                d.classList.add('flipping');
+                // Swap mid-flip when the rotation is near 90°
+                setTimeout(() => { d.textContent = newCh; }, 180);
+                setTimeout(() => d.classList.remove('flipping'), 380);
+            });
+        }
+
+        // ══════════════════════════════════════════════════════════════
+        // UI-7: TICKER HOVER PREVIEW + UI-5: STOCK DRAWER
+        // Delegated handlers — any element with .ticker-hover-target
+        // and a data-ticker attribute participates.
+        // ══════════════════════════════════════════════════════════════
+        let _tickerHoverTimer = null;
+        function _findStockSignalsInGlobal(tickerBase) {
+            const matches = [];
+            if (!Array.isArray(globalNewsData)) return matches;
+            for (const n of globalNewsData) {
+                if (!n.affected_stocks) continue;
+                for (const s of n.affected_stocks) {
+                    if ((s.ticker || '').toUpperCase().replace(/\.(NS|BO)$/i, '') === tickerBase) {
+                        matches.push({ ...s, headline: n.headline, news_time: n.news_time, created_at: n.created_at });
+                        break;
+                    }
+                }
+                if (matches.length >= 5) break;
+            }
+            return matches;
+        }
+        function _miniSparkSvg(values) {
+            if (!values || values.length < 2) return '';
+            const w = 240, h = 36, pad = 2;
+            const min = Math.min(...values), max = Math.max(...values);
+            const span = max - min || 1;
+            const step = (w - pad * 2) / (values.length - 1);
+            const path = values.map((v, i) => {
+                const x = pad + i * step;
+                const y = pad + (h - pad * 2) * (1 - (v - min) / span);
+                return (i === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+            }).join(' ');
+            const last = values[values.length - 1], first = values[0];
+            const stroke = last >= first ? '#10D98C' : '#FF3366';
+            return `<svg class="thc-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+                <path d="${path}" fill="none" stroke="${stroke}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>`;
+        }
+        function positionHoverCard(card, anchor) {
+            const aRect = anchor.getBoundingClientRect();
+            const cRect = card.getBoundingClientRect();
+            const margin = 8;
+            let left = aRect.left + (aRect.width - cRect.width) / 2;
+            let top = aRect.top - cRect.height - margin;
+            if (top < 12) top = aRect.bottom + margin; // flip below if no room above
+            left = Math.max(8, Math.min(window.innerWidth - cRect.width - 8, left));
+            card.style.left = left + 'px';
+            card.style.top = top + 'px';
+        }
+        function _showTickerHover(targetEl) {
+            const card = document.getElementById('ticker-hover-card');
+            if (!card) return;
+            const ticker = targetEl.dataset.ticker || (targetEl.textContent || '').trim().toUpperCase();
+            const base = ticker.replace(/\.(NS|BO)$/i, '');
+            const signals = _findStockSignalsInGlobal(base);
+            const latest = signals[0];
+            const verdict = latest ? (latest.impact || 'analysis pending') : null;
+            const conf = latest ? (latest.confidence_score || '—') : '—';
+            const bp = latest ? parseFloat(latest.base_price) : NaN;
+            const cp = latest ? parseFloat(latest.current_price) : NaN;
+            const hasP = !isNaN(bp) && bp > 0;
+            const hasC = !isNaN(cp) && cp > 0;
+            const priceStr = hasC ? '₹' + cp.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+            const diff = hasP && hasC ? ((cp - bp) / bp * 100) : null;
+            const diffStr = diff != null ? (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%' : '—';
+            const diffCls = diff == null ? 'tr-muted' : (diff >= 0 ? 'tr-pos' : 'tr-neg');
+            const verdictCls = !verdict ? 'tr-muted' : (verdict.toLowerCase().includes('bull') ? 'thc-bull' : 'thc-bear');
+            const verdictStyle = !verdict ? 'border-color:var(--border);color:var(--text-tertiary)' :
+                (verdict.toLowerCase().includes('bull') ? 'border-color:var(--green-border);color:var(--green);background:var(--green-dim)' :
+                                                          'border-color:var(--red-border);color:var(--red);background:var(--red-dim)');
+            // tiny synthetic spark from the few signals we have
+            const sparkVals = signals.filter(s => parseFloat(s.current_price) > 0).map(s => parseFloat(s.current_price)).reverse();
+            const spark = sparkVals.length >= 2 ? _miniSparkSvg(sparkVals) : '';
+            card.innerHTML = `
+                <div class="thc-row">
+                    <span class="thc-ticker">${escapeHtml(base)}</span>
+                    <span class="thc-price ${diffCls}">${priceStr}</span>
+                </div>
+                <div class="thc-row" style="margin-top:6px">
+                    <span class="thc-verdict" style="${verdictStyle}">${verdict ? escapeHtml(verdict.toUpperCase()) : 'NO VERDICT YET'}</span>
+                    <span class="thc-chg ${diffCls}">${diffStr}</span>
+                </div>
+                ${spark}
+                <div class="thc-meta">${latest ? `Conf ${conf} · click for full drawer` : 'click for full drawer'}</div>
+            `;
+            card.setAttribute('aria-hidden', 'false');
+            card.classList.add('show');
+            positionHoverCard(card, targetEl);
+        }
+        function _hideTickerHover() {
+            const card = document.getElementById('ticker-hover-card');
+            if (!card) return;
+            card.classList.remove('show');
+            card.setAttribute('aria-hidden', 'true');
+        }
+
+        function installTickerInteractions() {
+            document.addEventListener('pointerover', (e) => {
+                const tgt = e.target.closest('.ticker-hover-target');
+                if (!tgt) return;
+                clearTimeout(_tickerHoverTimer);
+                _tickerHoverTimer = setTimeout(() => _showTickerHover(tgt), 120);
+            });
+            document.addEventListener('pointerout', (e) => {
+                const tgt = e.target.closest('.ticker-hover-target');
+                if (!tgt) return;
+                if (tgt.contains(e.relatedTarget)) return;
+                clearTimeout(_tickerHoverTimer);
+                _hideTickerHover();
+            });
+            document.addEventListener('click', (e) => {
+                const tgt = e.target.closest('.ticker-hover-target');
+                if (!tgt) return;
+                const ticker = tgt.dataset.ticker || (tgt.textContent || '').trim();
+                if (!ticker) return;
+                _hideTickerHover();
+                openStockDrawer(ticker);
+            });
+        }
+
+        async function openStockDrawer(ticker) {
+            const drawer = document.getElementById('stock-drawer');
+            const backdrop = document.getElementById('stock-drawer-backdrop');
+            if (!drawer || !backdrop) return;
+            const base = String(ticker).toUpperCase().replace(/\.(NS|BO)$/i, '');
+            const fullTicker = ticker.toUpperCase().includes('.') ? ticker.toUpperCase() : (base + '.NS');
+
+            document.getElementById('sd-ticker').textContent = base;
+            document.getElementById('sd-name').textContent = 'Loading…';
+            document.getElementById('sd-body').innerHTML = '<div class="sd-empty">Loading…</div>';
+
+            drawer.classList.add('show');
+            drawer.setAttribute('aria-hidden', 'false');
+            backdrop.classList.add('show');
+            document.body.style.overflow = 'hidden';
+
+            // Pull recent signals + headline matches from local data
+            const signals = _findStockSignalsInGlobal(base);
+            const latest = signals[0];
+            const wlEntry = (Array.isArray(watchlist) ? watchlist : []).find(s => tickerSymbol(s.ticker) === base);
+            const displayName = wlEntry?.name || base;
+            document.getElementById('sd-name').textContent = displayName;
+
+            // Try to get a live price
+            let price = null, chg = null;
+            try {
+                const r = await fetch('/api/stock-price/' + encodeURIComponent(fullTicker));
+                if (r.ok) {
+                    const d = await r.json();
+                    price = d.price; chg = d.change_pct;
+                }
+            } catch (e) { /* swallow — drawer still useful without */ }
+
+            // Fundamentals from latest signal if backend hasn't sent any
+            const priceStr = (price != null && price > 0) ? '₹' + Number(price).toLocaleString('en-IN', { maximumFractionDigits: 2 }) :
+                              (latest && parseFloat(latest.current_price) > 0 ? '₹' + parseFloat(latest.current_price).toFixed(2) : '—');
+            const chgVal = (chg != null) ? Number(chg) : (latest && latest.diff_pct != null ? Number(latest.diff_pct) : null);
+            const chgStr = chgVal != null ? (chgVal >= 0 ? '+' : '') + chgVal.toFixed(2) + '%' : '—';
+            const chgCls = chgVal == null ? 'tr-muted' : (chgVal >= 0 ? 'tr-pos' : 'tr-neg');
+
+            const newsHtml = signals.length === 0
+                ? '<div class="sd-empty">No saved news currently flagged for this stock.</div>'
+                : signals.slice(0, 5).map(s => {
+                    const impact = (s.impact || '').toUpperCase();
+                    const impactCls = impact.includes('BULL') ? 'tr-pos' : (impact.includes('BEAR') ? 'tr-neg' : 'tr-muted');
+                    return `<div class="sd-news-item">
+                        <div class="h">${escapeHtml(s.headline || '')}</div>
+                        <div class="m"><span class="${impactCls}">${escapeHtml(impact || 'pending')}</span> · conf ${s.confidence_score || '—'} · ${escapeHtml(s.status || '')}</div>
+                    </div>`;
+                }).join('');
+
+            document.getElementById('sd-body').innerHTML = `
+                <div class="sd-section">
+                    <div class="sd-section-label">Live Quote</div>
+                    <div class="sd-price-row">
+                        <span class="sd-price">${priceStr}</span>
+                        <span class="sd-chg ${chgCls}">${chgStr}</span>
+                    </div>
+                </div>
+                <div class="sd-section">
+                    <div class="sd-section-label">AI Signals (recent)</div>
+                    ${newsHtml}
+                </div>
+                ${wlEntry ? '' : `<div class="sd-section">
+                    <div class="sd-section-label">Watchlist</div>
+                    <button class="tr-range-btn" data-magnetic onclick="addStockToWatchlist('${escapeHtml(fullTicker)}', '${escapeHtml(displayName)}'); closeStockDrawer();">+ Add to Watchlist</button>
+                </div>`}
+            `;
+        }
+
+        function closeStockDrawer() {
+            const drawer = document.getElementById('stock-drawer');
+            const backdrop = document.getElementById('stock-drawer-backdrop');
+            if (!drawer || !backdrop) return;
+            drawer.classList.remove('show');
+            drawer.setAttribute('aria-hidden', 'true');
+            backdrop.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+        // Esc closes drawer; click-outside via backdrop also closes
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const drawer = document.getElementById('stock-drawer');
+                if (drawer && drawer.classList.contains('show')) closeStockDrawer();
+            }
+        });
+        document.addEventListener('click', (e) => {
+            if (e.target && e.target.id === 'stock-drawer-backdrop') closeStockDrawer();
+        });
 
         // ── LIVE TICKER BAR ──
         async function updateTickerBar() {
@@ -3454,8 +4144,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                     const chg = d.change_pct != null ? Number(d.change_pct) : 0;
                     const chgStr = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
                     const cls = chg > 0.1 ? 'up' : (chg < -0.1 ? 'dn' : 'flat');
-                    [pId, pId2].forEach(id => { const el = document.getElementById(id); if(el) el.textContent = price; });
-                    [cId, cId2].forEach(id => { const el = document.getElementById(id); if(el) { el.textContent = chgStr; el.className = 'ptick-chg ' + cls; }});
+                    // UI-3: flip each digit that actually changed instead of jumping the whole string
+                    [pId, pId2].forEach(id => { const el = document.getElementById(id); if(el) flipNumber(el, price); });
+                    [cId, cId2].forEach(id => { const el = document.getElementById(id); if(el) { flipNumber(el, chgStr); el.classList.add('ptick-chg'); el.classList.remove('up','dn','flat'); el.classList.add(cls); }});
                     if (name === 'NIFTY 50') regime = chg > 0.3 ? 'risk-on' : (chg < -0.3 ? 'risk-off' : 'neutral');
                 });
                 const badge = document.getElementById('regime-badge');
@@ -3512,7 +4203,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 tbody.innerHTML = '<tr><td colspan="9" class="text-center py-10 text-slate-500">No signals match filter</td></tr>';
                 return;
             }
-            tbody.innerHTML = filtered.map(s => {
+            tbody.innerHTML = filtered.map((s, idx) => {
                 const dirCls = s.direction === 'BULLISH' ? 'dir-bull' : 'dir-bear';
                 const dirIcon = s.direction === 'BULLISH' ? '▲' : '▼';
                 const confCls = s.confidence >= 80 ? 'conf-high' : (s.confidence >= 60 ? 'conf-mid' : 'conf-low');
@@ -3527,8 +4218,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 const ticker = (s.ticker||'').replace('.NS','').replace('.BO','');
                 const isHigh = s.confidence >= 85;
                 const rowBg = isHigh ? 'background:rgba(245,158,11,0.03);' : '';
-                return `<tr style="${rowBg}">
-                    <td><span class="font-display font-bold text-white text-sm">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction">⭐</span>':''}</td>
+                const staggerI = Math.min(idx, 12);
+                return `<tr data-stagger-i="${idx}" style="${rowBg}--i:${staggerI};">
+                    <td><span class="ticker-hover-target font-display font-bold text-white text-sm" data-ticker="${escapeHtml(s.ticker || ticker)}">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction">⭐</span>':''}</td>
                     <td><span class="${dirCls} text-xs">${dirIcon} ${s.direction}</span></td>
                     <td><div class="conf-ring ${confCls}">${s.confidence}</div></td>
                     <td class="text-slate-300 font-mono text-xs">₹${s.entry.toLocaleString('en-IN')}</td>
@@ -3803,7 +4495,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 </td></tr>`;
                 return;
             }
-            tbody.innerHTML = rows.map(r => {
+            tbody.innerHTML = rows.map((r, idx) => {
                 const ticker = (r.ticker || '').replace('.NS', '').replace('.BO', '');
                 const dirCls = r.direction === 'BULLISH' ? 'bull' : (r.direction === 'BEARISH' ? 'bear' : '');
                 const dirArrow = r.direction === 'BULLISH' ? '▲' : (r.direction === 'BEARISH' ? '▼' : '◆');
@@ -3813,9 +4505,10 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 else if (r.status === 'Stop Loss Hit') { outcomeCls = 'stop'; outcomeTxt = '✕ Stop'; }
                 else if (r.status === 'Reacted Against Prediction') { outcomeCls = 'stop'; outcomeTxt = '↘ Reacted'; }
 
-                return `<tr>
+                const staggerI = Math.min(idx, 12);
+                return `<tr data-stagger-i="${idx}" style="--i:${staggerI}">
                     <td class="tr-num tr-muted">${_fmtDate(r.created_at)}</td>
-                    <td><span class="font-display font-black text-white tracking-tight">${ticker}</span></td>
+                    <td><span class="ticker-hover-target font-display font-black text-white tracking-tight" data-ticker="${escapeHtml(r.ticker || ticker)}" style="cursor:pointer">${ticker}</span></td>
                     <td><span class="tr-dir-pill ${dirCls}"><span class="dot" style="background:currentColor"></span>${r.direction}</span></td>
                     <td class="text-right tr-num">${r.confidence || '—'}</td>
                     <td class="text-right tr-num tr-muted">${_fmtPrice(r.base_price)}</td>
