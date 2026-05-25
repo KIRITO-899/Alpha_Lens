@@ -14,7 +14,7 @@ def safe_print(*args, **kwargs):
         pass  # stdout was closed — ignore silently
 
 print("[DEBUG] App startup beginning...", flush=True)
-from flask import Flask, render_template, request, jsonify, session, make_response
+from flask import Flask, render_template, request, jsonify, session, make_response, send_from_directory
 import sqlite3
 import secrets
 import random
@@ -826,6 +826,45 @@ def init_news_db():
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_stockimpact_status_created ON stock_impact(status, created_at)")
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_histpatterns_ticker     ON historical_patterns(ticker)")
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_histpatterns_ticker_dir ON historical_patterns(ticker, direction)")
+
+    # ── T3.16: Archive tables for periodic data archival ──
+    # Same schema as their hot counterparts. The archival worker MOVES rows
+    # older than 90 days here, keeping the active tables small + fast forever.
+    # Critical: historical_patterns is NOT archived — that's the long-term
+    # training memory the HistoricalSimilarityModel reads from.
+    run_query_safe('''
+        CREATE TABLE IF NOT EXISTS news_archive (
+            id INTEGER PRIMARY KEY,
+            headline TEXT NOT NULL,
+            news_time TEXT,
+            aam_janta_translation TEXT,
+            macro_pathway TEXT,
+            category TEXT,
+            created_at TIMESTAMP,
+            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    run_query_safe('''
+        CREATE TABLE IF NOT EXISTS stock_impact_archive (
+            id INTEGER PRIMARY KEY,
+            news_id INTEGER,
+            ticker TEXT,
+            impact TEXT,
+            estimated_change_percent REAL,
+            view TEXT,
+            reason TEXT,
+            base_price REAL,
+            current_price REAL,
+            status TEXT,
+            created_at TIMESTAMP,
+            confidence_score INTEGER,
+            technical_context TEXT,
+            ensemble_detail TEXT,
+            archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_archive_created_at  ON news_archive(created_at)")
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_stockimpact_archive_news ON stock_impact_archive(news_id)")
 
 def migrate_local_sqlite_to_postgres():
     import sqlite3
@@ -3651,6 +3690,26 @@ def home():
     # but repeat visits inside that window are instant from the browser cache.
     resp = make_response(render_template('index.html'))
     resp.headers['Cache-Control'] = 'public, max-age=60, must-revalidate'
+    return resp
+
+
+# ── T3.13 Service Worker ──
+# Served from the site root so its scope is the whole origin.
+# Cache-Control no-cache forces every browser to revalidate /sw.js on each load
+# so deploys that bump the SW's CACHE_VERSION actually ship to users promptly.
+@app.route('/sw.js')
+def service_worker():
+    resp = send_from_directory(app.static_folder, 'sw.js')
+    resp.headers['Cache-Control'] = 'no-cache'
+    resp.headers['Service-Worker-Allowed'] = '/'
+    return resp
+
+
+# ── T3.14 PWA manifest ──
+@app.route('/manifest.json')
+def pwa_manifest():
+    resp = send_from_directory(app.static_folder, 'manifest.json')
+    resp.headers['Cache-Control'] = 'public, max-age=3600'
     return resp
 
 def _fetch_index_from_yahoo_chart(symbol, market_open=None, now_ist=None):
@@ -6557,12 +6616,94 @@ def db_sync_worker():
             traceback.print_exc()
 
 
+def archival_worker():
+    """
+    T3.16: Move news + stock_impact rows older than ARCHIVE_AFTER_DAYS into
+    the *_archive tables. Keeps the hot tables small so all the indexes stay
+    cache-friendly even years from now.
+
+    Reversible — rows are MOVED (insert+delete in a transaction), not
+    destroyed. To restore a date range, just INSERT INTO news SELECT * FROM
+    news_archive WHERE created_at BETWEEN ...
+
+    The HistoricalSimilarityModel reads from historical_patterns which is
+    deliberately untouched — that's the AI's distilled long-term memory.
+    """
+    ARCHIVE_AFTER_DAYS = int(os.environ.get("ARCHIVE_AFTER_DAYS", "90"))
+    RUN_EVERY_HOURS    = int(os.environ.get("ARCHIVE_RUN_EVERY_HOURS", "24"))
+
+    if os.environ.get("ARCHIVE_DISABLED", "").lower() in ("1", "true", "yes"):
+        print("[ARCHIVE] Worker disabled via ARCHIVE_DISABLED env var.", flush=True)
+        return
+
+    print(f"[ARCHIVE] Worker started — moves rows >{ARCHIVE_AFTER_DAYS} days every {RUN_EVERY_HOURS}h.", flush=True)
+
+    # Small initial delay so the rest of startup finishes first
+    time.sleep(120)
+
+    while True:
+        try:
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_AFTER_DAYS)) \
+                        .strftime('%Y-%m-%d %H:%M:%S')
+
+            conn = connect_news_db()
+            c = conn.cursor()
+
+            # ── Move stock_impact rows first (referential safety: they reference news) ──
+            c.execute("""
+                INSERT INTO stock_impact_archive
+                    (id, news_id, ticker, impact, estimated_change_percent, view, reason,
+                     base_price, current_price, status, created_at, confidence_score,
+                     technical_context, ensemble_detail)
+                SELECT id, news_id, ticker, impact, estimated_change_percent, view, reason,
+                       base_price, current_price, status, created_at, confidence_score,
+                       technical_context, ensemble_detail
+                FROM stock_impact
+                WHERE created_at < ?
+            """, (cutoff,))
+            impact_moved = c.cursor.rowcount if hasattr(c, 'cursor') else 0
+
+            c.execute("DELETE FROM stock_impact WHERE created_at < ?", (cutoff,))
+
+            # ── Now news rows ──
+            c.execute("""
+                INSERT INTO news_archive
+                    (id, headline, news_time, aam_janta_translation, macro_pathway,
+                     category, created_at)
+                SELECT id, headline, news_time, aam_janta_translation, macro_pathway,
+                       category, created_at
+                FROM news
+                WHERE created_at < ?
+            """, (cutoff,))
+            news_moved = c.cursor.rowcount if hasattr(c, 'cursor') else 0
+
+            c.execute("DELETE FROM news WHERE created_at < ?", (cutoff,))
+
+            conn.commit()
+            conn.close()
+
+            if news_moved or impact_moved:
+                print(f"[ARCHIVE] Moved {news_moved} news + {impact_moved} stock_impact rows to archive (older than {cutoff}).", flush=True)
+            else:
+                print(f"[ARCHIVE] No rows older than {ARCHIVE_AFTER_DAYS}d to archive.", flush=True)
+
+        except Exception as e:
+            print(f"[ARCHIVE] Error in archival pass: {e}", flush=True)
+
+        # Sleep until next run
+        time.sleep(RUN_EVERY_HOURS * 3600)
+
+
 def start_background_workers():
     engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
     engine_thread.start()
 
     yf_thread = threading.Thread(target=yfinance_worker, daemon=True)
     yf_thread.start()
+
+    # T3.16: archival worker
+    arch_thread = threading.Thread(target=archival_worker, name="ArchivalWorker", daemon=True)
+    arch_thread.start()
 
     # Start the cloud-to-local database synchronizer if pointing to cloud
     db_url = os.environ.get("DATABASE_URL")

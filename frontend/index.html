@@ -52,6 +52,17 @@
     <link rel="preconnect" href="https://cdnjs.cloudflare.com">
     <link rel="dns-prefetch" href="https://accounts.google.com">
 
+    <!-- ── T3.15 Resource preload hints ──
+         Render's free tier doesn't expose HTTP/2 server-push or 103 Early
+         Hints, so we use the next best thing: <link rel=preload> tells the
+         browser "this is critical, fetch it NOW even before you see the
+         actual reference later in the HTML." Saves another ~100-300ms on
+         first paint because TLS+download of fonts overlaps with HTML parse.
+         Marked as=style because the @font-face declarations live inside a
+         CSS file. -->
+    <link rel="preload" as="style" crossorigin
+          href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+
     <!-- T2.12: Three.js removed. The particle background it powered renders into
          #canvas-container which is display:none — the aurora mesh layer (CSS only)
          replaced it visually. ~150 KB and a 60fps animation loop saved per visit. -->
@@ -61,6 +72,21 @@
         href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
         rel="stylesheet">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Ctext x='16' y='21' text-anchor='middle' fill='%23C9A962' font-family='system-ui' font-size='11' font-weight='700'%3EAL%3C/text%3E%3C/svg%3E">
+
+    <!-- ── T3.14 PWA manifest + Apple Web App tags ──
+         Makes the site installable to home screen (Android/Chrome reads the
+         manifest; iOS Safari reads the apple-* meta tags). Theme + status-bar
+         colors keep the OS chrome aligned with the dark institutional look. -->
+    <link rel="manifest" href="/manifest.json">
+    <meta name="theme-color"                                content="#050507">
+    <meta name="application-name"                           content="Alpha Lens">
+    <!-- iOS Safari: add-to-home-screen support -->
+    <meta name="apple-mobile-web-app-capable"               content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style"      content="black-translucent">
+    <meta name="apple-mobile-web-app-title"                 content="Alpha Lens">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 180 180'%3E%3Crect width='180' height='180' rx='40' fill='%230A0A0C'/%3E%3Ctext x='90' y='118' text-anchor='middle' fill='%23C9A962' font-family='system-ui,sans-serif' font-size='62' font-weight='900'%3EAL%3C/text%3E%3C/svg%3E">
+    <!-- Windows Tile color -->
+    <meta name="msapplication-TileColor"                    content="#050507">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" async></script>
     <!-- T2.7: stocks.js lazy-loaded on first search-input focus.
@@ -99,6 +125,31 @@
         news:    fetch('/api/news/all?limit=7500').then(r => r.ok ? r.json() : null).catch(() => null),
         indices: fetch('/api/indices').then(r => r.ok ? r.json() : null).catch(() => null),
       };
+
+      // ── T3.13 Service Worker registration ──
+      // Registered as soon as the page starts loading. updateViaCache:'none'
+      // ensures the browser always fetches a fresh /sw.js so version bumps
+      // ship to users on next page load. Scoped to '/' so the SW intercepts
+      // every same-origin request on the site.
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/', updateViaCache: 'none' })
+            .then((reg) => {
+              // When a new SW is found, ask it to skip waiting so the user
+              // doesn't need a 2nd refresh to get the new version.
+              reg.addEventListener('updatefound', () => {
+                const sw = reg.installing;
+                if (!sw) return;
+                sw.addEventListener('statechange', () => {
+                  if (sw.state === 'installed' && navigator.serviceWorker.controller) {
+                    sw.postMessage({ type: 'SKIP_WAITING' });
+                  }
+                });
+              });
+            })
+            .catch(() => { /* SW registration failed — site still works */ });
+        });
+      }
     </script>
 
 
