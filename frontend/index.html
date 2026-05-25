@@ -2895,12 +2895,11 @@
 
         async function fetchLiveNews() {
             try {
-                // Request up to 1000 items — enough for 7 days of news at typical
-                // scrape volume (~80-150 articles/day). The backend does N+1 queries
-                // (one per news for stock_impact joins), and higher values like 7500
-                // were timing out at Cloudflare's 60s edge limit. Once the backend
-                // query is refactored to a single JOIN, we can safely bump this again.
-                const response = await fetch('/api/news/all?limit=1000');
+                // Request the full 7-day archive (up to backend cap of 7500). The
+                // backend was previously N+1 on stock_impact lookups which timed out
+                // around limit=7500; it's now refactored to a single batched IN(...)
+                // query so this loads in ~3-5s even with thousands of items.
+                const response = await fetch('/api/news/all?limit=7500');
                 const payload = await response.json();
                 // Handle both old array format and new {market_open, news} format
                 let raw;

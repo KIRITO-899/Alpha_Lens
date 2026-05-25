@@ -3905,8 +3905,18 @@ def get_top_news():
 
 @app.route('/api/news/all', methods=['GET'])
 def get_all_news():
+    """
+    Returns recent (last 7 days) news with their affected stock impacts.
+
+    Performance note: This used to do 1 + N queries (one big news query + one
+    stock_impact query per news row). At limit=7500 that was 7501 round-trips
+    against Render's free-tier Postgres, which routinely exceeded the 60s
+    Cloudflare edge timeout. Refactored to **2 total queries** (news, then a
+    single IN(...) batch for impacts) and one Python-side group-by — drops
+    the dominant cost from O(N) round-trips to O(1).
+    """
     try:
-        # Bug #15 fix: add pagination to prevent unbounded response sizes
+        # Bug #15 fix: pagination to prevent unbounded response sizes
         try:
             limit = min(int(request.args.get('limit', 50)), 7500)
             offset = max(int(request.args.get('offset', 0)), 0)
@@ -3914,64 +3924,96 @@ def get_all_news():
             limit, offset = 50, 0
 
         conn = connect_news_db()
-        c  = conn.cursor()
-        c2 = conn.cursor()
+        c    = conn.cursor()
         seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+
+        # ── Query 1: news rows ──
         c.execute(
             "SELECT * FROM news WHERE created_at >= ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
             (seven_days_ago, limit, offset)
         )
         news_rows = c.fetchall()
-
-        # Bug #21 fix: c.cursor is always the raw underlying cursor; the hasattr
-        # branch was always True, making the else a dead branch. Simplify directly.
         news_cols = [desc[0] for desc in c.cursor.description]
 
-        all_news = []
+        if not news_rows:
+            conn.close()
+            return jsonify({"market_open": is_market_open(), "news": [], "limit": limit, "offset": offset})
+
+        # Build the news_items list and collect IDs for the impact batch query
+        news_items = []
+        news_ids   = []
+        for raw_row in news_rows:
+            ni = dict(zip(news_cols, raw_row))
+            try:
+                ni['macro_pathway'] = json.loads(ni.get('macro_pathway') or '[]')
+            except (ValueError, TypeError):  # json.loads only raises these
+                ni['macro_pathway'] = []
+            news_items.append(ni)
+            news_ids.append(ni['id'])
+
+        # ── Query 2: ALL stock_impact rows for the news set, in ONE round-trip ──
+        # SQLite + Postgres both happily handle a few thousand IN-list params;
+        # the cursor wrapper translates ? → %s automatically.
+        impacts_by_news_id = {}
+        if news_ids:
+            placeholders = ','.join(['?'] * len(news_ids))
+            c.execute(
+                f"SELECT * FROM stock_impact WHERE news_id IN ({placeholders})",
+                tuple(news_ids)
+            )
+            impact_rows = c.fetchall()
+            impact_cols = [desc[0] for desc in c.cursor.description]
+            for raw in impact_rows:
+                row = dict(zip(impact_cols, raw))
+                impacts_by_news_id.setdefault(row.get('news_id'), []).append(row)
+
+        conn.close()
+
+        # ── Stitch impacts back onto news items + apply the same business
+        #    logic (dedup-by-ticker / diff_pct / market-closed gating) ──
         mkt_open = is_market_open()
         quote_cache = {}
-        for raw_row in news_rows:
-            news_item = dict(zip(news_cols, raw_row))
-            try:
-                news_item['macro_pathway'] = json.loads(news_item.get('macro_pathway') or '[]')
-            except (ValueError, TypeError):  # json.loads() only raises these; bare except swallows KeyboardInterrupt
-                news_item['macro_pathway'] = []
-            c2.execute("SELECT * FROM stock_impact WHERE news_id = ?", (news_item['id'],))
-            raw_stocks_rows = c2.fetchall()
-            impact_cols = [desc[0] for desc in c2.cursor.description]  # Bug #21 fix: remove dead else branch
-            raw_stocks = [dict(zip(impact_cols, r)) for r in raw_stocks_rows]
-            # Deduplicate by ticker — keep highest confidence score
+
+        for ni in news_items:
+            raw_stocks = impacts_by_news_id.get(ni['id'], [])
+
+            # Dedup by ticker — keep the row with the highest confidence_score
             seen_tickers = {}
             for s in raw_stocks:
                 t = s.get('ticker', '')
                 if t not in seen_tickers or (s.get('confidence_score') or 0) > (seen_tickers[t].get('confidence_score') or 0):
                     seen_tickers[t] = s
             stocks = list(seen_tickers.values())
+
             for s in stocks:
                 bp = s.get('base_price') or 0
                 cp = s.get('current_price') or 0
                 status = s.get('status', '')
-                if not mkt_open and status == 'Active View' and not has_market_traded_since(news_item.get('news_time') or news_item.get('created_at')):
+                if not mkt_open and status == 'Active View' and not has_market_traded_since(
+                    ni.get('news_time') or ni.get('created_at')
+                ):
                     s['current_price'] = bp
                     s['diff_pct'] = 0.0
                     s['market_change_pct'] = 0.0
                     s['_skip_market_quote'] = True
                     cp = bp
-                is_closed = s.get('status') in ['Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction', 'Expired']
+                is_closed = s.get('status') in (
+                    'Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction', 'Expired'
+                )
                 if is_closed and s.get('estimated_change_percent') is not None:
                     s['diff_pct'] = round(s.get('estimated_change_percent'), 2)
                 elif bp > 0 and cp > 0:
                     s['diff_pct'] = round((cp - bp) / bp * 100, 2)
                 else:
                     s['diff_pct'] = None
-            attach_market_change_percentages(stocks, market_open=mkt_open, quote_cache=quote_cache)
-            news_item['affected_stocks'] = stocks
-            all_news.append(news_item)
 
-        conn.close()
-        return jsonify({"market_open": mkt_open, "news": all_news, "limit": limit, "offset": offset})
+            attach_market_change_percentages(stocks, market_open=mkt_open, quote_cache=quote_cache)
+            ni['affected_stocks'] = stocks
+
+        return jsonify({"market_open": mkt_open, "news": news_items, "limit": limit, "offset": offset})
     except Exception as e:
         print("Error fetching all news", e)
+        import traceback; traceback.print_exc()
         return jsonify({"market_open": is_market_open(), "news": []})
 
 def parse_macro_pathway_value(value):
