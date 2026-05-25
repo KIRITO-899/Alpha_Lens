@@ -52,17 +52,41 @@
     <link rel="preconnect" href="https://cdnjs.cloudflare.com">
     <link rel="dns-prefetch" href="https://accounts.google.com">
 
-    <!-- Three.js & GSAP are non-critical visual libs — load async so they don't
-         block the HTML parser. Three.js init is also deferred via
-         requestIdleCallback below (T1.5). -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js" async></script>
+    <!-- T2.12: Three.js removed. The particle background it powered renders into
+         #canvas-container which is display:none — the aurora mesh layer (CSS only)
+         replaced it visually. ~150 KB and a 60fps animation loop saved per visit. -->
+    <!-- GSAP is loaded async — used for the auth-modal unlock animation only. -->
+
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
         rel="stylesheet">
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Ctext x='16' y='21' text-anchor='middle' fill='%23C9A962' font-family='system-ui' font-size='11' font-weight='700'%3EAL%3C/text%3E%3C/svg%3E">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" async></script>
-    <script src="/stocks.js" defer></script>
+    <!-- T2.7: stocks.js lazy-loaded on first search-input focus.
+         Saves ~29 KB (br-compressed) on every page that doesn't use search. -->
+    <script>
+      // Idempotent loader — call multiple times safely, returns a Promise.
+      // Triggers on focus/click of the search input (see search handlers below).
+      window.__alphaLoadStocks = (() => {
+        let p = null;
+        return () => {
+          if (p) return p;
+          if (typeof LOCAL_STOCKS !== 'undefined') {
+            p = Promise.resolve();
+            return p;
+          }
+          p = new Promise((resolve, reject) => {
+            const s = document.createElement('script');
+            s.src = '/stocks.js';
+            s.onload  = () => resolve();
+            s.onerror = () => { p = null; reject(new Error('stocks.js failed to load')); };
+            document.head.appendChild(s);
+          });
+          return p;
+        };
+      })();
+    </script>
 
     <!-- ── T1.4 Earliest possible parallel fetch: warm the news + indices
          endpoints during HTML parse, BEFORE any of the script bodies run.
@@ -1800,7 +1824,9 @@
         <div id="regime-badge" class="neutral"><span id="regime-dot">●</span><span id="regime-text">MARKET NEUTRAL</span></div>
     </div>
 
-    <div id="canvas-container"></div>
+    <!-- T2.12: #canvas-container removed — was display:none and only held the
+         orphaned Three.js particle scene which we no longer load. -->
+
 
     <!-- ============================================== -->
     <!-- PROFESSIONAL AUTH MODAL                       -->
@@ -2248,7 +2274,7 @@
                                 <div class="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
                                 </div>
-                                <input type="text" id="stock-search-input" oninput="handleStockSearch(event)" placeholder="Search NSE/BSE stocks..." 
+                                <input type="text" id="stock-search-input" oninput="handleStockSearch(event)" onfocus="window.__alphaLoadStocks && window.__alphaLoadStocks()" placeholder="Search NSE/BSE stocks..."
                                     class="w-full bg-black/40 border border-white/5 rounded-xl pl-10 pr-4 py-3 text-sm text-white focus:outline-none focus:border-violet-500 transition-colors placeholder-slate-500">
                                 <!-- Dropdown -->
                                 <div id="stock-search-dropdown" class="absolute left-0 right-0 mt-2 bg-slate-900 border border-white/5 rounded-xl shadow-2xl max-h-60 overflow-y-auto hidden z-50">
@@ -3401,6 +3427,17 @@
                 return;
             }
 
+            // T2.7: Ensure the (lazy-loaded) LOCAL_STOCKS table is present.
+            // First call here triggers the fetch of /stocks.js if it hasn't
+            // happened yet; subsequent calls resolve instantly from the cache.
+            if (typeof LOCAL_STOCKS === 'undefined' && window.__alphaLoadStocks) {
+                if (dropdown) {
+                    dropdown.innerHTML = '<div class="px-4 py-3 text-sm text-slate-500">Loading universe…</div>';
+                    dropdown.classList.remove('hidden');
+                }
+                try { await window.__alphaLoadStocks(); } catch (e) { /* keep going — backend search still works */ }
+            }
+
             // STEP 1: Show local results instantly (zero latency)
             const localResults = searchLocalStocks(query);
             renderSearchDropdown(localResults.length > 0 ? localResults : null);
@@ -4114,58 +4151,10 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             installCardFlipHandlers();      // #6 3D card flip on long-hover
         };
 
-        // ── T1.5: Three.js particle background — deferred to idle time ──
-        // Boot only after first paint + when the browser is idle. Saves ~200ms
-        // of main-thread work during the critical render path. Polls for the
-        // async-loaded THREE global with a short timeout so we still boot
-        // even if the CDN is slow.
-        (function bootThreeWhenIdle() {
-            const startBoot = () => {
-                if (typeof THREE === 'undefined') {
-                    // THREE not yet loaded (async script still arriving). Try again soon.
-                    return setTimeout(startBoot, 250);
-                }
-                try {
-                    const container = document.getElementById('canvas-container');
-                    if (!container) return;  // canvas slot is display:none anyway, skip if missing
-                    const scene = new THREE.Scene();
-                    scene.fog = new THREE.FogExp2(0x030712, 0.003);
-                    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-                    camera.position.z = 120; camera.position.y = 20;
-                    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                    renderer.setSize(window.innerWidth, window.innerHeight);
-                    container.appendChild(renderer.domElement);
-                    const geometry = new THREE.BufferGeometry();
-                    const positions = new Float32Array(600 * 3);
-                    for (let i = 0; i < 600; i++) {
-                        positions[i * 3]     = (Math.random() - 0.5) * 400;
-                        positions[i * 3 + 1] = (Math.random() - 0.5) * 100 - 20;
-                        positions[i * 3 + 2] = (Math.random() - 0.5) * 400;
-                    }
-                    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-                    const particles = new THREE.Points(geometry, new THREE.PointsMaterial({
-                        size: 1.5, color: 0xa78bfa, transparent: true, opacity: 0.36
-                    }));
-                    scene.add(particles);
-                    (function animate() {
-                        requestAnimationFrame(animate);
-                        particles.rotation.y += 0.0005;
-                        renderer.render(scene, camera);
-                    })();
-                } catch (e) {
-                    // WebGL not available or some other failure — silently skip.
-                    // Background still looks fine without particles thanks to the
-                    // aurora layer.
-                }
-            };
-            // Prefer idle scheduling; fall back to a small timeout for browsers
-            // that don't support requestIdleCallback.
-            if (typeof requestIdleCallback === 'function') {
-                requestIdleCallback(startBoot, { timeout: 2000 });
-            } else {
-                setTimeout(startBoot, 600);
-            }
-        })();
+        // T2.12: Three.js particle background removed. The container it rendered
+        // into was display:none — the aurora-mesh CSS layer handles the visible
+        // background. Saves ~150 KB on every page load + a continuous 60fps
+        // animation loop that was running for an invisible canvas.
 
         // ══════════════════════════════════════════════════════════════
         // PREMIUM FEATURES: Ticker Bar, Signal Terminal, Track Record, Toasts

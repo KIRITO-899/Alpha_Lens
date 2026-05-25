@@ -316,6 +316,63 @@ def _apply_cache_headers(resp):
         pass
     return resp
 
+
+# ── T2.11: Server-side route cache ──
+# Memoizes the JSON response of expensive read-only endpoints for `ttl` seconds.
+# Cache key = (path, querystring). Returns the cached Flask response when a
+# request arrives within the window; computes fresh otherwise. Thread-safe.
+#
+# Browsers already cache via Cache-Control headers (T1.3), but THAT cache is
+# per-browser. This cache is shared across ALL visitors hitting the same Render
+# instance — so when 10 users land at once, only the first triggers the DB
+# query; the next 9 get the cached response in <1 ms.
+import functools as _ft
+import threading as _th
+
+_ROUTE_CACHE: dict = {}
+_ROUTE_CACHE_LOCK = _th.Lock()
+
+def route_cache(ttl_seconds: int):
+    """Memoize a Flask route's return value for `ttl_seconds`. Key = path + query."""
+    def deco(fn):
+        @_ft.wraps(fn)
+        def wrapper(*args, **kwargs):
+            key = (request.path or '', request.query_string or b'')
+            now = time.time()
+            with _ROUTE_CACHE_LOCK:
+                entry = _ROUTE_CACHE.get(key)
+                if entry and (now - entry['ts']) < ttl_seconds:
+                    # Return a NEW Flask Response so any after_request hooks
+                    # (Cache-Control, gzip via flask-compress) still apply.
+                    body, mimetype, status = entry['body'], entry['mimetype'], entry['status']
+                    return app.response_class(body, status=status, mimetype=mimetype)
+            # Cache miss — compute, memoize, return.
+            result = fn(*args, **kwargs)
+            try:
+                # Normalize result to a Flask Response so we can cache its bytes.
+                # Routes typically return a Response (jsonify) or a (resp, status) tuple.
+                if isinstance(result, tuple):
+                    body_obj, status = result[0], result[1] if len(result) > 1 else 200
+                else:
+                    body_obj, status = result, 200
+                if hasattr(body_obj, 'get_data'):
+                    body, mimetype = body_obj.get_data(), body_obj.mimetype
+                else:
+                    # Fallback — shouldn't normally happen
+                    body, mimetype = str(body_obj).encode('utf-8'), 'application/json'
+                with _ROUTE_CACHE_LOCK:
+                    _ROUTE_CACHE[key] = {
+                        'ts': now,
+                        'body': body,
+                        'mimetype': mimetype,
+                        'status': status if isinstance(status, int) else 200,
+                    }
+            except Exception:
+                pass
+            return result
+        return wrapper
+    return deco
+
 # Minimum AI confidence to accept a prediction
 MIN_CONFIDENCE = 50
 
@@ -514,7 +571,24 @@ class ConnectionWrapper:
             pass
 
     def close(self):
-        self.conn.close()
+        # T2.8: If this wrapper owns a pooled Postgres connection, return it
+        # to the pool instead of physically closing the socket. That's the
+        # whole point of the pool — avoid the TCP+TLS handshake on every req.
+        if self.is_postgres and getattr(self, '_pooled', False):
+            try:
+                # Rollback any uncommitted state so the next checkout starts clean
+                try: self.conn.rollback()
+                except Exception: pass
+                _PG_POOL.putconn(self.conn)
+            except Exception:
+                # If pool return fails for any reason, just close directly
+                try: self.conn.close()
+                except Exception: pass
+            return
+        try:
+            self.conn.close()
+        except Exception:
+            pass
 
     def __enter__(self):
         return self
@@ -526,11 +600,69 @@ class ConnectionWrapper:
         return getattr(self.conn, name)
 
 
+# ── T2.8: Postgres connection pool ──
+# One ThreadedConnectionPool per process, lazily created on first checkout.
+# Render free tier Postgres has ~10 max connections, so we cap at 8 to leave
+# room for the worker thread + any out-of-band tools. Each checkout-then-
+# return is microseconds vs ~50-200ms for a fresh psycopg2.connect().
+_PG_POOL = None
+_PG_POOL_LOCK = __import__('threading').Lock()
+
+def _get_pg_pool(db_url):
+    global _PG_POOL
+    if _PG_POOL is not None:
+        return _PG_POOL
+    with _PG_POOL_LOCK:
+        if _PG_POOL is not None:
+            return _PG_POOL
+        try:
+            from psycopg2.pool import ThreadedConnectionPool
+            _PG_POOL = ThreadedConnectionPool(
+                minconn=1,
+                maxconn=int(os.environ.get('PG_POOL_MAX', '8')),
+                dsn=db_url,
+                connect_timeout=10,
+            )
+            print(f"[PERF] Postgres connection pool initialized (max={int(os.environ.get('PG_POOL_MAX', '8'))})")
+        except Exception as e:
+            print(f"[PERF] Postgres pool init FAILED: {e} — falling back to per-request connect")
+            _PG_POOL = False  # sentinel: pool unavailable, never retry
+    return _PG_POOL
+
+
 def connect_postgres_db(db_url):
     import psycopg2
-    # Ensure connections have a reasonable timeout
+    # Try pool first; fall back to direct connect if pool is unavailable.
+    pool = _get_pg_pool(db_url)
+    if pool and pool is not False:
+        try:
+            conn = pool.getconn()
+            # Quick liveness check — pooled connections sometimes go stale.
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT 1")
+                cur.fetchone()
+                cur.close()
+            except Exception:
+                # Stale — discard and grab another (or fresh-connect)
+                try: pool.putconn(conn, close=True)
+                except Exception:
+                    try: conn.close()
+                    except Exception: pass
+                conn = psycopg2.connect(db_url, connect_timeout=10)
+                wrapper = ConnectionWrapper(conn, is_postgres=True)
+                wrapper._pooled = False
+                return wrapper
+            wrapper = ConnectionWrapper(conn, is_postgres=True)
+            wrapper._pooled = True  # close() returns to pool
+            return wrapper
+        except Exception as e:
+            print(f"[PERF] Pool checkout failed ({e}), using direct connect")
+    # Fallback: original behavior
     conn = psycopg2.connect(db_url, connect_timeout=10)
-    return ConnectionWrapper(conn, is_postgres=True)
+    wrapper = ConnectionWrapper(conn, is_postgres=True)
+    wrapper._pooled = False
+    return wrapper
 
 
 def connect_news_db():
@@ -3709,6 +3841,7 @@ def _index_result_has_quotes(items):
     return bool(items) and all(item.get("price") is not None for item in items)
 
 @app.route('/api/indices', methods=['GET'])
+@route_cache(ttl_seconds=25)
 def get_indices():
     global _INDEX_CACHE, _INDEX_CACHE_TIME
     
@@ -5428,11 +5561,15 @@ def get_cached_stock_close_from_db(ticker):
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
+        # T2.10: dropped SQLite-only datetime() wrapper — both SQLite and
+        # Postgres sort created_at correctly as-is, and datetime() was the
+        # source of "function datetime(timestamp without time zone) does
+        # not exist" errors visible in earlier Render logs.
         c.execute("""
             SELECT current_price, technical_context
             FROM stock_impact
             WHERE UPPER(ticker) = ? AND current_price > 0
-            ORDER BY datetime(created_at) DESC, id DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT 20
         """, (normalized.upper(),))
         rows = c.fetchall()
@@ -5651,6 +5788,7 @@ NIFTY50_UNIVERSE = [
 ]
 
 @app.route('/api/backtest-stats', methods=['GET'])
+@route_cache(ttl_seconds=180)
 def get_backtest_stats():
     """
     Aggregate signal performance for the Track Record page.
@@ -6212,14 +6350,29 @@ def debug_sql_runner():
 
 def db_sync_worker():
     """
-    Background worker that runs periodically to sync all data from cloud PostgreSQL 
-    to local SQLite databases. This ensures a 100% complete and up-to-date local 
+    Background worker that runs periodically to sync all data from cloud PostgreSQL
+    to local SQLite databases. This ensures a 100% complete and up-to-date local
     copy of all data is preserved.
+
+    T2.10: When running on Render itself, the local SQLite file lives on
+    ephemeral disk and gets wiped on every redeploy — so syncing Postgres
+    *back* into it is pointless and produces minute-by-minute "no such
+    table: news" errors in the logs. Skip the worker on Render. Devs running
+    locally with DATABASE_URL still get the cloud->local sync.
     """
     import sqlite3
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         print("   [DB SYNC] No DATABASE_URL found. Running in local SQLite mode; sync worker exiting.", flush=True)
+        return
+
+    # Render auto-sets RENDER_EXTERNAL_URL / RENDER_EXTERNAL_HOSTNAME / RENDER
+    # on every service. Any of them indicates we're running on Render itself.
+    if (os.environ.get("RENDER")
+            or os.environ.get("RENDER_EXTERNAL_URL")
+            or os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+            or os.environ.get("DB_SYNC_DISABLED", "").lower() in ("1", "true", "yes")):
+        print("   [DB SYNC] Running on Render (ephemeral disk) — cloud->local sync not useful here. Worker exiting.", flush=True)
         return
 
     print("   [DB SYNC] Synchronizer thread started.", flush=True)
@@ -6439,9 +6592,22 @@ def start_background_workers():
 
     return engine_thread, yf_thread
 
-if __name__ == '__main__':
-    # Small delay so DB is fully ready before workers start writing
-    time.sleep(2)
+# ── T2.9: Bootstrap background workers ──
+# Extracted from `if __name__ == '__main__':` so both startup paths work:
+#   (a) Flask dev server: `python backend/app.py` (local dev)
+#   (b) Gunicorn import: `gunicorn ... backend.app:app` (production on Render)
+# In (b), the __main__ block never runs because the module is imported, not
+# executed — so we run the bootstrap at module level with an idempotency guard.
+_alpha_bootstrapped = False
+_alpha_bootstrap_lock = threading.Lock()
+
+def _bootstrap_workers():
+    """Start the repair + ai_news + yfinance + db_sync threads exactly once."""
+    global _alpha_bootstrapped
+    with _alpha_bootstrap_lock:
+        if _alpha_bootstrapped:
+            return
+        _alpha_bootstrapped = True
 
     # Warn if DATABASE_URL is unset in production
     if not os.environ.get("DATABASE_URL"):
@@ -6452,15 +6618,9 @@ if __name__ == '__main__':
             print("   The system will silently fall back to local SQLite: news_cache.db")
             print("="*80 + "\n", flush=True)
 
-    parser = argparse.ArgumentParser(description='Alpha Lens backend startup mode')
-    parser.add_argument('--workers-only', action='store_true', help='Run background workers without launching the Flask UI')
-    parser.add_argument('--skip-workers', action='store_true', help='Do not start background workers')
-    parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', 5000)), help='Port for the Flask UI')
-    args = parser.parse_args()
-
-    run_workers = not args.skip_workers and os.environ.get("ALPHA_LENS_SKIP_WORKERS", "").lower() not in ("1", "true", "yes")
-    if args.workers_only:
-        run_workers = True
+    if os.environ.get("ALPHA_LENS_SKIP_WORKERS", "").lower() in ("1", "true", "yes"):
+        print("[SYSTEM] Background workers skipped (ALPHA_LENS_SKIP_WORKERS set).", flush=True)
+        return
 
     if os.environ.get("ALPHA_LENS_SKIP_AUTO_REPAIR", "").lower() not in ("1", "true", "yes"):
         def _run_repair():
@@ -6470,20 +6630,34 @@ if __name__ == '__main__':
                 print(f"[REPAIR ERROR] Failed to run repair: {e}", flush=True)
         threading.Thread(target=_run_repair, name="SignalRepairThread", daemon=True).start()
 
-    engine_thread = None
-    yf_thread = None
-    if run_workers:
-        engine_thread, yf_thread = start_background_workers()
-    else:
-        print("[SYSTEM] Background workers skipped for local UI server.")
+    start_background_workers()
+
+
+# Auto-bootstrap on module import so Gunicorn / WSGI servers fire the workers.
+# Skipped if explicitly disabled via env (e.g., during tests / pytest collection
+# or when running --workers-only via the CLI which handles bootstrap itself).
+if os.environ.get("ALPHA_LENS_SKIP_AUTO_BOOTSTRAP", "").lower() not in ("1", "true", "yes"):
+    _bootstrap_workers()
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Alpha Lens backend startup mode')
+    parser.add_argument('--workers-only', action='store_true', help='Run background workers without launching the Flask UI')
+    parser.add_argument('--skip-workers', action='store_true', help='Do not start background workers')
+    parser.add_argument('--port', type=int, default=int(os.environ.get('PORT', 5000)), help='Port for the Flask UI')
+    args = parser.parse_args()
 
     if args.workers_only:
         print("[SYSTEM] Worker-only mode active. Flask UI is disabled.")
-        engine_thread.join()
-        yf_thread.join()
+        # Workers already started by _bootstrap_workers() at import time.
+        # Just keep the process alive.
+        try:
+            while True:
+                time.sleep(60)
+        except KeyboardInterrupt:
+            pass
     else:
-        # Threaded=True allows the background AI loop to run alongside the website
-        # use_reloader=False prevents double execution of our background threads on restart
+        # Dev-server path. Workers already booted at import time above.
         debug_mode = os.environ.get("FLASK_ENV") == "development"
         app.run(debug=debug_mode, host='0.0.0.0', port=args.port, threaded=True, use_reloader=False)
 

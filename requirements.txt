@@ -1,5 +1,6 @@
 flask
 flask-compress
+gunicorn
 requests
 google-genai
 google-auth>=2.0.0

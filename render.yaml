@@ -5,7 +5,11 @@ services:
     region: singapore
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python backend/app.py
+    # T2.9: Gunicorn — 1 worker (preserves all module-level state including
+    # background workers + caches), 8 threads (handles concurrent requests
+    # without serializing). --timeout 90 leaves headroom over Cloudflare's 60s
+    # edge timeout. Chdir into backend/ so the app module is importable.
+    startCommand: gunicorn --chdir backend --workers 1 --threads 8 --bind 0.0.0.0:$PORT --timeout 90 --access-logfile - app:app
     healthCheckPath: /
     envVars:
       - key: DATABASE_URL
