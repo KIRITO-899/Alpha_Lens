@@ -250,6 +250,9 @@ MIN_CONFIDENCE = 50
 # Signal evaluation rules used by startup repair and the live price worker.
 TRADE_TARGET_PCT = 2.0
 TRADE_STOP_PCT = 1.0
+# A signal that hasn't hit target or stop within this window is marked Expired
+# and excluded from hit-rate stats. Tunable via env var for ops without redeploy.
+SIGNAL_EXPIRY_HOURS = int(os.environ.get("SIGNAL_EXPIRY_HOURS", "96"))
 
 import performance_report
 
@@ -3114,7 +3117,7 @@ def repair_existing_signal_statuses(days=14):
         else:
             age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
             diff_percent = round(((current_price - base_price) / base_price) * 100, 2) if base_price > 0 else 0.0
-            new_status = 'Expired' if age_hours >= 72 else 'Active View'
+            new_status = 'Expired' if age_hours >= SIGNAL_EXPIRY_HOURS else 'Active View'
 
         if abs(base_price - (row['base_price'] or 0.0)) > 0.01 or new_status != status or abs(diff_percent - (row['estimated_change_percent'] or 0.0)) > 0.1:
             updates.append((current_price, base_price, new_status, diff_percent, stock_id))
@@ -3336,7 +3339,7 @@ def yfinance_worker():
                         try:
                             created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S')
                             age_hours = (datetime.now(timezone.utc).replace(tzinfo=None) - created_dt).total_seconds() / 3600
-                            if age_hours >= 72:
+                            if age_hours >= SIGNAL_EXPIRY_HOURS:
                                 new_status = 'Expired'
                         except Exception:
                             pass
