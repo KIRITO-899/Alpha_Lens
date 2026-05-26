@@ -604,6 +604,25 @@ class AILogicModel:
 
         raw_text = None
 
+        def _fallback_or_none(_why):
+            # Graceful degradation: when the live AI vote can't be obtained
+            # (all keys exhausted, SM fallback down, or unparseable output),
+            # returning None makes the ensemble treat s7 as missing and
+            # HARD-REJECT the signal (approved=False) — which is why a quota
+            # crunch yields ZERO saved predictions. If the screener already
+            # produced a quality_score for this candidate, reuse it as the AI
+            # vote so the signal can still pass the ensemble on its merits.
+            # When keys are healthy this path never runs (fresh AI score wins).
+            if precalculated_score is not None:
+                try:
+                    _fb = max(10, min(95, int(float(precalculated_score))))
+                    print(f"   [AILogicModel] {_why} — falling back to screener score {_fb}.")
+                    import sys; sys.stdout.flush()
+                    return _fb
+                except Exception:
+                    pass
+            return None
+
         # --- PRIMARY: Gemini via google-genai SDK ---
         if get_client_fn:
             active_client, client_idx = get_client_fn()
@@ -683,7 +702,7 @@ class AILogicModel:
                 print(f"   [AILogicModel] SM-Gemini error: {e}")
 
         if raw_text is None:
-            return None
+            return _fallback_or_none("Live AI vote unavailable (keys exhausted)")
 
         try:
             match = re.search(r'\{[^{}]*\}', raw_text, re.DOTALL)
@@ -694,7 +713,7 @@ class AILogicModel:
                     return max(10, min(95, int(score)))
         except Exception as e:
             print(f"   [AILogicModel] JSON parse error: {e} | raw={raw_text[:80]}")
-        return None
+        return _fallback_or_none("AI response unparseable")
 
 
 # ==========================================
