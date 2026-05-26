@@ -285,6 +285,11 @@ _CACHE_RULES = (
     # The frontend JS catalog is a static file; we version it implicitly via
     # the index.html cache. Safe to cache aggressively.
     ("/stocks.js",                   "public, max-age=86400, stale-while-revalidate=86400"),
+    # ── Newly-extracted frontend chunks (was inline in index.html) ──
+    # Browser caches these separately; small tweaks to one file don't bust
+    # the others. SW revalidates on every load (handled by sw.js).
+    ("/app.js",                      "public, max-age=86400, stale-while-revalidate=86400"),
+    ("/styles.css",                  "public, max-age=86400, stale-while-revalidate=86400"),
     # ── Short-lived data — refresh frequently ──
     ("/api/indices",                 "public, max-age=30, stale-while-revalidate=30"),
     ("/api/news/top",                "public, max-age=30, stale-while-revalidate=60"),

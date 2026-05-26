@@ -17,7 +17,10 @@
  * may fail with cached responses where available.
  */
 
-const CACHE_VERSION = 'al-v1-2026-05-25';
+// Bump on every deploy that changes static assets. Activate handler purges
+// any cache whose key doesn't start with this version, so stale CSS/JS from
+// the previous deploy are evicted automatically.
+const CACHE_VERSION = 'al-v2-2026-05-26-split';
 const STATIC_CACHE  = `${CACHE_VERSION}-static`;
 const API_CACHE     = `${CACHE_VERSION}-api`;
 const HTML_CACHE    = `${CACHE_VERSION}-html`;
@@ -57,6 +60,11 @@ self.addEventListener('activate', (event) => {
 function isStaticAsset(url) {
   return (
     url.pathname === '/stocks.js' ||
+    // Extracted-from-index frontend chunks — cache-first since they change
+    // only when we redeploy (HTML revalidates first, which would pull a new
+    // version reference if these ever get versioned filenames).
+    url.pathname === '/app.js' ||
+    url.pathname === '/styles.css' ||
     url.pathname === '/manifest.json' ||
     url.pathname.endsWith('.svg') ||
     url.pathname.endsWith('.png') ||
