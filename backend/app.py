@@ -4603,7 +4603,35 @@ Return ONLY valid JSON matching this shape:
                                         is_similar = True
                                         
                                 if is_similar:
-                                    boosted_conf = min(99, max(db_conf, conf) + 10)
+                                    # ── Decaying consensus boost (Option 1) ──
+                                    # A flat +10 per merge let 3 weak (~70) signals
+                                    # stack straight to 93 "High Conviction". Each
+                                    # extra corroboration is now worth progressively
+                                    # less, so a pile of marginal signals can't fake
+                                    # conviction. Count prior merges from the reason
+                                    # trail (each merge appended a "[Consensus Boost"
+                                    # marker). Schedule: 1st +5, 2nd +3, 3rd +2, 4th+ +1.
+                                    _prior_merges = (db_reason or "").count("[Consensus Boost")
+                                    try:
+                                        _boost_schedule = [int(x) for x in os.environ.get("MERGE_BOOST_SCHEDULE", "5,3,2,1").split(",")]
+                                    except Exception:
+                                        _boost_schedule = [5, 3, 2, 1]
+                                    _this_boost = _boost_schedule[min(_prior_merges, len(_boost_schedule) - 1)]
+                                    _raw_boosted = max(db_conf, conf) + _this_boost
+
+                                    # ── Cap unless a single signal was strong (Option 3) ──
+                                    # Merge-stacking alone must not reach the High
+                                    # Conviction band (>=85). Unless ONE underlying
+                                    # signal independently scored >= MERGE_HIGH_BASE,
+                                    # clamp the merged confidence to MERGE_CONF_CAP so
+                                    # it stays Moderate. A genuinely strong single
+                                    # signal (e.g. a clean 88) keeps its high label.
+                                    _merge_cap = int(os.environ.get("MERGE_CONF_CAP", "80"))
+                                    _high_base = int(os.environ.get("MERGE_HIGH_BASE", "85"))
+                                    _strong_single = (db_conf >= _high_base) or (conf >= _high_base)
+                                    if not _strong_single:
+                                        _raw_boosted = min(_raw_boosted, _merge_cap)
+                                    boosted_conf = min(99, _raw_boosted)
                                     new_view = 'High Conviction' if boosted_conf >= 85 else 'Moderate Conviction'
                                     
                                     c.execute("SELECT headline FROM news WHERE id = ?", (news_id,))
