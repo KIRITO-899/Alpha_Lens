@@ -4423,9 +4423,13 @@ Return ONLY valid JSON matching this shape:
                 # Mark this ticker+direction as recently signalled to prevent duplicates
                 RECENT_SIGNALS[_cooldown_key] = _now_utc
                 # Bug #2 fix: dict.update() only adds/overwrites — it never removes keys.
-                # Use full reassignment so expired entries are actually pruned.
+                # Prune expired entries IN-PLACE — a full reassignment (`RECENT_SIGNALS = {...}`)
+                # makes Python treat the name as a function-local, which breaks the read at
+                # line ~4209 with UnboundLocalError on the next iteration (Bug #29).
                 cutoff = _now_utc - timedelta(hours=48)
-                RECENT_SIGNALS = {k: v for k, v in RECENT_SIGNALS.items() if v > cutoff}
+                _expired_keys = [_k for _k, _v in RECENT_SIGNALS.items() if _v <= cutoff]
+                for _k in _expired_keys:
+                    RECENT_SIGNALS.pop(_k, None)
 
             # ── Save approved signals in one short atomic write ──
             if approved_signals:
