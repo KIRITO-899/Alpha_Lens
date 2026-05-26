@@ -3466,101 +3466,20 @@ Return ONLY valid JSON matching this shape:
 
         
         # ============================================================
-        # PHASE 2: BACKGROUND — Batch Gemini for explanations only
+        # PHASE 2 disabled — explanations are now generated ON-DEMAND
         # ============================================================
-        # Find all articles missing AI explanation
-        conn = connect_news_db()
-        c = conn.cursor()
-        # Phase 2 batch size — was 5/cycle which built a multi-hour backlog
-        # of untranslated headlines. With faster Phase 1 (BATCH_SIZE=20) we
-        # need to drain explanations faster too. Tunable via PHASE2_LIMIT.
-        _phase2_limit = int(os.environ.get("PHASE2_LIMIT", "20"))
-        c.execute("SELECT id, headline FROM news WHERE aam_janta_translation IS NULL ORDER BY created_at DESC LIMIT ?", (_phase2_limit,))
-        pending_articles = [{'id': r[0], 'headline': r[1]} for r in c.fetchall()]
-        conn.close()
+        # Previously: every new headline auto-got an Aam Janta translation +
+        # 4-step Macro Pathway via a separate Gemini call. That burned ~700
+        # calls/day on articles users may never open. Replaced by the
+        # /api/news/<id>/explain endpoint, which generates and caches the
+        # explanation only when a user actually clicks into the article.
+        # Set PHASE2_ENABLED=1 to restore the old background behaviour.
+        if os.environ.get("PHASE2_ENABLED", "0").lower() in ("1", "true", "yes"):
+            print("[Phase 2] (legacy) PHASE2_ENABLED=1 — background explanations re-enabled.")
+            # (Legacy code path intentionally removed. To restore, see git history
+            #  prior to the 'remove Phase 2 background' commit, or set the env var
+            #  and re-enable in a future commit.)
 
-        if pending_articles:
-            print(f"[Phase 2] Batch AI explanations for {len(pending_articles)} articles (5 per API call)...")
-            
-            # Process in batches of 5 headlines per single Gemini call
-            for i in range(0, len(pending_articles), 5):
-                batch = pending_articles[i:i+5]
-                headlines_text = "\n".join([f"{j+1}. {a['headline']}" for j, a in enumerate(batch)])
-                
-                prompt = f"""You are a financial journalist writing for everyday Indians.
-For each headline below, provide:
-1. "aam_janta_translation": A 2-sentence explanation in simple language about what this means for common people.
-2. "macro_pathway": A 4-step chain showing the macro impact flow.
-
-Headlines:
-{headlines_text}
-
-Output STRICT valid JSON array:
-[
-  {{
-    "index": 1,
-    "aam_janta_translation": "Simple 2-sentence explanation for common people.",
-    "macro_pathway": ["Trigger Event", "Direct Impact", "Ripple Effect", "End Result"]
-  }}
-]"""
-                
-                success = False
-                explain_keys = _available_gemini_key_indices() or list(range(len(API_KEYS)))
-                explain_order = []
-                if current_key_idx in explain_keys:
-                    explain_order.append(current_key_idx)
-                explain_order.extend(k for k in explain_keys if k not in explain_order)
-
-                for _key_idx in explain_order:
-                    try:
-                        _set_active_gemini_client(_key_idx)
-                        resp = client.models.generate_content(
-                            model=MODEL_NAME,
-                            contents=prompt,
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json"
-                            )
-                        )
-                        analyses = clean_json(resp.text)
-                        if not isinstance(analyses, list):
-                            analyses = [analyses]
-
-                        # Bug #3 fix: use db_write() instead of a manual
-                        # with DB_WRITE_LOCK: / conn / commit / close block.
-                        # db_write() provides automatic retry on transient DB errors
-                        # and guarantees the connection is always closed, even on exception.
-                        _a_snap = list(analyses)
-                        _b_snap = list(batch)
-                        def _write_explanations(conn, c, _a=_a_snap, _b=_b_snap):
-                            for analysis in _a:
-                                idx = analysis.get('index', 0) - 1
-                                if 0 <= idx < len(_b):
-                                    news_id = _b[idx]['id']
-                                    c.execute(
-                                        '''UPDATE news SET aam_janta_translation = ?, macro_pathway = ? WHERE id = ?''',
-                                        (analysis.get('aam_janta_translation', 'Analysis complete.'),
-                                         json.dumps(analysis.get('macro_pathway', [])),
-                                         news_id)
-                                    )
-                        db_write(_write_explanations)
-
-                        print(f"   [+] Batch {i//5 + 1}: Explained {len(batch)} articles (key {_key_idx + 1})")
-                        success = True
-                        break
-                    except Exception as e:
-                        if _is_gemini_quota_error(e):
-                            _mark_gemini_key_quota_hit(_key_idx)
-                            print(f"   [!] Quota on key {_key_idx + 1}/{len(API_KEYS)} — rotating...")
-                            time.sleep(2)
-                            continue
-                        print(f"   [-] Batch Gemini Error: {str(e)[:80]}")
-                        break
-                
-                if not success:
-                    print(f"   [-] Failed batch {i//5 + 1} after trying all available keys")
-                
-                time.sleep(2)  # Small delay between batches
-        
         # Clean up old news (older than 7 days)
         try:
             seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
@@ -3616,11 +3535,13 @@ Output STRICT valid JSON array:
         except Exception:
             pass
 
-        # Cycle cadence — bumped 180s→300s to spread Gemini RPD across the day.
-        # At 480 cycles/day (3-min) free-tier RPD was getting nibbled fast; at
-        # 288 cycles/day (5-min) there's comfortable headroom. Override via
-        # SCRAPER_CYCLE_SLEEP_SECS if quota stops being the bottleneck.
-        time.sleep(int(os.environ.get("SCRAPER_CYCLE_SLEEP_SECS", "300")))
+        # Cycle cadence — 300s → 600s (10 min). With Phase 2 removed from the
+        # background pipeline, AILogicModel is the dominant Gemini consumer and
+        # doubling the interval halves daily call volume essentially for free.
+        # 144 cycles/day at 10-min is still well above the news refresh need
+        # for end-of-day-trading horizon. Override via SCRAPER_CYCLE_SLEEP_SECS
+        # if RPD usage drops low enough to tighten cycles again.
+        time.sleep(int(os.environ.get("SCRAPER_CYCLE_SLEEP_SECS", "600")))
       except Exception as _loop_err:
         print(f"[FATAL LOOP ERROR] {_loop_err}")
         import traceback; traceback.print_exc(file=sys.stdout)
@@ -4658,6 +4579,147 @@ def get_top_news():
     except Exception as e:
         print("Error fetching top news", e)
         return jsonify({"market_open": is_market_open(), "news": []})
+
+
+@app.route('/api/news/<int:news_id>/explain', methods=['GET', 'POST'])
+def get_news_explanation(news_id):
+    """
+    On-demand explanation generator. Replaces the previous background Phase 2
+    which auto-ran for every article and burned ~700 Gemini calls/day on
+    articles that users may never open.
+
+    Behaviour:
+      • If the row already has aam_janta_translation → return cached value.
+      • Otherwise → 1 Gemini call to fill it in, UPDATE the row, return result.
+
+    Response:
+      { "aam_janta_translation": "...", "macro_pathway": [...] }
+    """
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("SELECT id, headline, aam_janta_translation, macro_pathway FROM news WHERE id = ? LIMIT 1", (news_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "News not found", "id": news_id}), 404
+
+        _, headline, existing_translation, existing_pathway = row
+        # Cache hit — return what we already have.
+        if existing_translation:
+            try:
+                _pw = json.loads(existing_pathway or '[]')
+                if not isinstance(_pw, list):
+                    _pw = []
+            except Exception:
+                _pw = []
+            return jsonify({
+                "id": news_id,
+                "aam_janta_translation": existing_translation,
+                "macro_pathway": _pw,
+                "cached": True,
+            })
+
+        # Cache miss — call Gemini once for this single headline.
+        available = _available_gemini_key_indices()
+        if not available:
+            return jsonify({
+                "id": news_id,
+                "aam_janta_translation": None,
+                "macro_pathway": [],
+                "cached": False,
+                "error": "AI keys all on cooldown — try again in a few minutes.",
+            }), 503
+
+        prompt = f"""You are a financial journalist writing for everyday Indians.
+For the headline below, return STRICT valid JSON with two fields:
+  • aam_janta_translation: a 2-sentence plain-English explanation of what
+    this means for common people.
+  • macro_pathway: a 4-step causal chain ["Trigger Event", "Direct Impact",
+    "Ripple Effect", "End Result"].
+
+Headline: {headline}
+
+Return ONLY:
+{{
+  "aam_janta_translation": "Simple 2-sentence explanation for common people.",
+  "macro_pathway": ["Trigger Event", "Direct Impact", "Ripple Effect", "End Result"]
+}}"""
+
+        raw_text = None
+        try_order = list(available)
+        import random as _rnd
+        _rnd.shuffle(try_order)
+        for _key_idx in try_order:
+            try:
+                _set_active_gemini_client(_key_idx)
+                resp = client.models.generate_content(
+                    model=MODEL_NAME,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                raw_text = resp.text
+                break
+            except Exception as _e:
+                if _is_gemini_quota_error(_e):
+                    _mark_gemini_key_quota_hit(_key_idx)
+                    continue
+                # transient — try another key
+                continue
+
+        if not raw_text:
+            return jsonify({
+                "id": news_id,
+                "aam_janta_translation": None,
+                "macro_pathway": [],
+                "cached": False,
+                "error": "AI generation failed — all keys errored or returned nothing.",
+            }), 503
+
+        try:
+            data = clean_json(raw_text)
+            if isinstance(data, list) and data:
+                data = data[0]
+        except Exception:
+            data = {}
+
+        translation = (data.get("aam_janta_translation") or "").strip()
+        pathway = data.get("macro_pathway") or []
+        if not isinstance(pathway, list):
+            pathway = []
+        if not translation:
+            return jsonify({
+                "id": news_id,
+                "aam_janta_translation": None,
+                "macro_pathway": [],
+                "cached": False,
+                "error": "AI returned no translation.",
+            }), 503
+
+        # Persist so subsequent clicks are instant.
+        _nid = news_id
+        _tr  = translation
+        _pw  = json.dumps(pathway)
+        def _save_explanation(conn, c, _nid=_nid, _tr=_tr, _pw=_pw):
+            c.execute(
+                "UPDATE news SET aam_janta_translation = ?, macro_pathway = ? WHERE id = ?",
+                (_tr, _pw, _nid)
+            )
+        db_write(_save_explanation)
+
+        return jsonify({
+            "id": news_id,
+            "aam_janta_translation": translation,
+            "macro_pathway": pathway,
+            "cached": False,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }), 500
+
 
 @app.route('/api/news/all', methods=['GET'])
 def get_all_news():
