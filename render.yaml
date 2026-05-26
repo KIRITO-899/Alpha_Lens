@@ -50,6 +50,12 @@ services:
         sync: false
       - key: GEMINI_API_KEY_15
         sync: false
+      - key: GEMINI_API_KEY_16
+        sync: false
+      - key: GEMINI_API_KEY_17
+        sync: false
+      - key: GEMINI_API_KEY_18
+        sync: false
       - key: SENDGRID_API_KEY
         sync: false
       - key: SENDGRID_FROM_EMAIL

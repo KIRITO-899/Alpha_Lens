@@ -1204,11 +1204,11 @@ LIVE_NEWS_CACHE = []
 # code edit needed. Rotation/cooldown logic iterates over API_KEYS, so any
 # present slot automatically participates.
 API_KEYS = [
-    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 16)
+    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 19)
 ]
 # Do NOT hardcode API keys in source code. Set them in the deploy
 # environment (Render dashboard → Environment → Add Environment Variable):
-#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_15
+#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_18
 
 API_KEYS = [key for key in API_KEYS if key]  # Filter out unset keys
 
@@ -4036,6 +4036,28 @@ Return ONLY valid JSON matching this shape:
                 sys.stdout.flush()
         except Exception as _rs_err:
             print(f"   [RESCREEN] Fetch error (non-fatal): {_rs_err}")
+
+        # ── LIFO / stack ordering: newest news evaluated FIRST ──
+        # When Gemini keys are exhausted mid-cycle, the screener bails out and
+        # leaves the rest of the queue as ai_status='pending' for a later
+        # rescreen. We want that "leftover" to be the OLDER, less-actionable
+        # headlines — never the freshest market-movers. So sort the combined
+        # queue (fresh RSS + pending rescreen rows) by publication time
+        # descending before batching. The newest items hit the model while we
+        # still have key headroom; anything we run out of quota for is stale by
+        # definition and waits at the bottom of the stack until keys recover.
+        def _article_recency_key(_art):
+            try:
+                _dt = parsedate_to_datetime(_art.get('time')) if _art.get('time') else None
+                if _dt is not None:
+                    if _dt.tzinfo is None:
+                        _dt = _dt.replace(tzinfo=timezone.utc)
+                    return _dt
+            except Exception:
+                pass
+            # Unknown/unparseable time → sink to the bottom (evaluated last).
+            return datetime.min.replace(tzinfo=timezone.utc)
+        new_articles.sort(key=_article_recency_key, reverse=True)
 
         # Batch tunables — sized to fit comfortably under Gemini free-tier TPM.
         # Bigger batches were running keys into 5-min cooldowns because each
