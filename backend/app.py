@@ -1,4 +1,4 @@
-import sys, io
+import sys, io, gc
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
 sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
@@ -50,11 +50,15 @@ yf.set_tz_cache_location("yf_cache")  # no-op in Angel One shim
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
 ARTICLE_TEXT_CACHE = {}
-_ARTICLE_TEXT_CACHE_MAX = 500  # prevent unbounded memory growth
+# Was 500 — trimmed to 200 to stay under Render's 512MB free-tier ceiling.
+# Each entry holds up to 1500 chars of body text → 200 × 1.5KB ≈ 300KB total.
+_ARTICLE_TEXT_CACHE_MAX = 200
 # URL → canonical published-time string (RFC 2822). Empty string = scraped
 # successfully but no meta-tag found (so we don't retry). LRU-evicted.
+# Was 5000 — trimmed to 1000 for the same memory reason. Each entry is small
+# (~50 chars of timestamp + URL key), but at 5000 entries the total adds up.
 PUBLISHED_TIME_CACHE = {}
-_PUBLISHED_TIME_CACHE_MAX = 5000
+_PUBLISHED_TIME_CACHE_MAX = 1000
 
 # Global write lock — ensures only one thread writes to SQLite at a time.
 # Reads do NOT need this lock (WAL mode allows concurrent reads).
@@ -2984,7 +2988,10 @@ Return ONLY valid JSON matching this shape:
             if _hl and _url and _hl not in _unique_url_by_headline:
                 _unique_url_by_headline[_hl] = _url
         if _unique_url_by_headline:
-            _pt_workers = int(os.environ.get('PUB_TIME_WORKERS', '10'))
+            # Default 4 (was 10) — each parallel BeautifulSoup parse holds a
+            # full HTML tree in memory until GC'd. 4 keeps peak transient
+            # memory ~2-3x lower with minimal latency cost.
+            _pt_workers = int(os.environ.get('PUB_TIME_WORKERS', '4'))
             def _pt_fetch(item):
                 hl, url = item
                 try:
@@ -3556,6 +3563,34 @@ Output STRICT valid JSON array:
             last_cycle_finished_at=time.time(),
             cycles_completed=WORKER_HEARTBEAT["ai_news"].get("cycles_completed", 0) + 1,
         )
+
+        # ── End-of-cycle memory hygiene ──
+        # 1. Cap SEEN_HEADLINES so it doesn't grow unbounded over weeks of
+        #    uptime (was a 'set', could otherwise reach 100K+ entries).
+        #    Keep the most recent N — anything older is fine to re-screen
+        #    since the AI is fast and DB INSERT OR IGNORE handles dupes.
+        try:
+            _seen_cap = int(os.environ.get("SEEN_HEADLINES_CAP", "5000"))
+            if len(SEEN_HEADLINES) > _seen_cap:
+                # Sets don't preserve order; we just drop arbitrary entries.
+                # This is acceptable because the DB's UNIQUE INDEX on
+                # news.headline is the source of truth for dedup.
+                _excess = len(SEEN_HEADLINES) - _seen_cap
+                for _ in range(_excess):
+                    SEEN_HEADLINES.pop()
+                print(f"   [MEM] Capped SEEN_HEADLINES from {_seen_cap + _excess} to {_seen_cap}.")
+        except Exception:
+            pass
+        # 2. Force GC to reclaim per-cycle transients (BeautifulSoup trees,
+        #    feedparser parses, AI screener prompts, etc.). On Render's 512MB
+        #    free tier this is the difference between stable and OOM-killed.
+        try:
+            _freed = gc.collect()
+            if _freed:
+                print(f"   [MEM] gc.collect freed {_freed} objects this cycle.")
+        except Exception:
+            pass
+
         # Cycle cadence — bumped 180s→300s to spread Gemini RPD across the day.
         # At 480 cycles/day (3-min) free-tier RPD was getting nibbled fast; at
         # 288 cycles/day (5-min) there's comfortable headroom. Override via
@@ -3852,7 +3887,9 @@ def yfinance_worker():
             # clock drops from ~25s to ~3s on the typical 50-signal day.
             unique_tickers = list({row[2] for row in active_stocks if row[2]})
             if unique_tickers:
-                _yf_workers = int(os.environ.get("YF_PREFETCH_WORKERS", "10"))
+                # Default 4 (was 10) — keeps peak memory low on free-tier Render.
+                # Each concurrent yfinance fetch holds pandas DataFrame state.
+                _yf_workers = int(os.environ.get("YF_PREFETCH_WORKERS", "4"))
                 def _prewarm(tk, _mo=market_currently_open):
                     try:
                         get_price_with_range(tk, market_open=_mo)
@@ -4078,6 +4115,18 @@ def yfinance_worker():
                 last_cycle_finished_at=time.time(),
                 cycles_completed=WORKER_HEARTBEAT["yfinance"].get("cycles_completed", 0) + 1,
             )
+
+            # End-of-cycle memory hygiene — pandas DataFrames from yfinance are
+            # the heaviest transient objects we allocate. Explicitly drop the
+            # local OHLC cache reference and force gc so they actually free.
+            try:
+                _ohlc_cache.clear()
+            except Exception:
+                pass
+            try:
+                gc.collect()
+            except Exception:
+                pass
 
         except Exception as e:
             print("YFinance Worker Error:", e)
