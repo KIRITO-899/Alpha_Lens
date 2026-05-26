@@ -564,11 +564,11 @@
             const notes = document.getElementById('hero-desk-notes');
             if (!notes) return;
             const topStock = stocks[0];
-            const plain = newsItem?.aam_janta_translation || 'The AI desk is still translating the article into a market view.';
+            // Note 3 — AI paused to save API keys for now.
             const noteItems = [
                 topStock ? `Primary watch: ${topStock.ticker} is tagged ${topStock.impact || 'under review'}.` : 'No direct stock impact has been detected yet.',
                 `Bias read: ${bias} across ${stocks.length} linked asset${stocks.length === 1 ? '' : 's'}.`,
-                plain
+                'Paused for saving keys for now'
             ];
             notes.innerHTML = noteItems.map((note, idx) => `
                 <div class="insight-tile">
@@ -583,42 +583,9 @@
             markActiveHeadline(newsItem);
             updateHeroInsightPanel(newsItem);
             document.getElementById('main-headline-text').innerText = newsItem.headline;
-            // ── On-demand explanation lazy-fetch ──
-            // Phase 2 background generation was removed to save ~700 Gemini
-            // calls/day. Explanations are now generated on first click via
-            // /api/news/<id>/explain and cached for subsequent clicks.
+            // Plain English Decode — AI paused to save API keys for now.
             const aamEl = document.getElementById('aam-janta-text');
-            if (newsItem.aam_janta_translation) {
-                aamEl.innerText = newsItem.aam_janta_translation;
-            } else if (newsItem.id) {
-                aamEl.innerText = "🧠 Generating AI explanation…";
-                fetch(`/api/news/${newsItem.id}/explain`)
-                    .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-                    .then(data => {
-                        if (data && data.aam_janta_translation) {
-                            // Mutate the in-memory copy so re-clicks don't re-fetch
-                            newsItem.aam_janta_translation = data.aam_janta_translation;
-                            newsItem.macro_pathway = data.macro_pathway || [];
-                            aamEl.innerText = data.aam_janta_translation;
-                            // Refresh the macro-pathway panel below if the data arrived
-                            if (Array.isArray(newsItem.macro_pathway) && newsItem.macro_pathway.length >= 4) {
-                                document.getElementById('path-1').innerText = newsItem.macro_pathway[0];
-                                document.getElementById('path-2').innerText = newsItem.macro_pathway[1];
-                                document.getElementById('path-3').innerText = newsItem.macro_pathway[2];
-                                document.getElementById('path-4').innerText = newsItem.macro_pathway[3];
-                            }
-                        } else if (data && data.error) {
-                            aamEl.innerText = "⚠️ " + data.error;
-                        } else {
-                            aamEl.innerText = "AI explanation unavailable right now. Try refreshing in a moment.";
-                        }
-                    })
-                    .catch(_err => {
-                        aamEl.innerText = "AI explanation unavailable right now. Try refreshing in a moment.";
-                    });
-            } else {
-                aamEl.innerText = "AI explanation unavailable.";
-            }
+            if (aamEl) aamEl.innerText = 'Paused for saving keys for now';
             // Full article body — hidden when empty so the panel doesn't show
             // an empty box. Source is the RSS summary (or scraped body), set
             // by the AI worker at insert time.
@@ -634,12 +601,11 @@
                     bodyWrap.classList.add('hidden');
                 }
             }
-            if (newsItem.macro_pathway && newsItem.macro_pathway.length >= 4) {
-                document.getElementById('path-1').innerText = newsItem.macro_pathway[0];
-                document.getElementById('path-2').innerText = newsItem.macro_pathway[1];
-                document.getElementById('path-3').innerText = newsItem.macro_pathway[2];
-                document.getElementById('path-4').innerText = newsItem.macro_pathway[3];
-            }
+            // Macro Impact Flow — AI paused to save API keys for now.
+            ['path-1', 'path-2', 'path-3', 'path-4'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = 'Paused for saving keys for now';
+            });
             const tableBody = document.getElementById('dynamic-stock-table-body');
             tableBody.innerHTML = '';
             if (!newsItem.affected_stocks || newsItem.affected_stocks.length === 0) {
