@@ -5625,17 +5625,28 @@ def get_top_news():
 @app.route('/api/news/<int:news_id>/explain', methods=['GET', 'POST'])
 def get_news_explanation(news_id):
     """
-    On-demand explanation generator. Replaces the previous background Phase 2
-    which auto-ran for every article and burned ~700 Gemini calls/day on
-    articles that users may never open.
+    On-demand explanation generator — currently PAUSED to save Gemini keys.
 
-    Behaviour:
-      • If the row already has aam_janta_translation → return cached value.
-      • Otherwise → 1 Gemini call to fill it in, UPDATE the row, return result.
-
-    Response:
-      { "aam_janta_translation": "...", "macro_pathway": [...] }
+    The frontend no longer calls this, and the endpoint itself short-circuits
+    with a paused message so any stray caller burns zero Gemini quota. Remove
+    the early-return below to re-enable.
     """
+    return jsonify({
+        "id": news_id,
+        "aam_janta_translation": "Paused for saving keys for now",
+        "macro_pathway": [
+            "Paused for saving keys for now",
+            "Paused for saving keys for now",
+            "Paused for saving keys for now",
+            "Paused for saving keys for now",
+        ],
+        "cached": False,
+        "paused": True,
+    })
+    # ── Original AI-backed implementation (kept for easy re-enable) ──
+    # Behaviour: cache-hit returns existing row; cache-miss calls Gemini once,
+    # UPDATEs the row, returns result. Restored by deleting the early-return
+    # above.
     try:
         conn = connect_news_db()
         c = conn.cursor()
