@@ -2436,7 +2436,30 @@ def ai_news_worker():
     sys.stdout.flush()
 
     def fetch_feed(url):
-        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+        # ── Two-layer freshness gate ──
+        # 1) Rolling stale cutoff (default 6h, was 24h). RSS feeds routinely
+        #    carry old articles; without a tight gate, day-old news slipped
+        #    through into the pipeline. Tunable via NEWS_MAX_AGE_HOURS.
+        # 2) Absolute floor: NEWS_MIN_TIMESTAMP_UTC (e.g. "2026-05-25T22:30:00Z").
+        #    Anything older than this is rejected forever, regardless of how
+        #    fresh it looks relative to "now". Used after a DB wipe to make
+        #    sure stale articles can never re-enter via late RSS republishes.
+        try:
+            _max_age_h = float(os.environ.get("NEWS_MAX_AGE_HOURS", "6"))
+        except Exception:
+            _max_age_h = 6.0
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=_max_age_h)
+        abs_min_cutoff = None
+        _min_ts_env = os.environ.get("NEWS_MIN_TIMESTAMP_UTC", "").strip()
+        if _min_ts_env:
+            try:
+                # Accept "2026-05-25T22:30:00Z" or "2026-05-25T22:30:00+00:00"
+                _s = _min_ts_env.replace("Z", "+00:00")
+                abs_min_cutoff = datetime.fromisoformat(_s)
+                if abs_min_cutoff.tzinfo is None:
+                    abs_min_cutoff = abs_min_cutoff.replace(tzinfo=timezone.utc)
+            except Exception:
+                abs_min_cutoff = None
         articles = []
         try:
             # Use requests with hard timeout, then feed to feedparser
@@ -2447,7 +2470,7 @@ def ai_news_worker():
                 feed = feedparser.parse(resp.content)
             except Exception:
                 return []  # Timeout or network error
-            
+
             for entry in feed.entries[:30]:
                 pub_time = entry.published if hasattr(entry, 'published') else "Just Now"
                 if pub_time and pub_time != "Just Now":
@@ -2456,6 +2479,8 @@ def ai_news_worker():
                         if pub_dt.tzinfo is None:
                             pub_dt = pub_dt.replace(tzinfo=timezone.utc)
                         if pub_dt < stale_cutoff:
+                            continue
+                        if abs_min_cutoff is not None and pub_dt < abs_min_cutoff:
                             continue
                     except Exception:
                         pass
