@@ -1198,16 +1198,17 @@ print("[DEBUG] WAL checkpoint completed", flush=True)
 # We no longer use in-memory cache for news, but we keep it here just in case.
 LIVE_NEWS_CACHE = []
 
-# Your Gemini API Keys for rotation
+# Your Gemini API Keys for rotation.
+# Slots 1..15 are read from the environment; unset slots are filtered out
+# below, so adding/removing keys is purely a deploy-time env change — no
+# code edit needed. Rotation/cooldown logic iterates over API_KEYS, so any
+# present slot automatically participates.
 API_KEYS = [
-    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 13)
+    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 16)
 ]
-# Bug #20 fix: Additional keys (GEMINI_API_KEY_10 to GEMINI_API_KEY_12) must be set
-# via environment variables. Do NOT hardcode API keys in source code.
-# Example .env entries:
-#   GEMINI_API_KEY_10=AIzaSy...
-#   GEMINI_API_KEY_11=AIzaSy...
-#   GEMINI_API_KEY_12=AIzaSy...
+# Do NOT hardcode API keys in source code. Set them in the deploy
+# environment (Render dashboard → Environment → Add Environment Variable):
+#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_15
 
 API_KEYS = [key for key in API_KEYS if key]  # Filter out unset keys
 
