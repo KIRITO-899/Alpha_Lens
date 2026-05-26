@@ -786,10 +786,11 @@ class EnsemblePredictor:
         else:
             s7_val = s7
             valid_models.append(s7)
-            # 5 models available — was 3/5 (one carrier model could approve a
-            # signal alone). 4/5 forces broader agreement, drops false positives.
-            # Env-tunable so we can relax it if signal volume collapses.
-            min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "4"))
+            # 5 models available. Relaxed to 3/5 (from 4/5) to lift approved-
+            # signal volume — combined with the MIN_CONFIDENCE floor dropped to
+            # 60 (from 75), the gate is now "final score >= 60 AND >= 3 of 5
+            # models agree AND no technical veto". Env-tunable.
+            min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "3"))
 
             final = int(
                 s2 * w_hist +
