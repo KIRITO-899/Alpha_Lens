@@ -1204,11 +1204,11 @@ LIVE_NEWS_CACHE = []
 # code edit needed. Rotation/cooldown logic iterates over API_KEYS, so any
 # present slot automatically participates.
 API_KEYS = [
-    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 20)
+    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 24)
 ]
 # Do NOT hardcode API keys in source code. Set them in the deploy
 # environment (Render dashboard → Environment → Add Environment Variable):
-#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_19
+#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_23
 
 API_KEYS = [key for key in API_KEYS if key]  # Filter out unset keys
 
