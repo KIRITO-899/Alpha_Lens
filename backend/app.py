@@ -1212,9 +1212,28 @@ API_KEYS = [
 
 API_KEYS = [key for key in API_KEYS if key]  # Filter out unset keys
 
-# Per-key cooldown after 429 (skip dead keys instead of re-trying them every batch)
+# ── Per-key cooldown after 429/503 ──
+# 429 on the Gemini free tier almost always means the key's RPD (daily) limit
+# is gone, not a per-minute throttle. The previous flat 5-min cooldown re-
+# probed a dead key 12 times an hour for no reason — every probe burned a
+# little quota AND log noise, while the keys that DO have headroom got
+# slammed. Replaced with an exponential per-key backoff:
+#   1st 429:  5 min   (handles real per-min rate-limit)
+#   2nd:     30 min
+#   3rd:      2 h
+#   4th+:     6 h     (effectively "skip until daily reset")
+# Successful call resets the counter. Tunable via env vars below.
 _KEY_QUOTA_COOLDOWN_UNTIL: dict = {}
+_KEY_QUOTA_STRIKE_COUNT: dict = {}   # idx -> consecutive 429 count
+_KEY_QUOTA_LAST_HIT: dict = {}       # idx -> unix time of last 429 (for stale-strike decay)
 _GEMINI_KEY_COOLDOWN_SECS = int(os.environ.get("GEMINI_KEY_COOLDOWN_SECS", "300"))
+# Cap on escalated cooldown so a key isn't sidelined past the daily quota reset.
+_GEMINI_KEY_COOLDOWN_MAX_SECS = int(os.environ.get("GEMINI_KEY_COOLDOWN_MAX_SECS", "21600"))  # 6h
+# Strikes decay if a key goes this long without another 429 (1 hour by default).
+_GEMINI_STRIKE_DECAY_SECS = int(os.environ.get("GEMINI_STRIKE_DECAY_SECS", "3600"))
+# Transient (503) cooldown — bumped from 15s to 60s. When Gemini's servers are
+# overloaded, retrying every 15s just feeds the storm.
+_GEMINI_TRANSIENT_COOLDOWN_SECS = int(os.environ.get("GEMINI_TRANSIENT_COOLDOWN_SECS", "60"))
 
 # Worker heartbeat — updated by ai_news_worker / yfinance_worker so /api/debug-worker-status
 # can tell whether the background threads are alive and when they last did anything.
@@ -1274,8 +1293,48 @@ def _available_gemini_key_indices():
     return [i for i in range(len(API_KEYS)) if _gemini_key_available(i)]
 
 def _mark_gemini_key_quota_hit(key_idx: int, cooldown_secs: int = None):
-    cooldown = cooldown_secs if cooldown_secs is not None else _GEMINI_KEY_COOLDOWN_SECS
-    _KEY_QUOTA_COOLDOWN_UNTIL[key_idx] = time.time() + cooldown
+    """
+    Put a key on cooldown. If `cooldown_secs` is given, use it verbatim — that
+    path is for non-429 cases (transient 503, unexpected errors) where the
+    caller already decided the duration.
+
+    Default behaviour (no `cooldown_secs`) treats this as a 429/quota hit and
+    applies the escalating per-key backoff described above.
+    """
+    now = time.time()
+    if cooldown_secs is not None:
+        # Caller-supplied duration (typically transient/503) — no strike bump.
+        _KEY_QUOTA_COOLDOWN_UNTIL[key_idx] = now + cooldown_secs
+        return
+
+    # Decay stale strikes — if this key hasn't been quota-hit in a while,
+    # treat the upcoming hit as a fresh first strike. This prevents a key
+    # that hit once yesterday and recovered from getting a 6h cooldown
+    # today on its very first 429.
+    last_hit = _KEY_QUOTA_LAST_HIT.get(key_idx, 0)
+    if last_hit and (now - last_hit) > _GEMINI_STRIKE_DECAY_SECS:
+        _KEY_QUOTA_STRIKE_COUNT[key_idx] = 0
+
+    strikes = _KEY_QUOTA_STRIKE_COUNT.get(key_idx, 0) + 1
+    _KEY_QUOTA_STRIKE_COUNT[key_idx] = strikes
+    _KEY_QUOTA_LAST_HIT[key_idx] = now
+
+    # Exponential: 5min, 30min, 2h, 6h(cap)…
+    base = _GEMINI_KEY_COOLDOWN_SECS
+    cooldown = min(base * (6 ** (strikes - 1)), _GEMINI_KEY_COOLDOWN_MAX_SECS)
+    _KEY_QUOTA_COOLDOWN_UNTIL[key_idx] = now + cooldown
+    safe_print(
+        f"   [AI] Key {key_idx + 1} quota strike #{strikes} — cooldown {int(cooldown)}s "
+        f"({'capped' if cooldown >= _GEMINI_KEY_COOLDOWN_MAX_SECS else 'escalating'})."
+    )
+
+def _reset_gemini_key_strikes(key_idx: int):
+    """Call on a successful Gemini response so the key's quota strike count
+    decays back to zero. Without this, a key that succeeded after a brief
+    cooldown would still escalate on its next 429."""
+    if key_idx in _KEY_QUOTA_STRIKE_COUNT:
+        _KEY_QUOTA_STRIKE_COUNT.pop(key_idx, None)
+        _KEY_QUOTA_LAST_HIT.pop(key_idx, None)
 
 def _seconds_until_any_gemini_key():
     now = time.time()
@@ -1315,15 +1374,23 @@ client = _bootstrap_gemini_client()
 def get_and_rotate_client(last_failed_idx=None, is_timeout=False, is_quota=True, is_transient=False):
     if last_failed_idx is not None:
         if is_quota or is_timeout or is_transient:
-            cooldown = 15 if (is_transient or is_timeout) else _GEMINI_KEY_COOLDOWN_SECS
-            _mark_gemini_key_quota_hit(last_failed_idx, cooldown_secs=cooldown)
-            if is_timeout:
-                status_str = "timed out"
-            elif is_transient:
-                status_str = "hit transient error"
+            if is_quota and not (is_transient or is_timeout):
+                # Quota → let _mark_gemini_key_quota_hit apply the escalating
+                # per-key backoff (5min → 30min → 2h → 6h cap).
+                _mark_gemini_key_quota_hit(last_failed_idx)
+                cooldown_label = f"escalating (strike {_KEY_QUOTA_STRIKE_COUNT.get(last_failed_idx, 1)})"
             else:
-                status_str = "hit quota limit"
-            safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} {status_str}. Marked on cooldown for {cooldown}s.")
+                # Transient/timeout → fixed short cooldown, no strike bump.
+                cooldown = _GEMINI_TRANSIENT_COOLDOWN_SECS
+                _mark_gemini_key_quota_hit(last_failed_idx, cooldown_secs=cooldown)
+                cooldown_label = f"{cooldown}s"
+            if is_timeout:
+                status_str = f"timed out (cooldown {cooldown_label})"
+            elif is_transient:
+                status_str = f"hit transient error (cooldown {cooldown_label})"
+            else:
+                status_str = f"hit quota limit (cooldown {cooldown_label})"
+            safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} {status_str}.")
         else:
             safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} failed due to network/DNS error. Retrying without cooldown.")
     
@@ -2222,10 +2289,14 @@ Return STRICT valid JSON, no markdown fences:
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
             raw = resp.text
+            _reset_gemini_key_strikes(_key_idx)
             break
         except Exception as _e:
             if _is_gemini_quota_error(_e):
                 _mark_gemini_key_quota_hit(_key_idx)
+                continue
+            if _is_gemini_transient_error(_e):
+                _mark_gemini_key_quota_hit(_key_idx, cooldown_secs=_GEMINI_TRANSIENT_COOLDOWN_SECS)
                 continue
             continue
 
@@ -2353,10 +2424,14 @@ Return STRICT valid JSON, no markdown fences:
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
             raw = resp.text
+            _reset_gemini_key_strikes(_key_idx)
             break
         except Exception as _e:
             if _is_gemini_quota_error(_e):
                 _mark_gemini_key_quota_hit(_key_idx)
+                continue
+            if _is_gemini_transient_error(_e):
+                _mark_gemini_key_quota_hit(_key_idx, cooldown_secs=_GEMINI_TRANSIENT_COOLDOWN_SECS)
                 continue
             continue
     if not raw:
@@ -3751,6 +3826,7 @@ Return ONLY valid JSON matching this shape:
                             finally:
                                 _tex.shutdown(wait=False, cancel_futures=True)
                             _set_active_gemini_client(_key_idx)
+                            _reset_gemini_key_strikes(_key_idx)
                             print(f"   [AI] Screener OK on key {_key_idx + 1}/{len(API_KEYS)}")
                             sys.stdout.flush()
                             break
@@ -3762,8 +3838,8 @@ Return ONLY valid JSON matching this shape:
                                 time.sleep(2)
                                 continue
                             elif _is_gemini_transient_error(_api_err):
-                                _mark_gemini_key_quota_hit(_key_idx, cooldown_secs=15)
-                                print(f"   [AI] Transient error on key {_key_idx + 1}/{len(API_KEYS)}: {_api_err} — trying next available key (15s cooldown)")
+                                _mark_gemini_key_quota_hit(_key_idx, cooldown_secs=_GEMINI_TRANSIENT_COOLDOWN_SECS)
+                                print(f"   [AI] Transient error on key {_key_idx + 1}/{len(API_KEYS)}: {_api_err} — trying next available key ({_GEMINI_TRANSIENT_COOLDOWN_SECS}s cooldown)")
                                 sys.stdout.flush()
                                 time.sleep(2)
                                 continue
