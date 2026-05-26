@@ -376,6 +376,11 @@
                     class="text-violet-400 border-b-2 border-violet-500/20 pb-1 transition">Top News</a>
                 <a href="#" id="nav-all-news" onclick="switchTab('all-news'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition">All News</a>
+                <a href="#" id="nav-calendar" onclick="switchTab('calendar'); return false;"
+                    class="nav-link text-slate-300 hover:text-white transition flex items-center gap-1.5">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                    Calendar
+                </a>
                 <a href="#" id="nav-portfolio" onclick="switchTab('portfolio'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Portfolio</a>
                 <a href="#" id="nav-terminal" onclick="switchTab('terminal'); return false;"
@@ -622,6 +627,67 @@
                     </div>
 
                 </aside>
+            </div>
+
+            <!-- ============================================== -->
+            <!-- VIEW: CALENDAR (forward catalyst tracker)     -->
+            <!-- ============================================== -->
+            <div id="view-calendar" class="hidden max-w-6xl mx-auto w-full mt-4">
+                <div class="glass-panel premium-shell p-7 md:p-9 rounded-2xl relative overflow-hidden mb-6">
+                    <div class="cal-hero-bg"></div>
+                    <div class="relative z-10 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+                        <div>
+                            <div class="section-kicker w-max mb-3">
+                                <span>Forward Catalysts · This Week</span>
+                            </div>
+                            <h1 class="text-3xl md:text-5xl font-display font-black tracking-tight gradient-heading">
+                                The Calendar
+                            </h1>
+                            <p class="text-slate-400 text-sm md:text-base mt-2 max-w-2xl leading-relaxed">
+                                Every macro event between now and next week with AI scenario analysis,
+                                historical analogues, and sector-level impact maps. Position before the move,
+                                not after.
+                            </p>
+                        </div>
+                        <div id="cal-next-countdown" class="cal-countdown-wrap hidden">
+                            <div class="cal-countdown-label">Next high-impact event in</div>
+                            <div class="cal-countdown-clock" id="cal-countdown-clock">—</div>
+                            <div class="cal-countdown-event" id="cal-countdown-event">—</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Filter pills -->
+                <div class="flex flex-wrap gap-2 mb-5 px-1">
+                    <button onclick="setCalendarFilter('all')" id="cal-filter-all" class="sector-pill active">All Events</button>
+                    <button onclick="setCalendarFilter('HIGH')" id="cal-filter-high" class="sector-pill" style="border-color:rgba(244,63,94,0.30);color:#fb7185;">🔴 High Impact</button>
+                    <button onclick="setCalendarFilter('IN')" id="cal-filter-in" class="sector-pill" style="border-color:rgba(168,85,247,0.30);color:#c4b5fd;">🇮🇳 India</button>
+                    <button onclick="setCalendarFilter('US')" id="cal-filter-us" class="sector-pill" style="border-color:rgba(96,165,250,0.30);color:#93c5fd;">🇺🇸 US</button>
+                    <button onclick="setCalendarFilter('CENTRAL_BANK')" id="cal-filter-cb" class="sector-pill" style="border-color:rgba(251,191,36,0.30);color:#fbbf24;">🏦 Central Banks</button>
+                </div>
+
+                <!-- Day-by-day event list -->
+                <div id="calendar-days" class="space-y-6">
+                    <!-- Skeleton -->
+                    <div class="glass-panel p-6 rounded-2xl animate-pulse">
+                        <div class="h-5 w-32 bg-slate-700/40 rounded mb-4"></div>
+                        <div class="h-20 w-full bg-slate-700/20 rounded mb-3"></div>
+                        <div class="h-20 w-full bg-slate-700/20 rounded"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Event-detail modal: slides in from right -->
+            <div id="cal-event-modal" class="cal-event-modal hidden" role="dialog" aria-modal="true">
+                <div class="cal-event-backdrop" data-close-cal></div>
+                <div class="cal-event-shell">
+                    <button class="cal-event-close" data-close-cal aria-label="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                    </button>
+                    <div class="cal-event-body" id="cal-event-body">
+                        <!-- populated by openCalendarEvent() -->
+                    </div>
+                </div>
             </div>
 
             <!-- ============================================== -->

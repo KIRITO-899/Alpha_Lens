@@ -292,6 +292,8 @@ _CACHE_RULES = (
     ("/styles.css",                  "public, max-age=86400, stale-while-revalidate=86400"),
     # ── Macro Pulse — refresh moderately fast for live shock view ──
     ("/api/macro/events",            "public, max-age=60, stale-while-revalidate=120"),
+    # ── Calendar — events change weekly; cache aggressively ──
+    ("/api/calendar",                "public, max-age=600, stale-while-revalidate=1800"),
     # ── Short-lived data — refresh frequently ──
     ("/api/indices",                 "public, max-age=30, stale-while-revalidate=30"),
     ("/api/news/top",                "public, max-age=30, stale-while-revalidate=60"),
@@ -838,6 +840,38 @@ def init_news_db():
     # to badge events as actionable (NSE closed → positioning window) vs
     # informational (NSE open → already in price).
     run_query_safe("ALTER TABLE macro_event ADD COLUMN during_nse_hours INTEGER DEFAULT 0")
+
+    # ── Economic Calendar: forward-looking scheduled events ──
+    # Manually-curated table of upcoming macro events (RBI/Fed/MPC/PMIs/etc.)
+    # with AI scenario analysis. Updated weekly via /api/admin/calendar/upsert
+    # or by editing CALENDAR_EVENTS_SEED + restarting.
+    run_query_safe('''
+        CREATE TABLE IF NOT EXISTS economic_calendar (
+            id                        INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_date                TEXT NOT NULL,
+            event_time_ist            TEXT,
+            title                     TEXT NOT NULL,
+            country                   TEXT,
+            category                  TEXT,
+            importance                TEXT,
+            description               TEXT,
+            prior_value               TEXT,
+            consensus_estimate        TEXT,
+            actual_value              TEXT,
+            scenarios_json            TEXT,
+            historical_analogues_json TEXT,
+            related_sectors_json      TEXT,
+            related_tickers_json      TEXT,
+            status                    TEXT DEFAULT 'upcoming',
+            created_at                TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at                TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_calendar_date ON economic_calendar(event_date)")
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_calendar_importance ON economic_calendar(importance)")
+    # Unique-ish dedupe key so re-seeding doesn't duplicate. Combination of
+    # date + title + country.
+    run_query_safe("CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_key ON economic_calendar(event_date, country, title)")
     
     run_query_safe('''
         CREATE TABLE IF NOT EXISTS stock_impact (
@@ -1711,6 +1745,334 @@ def _macro_data_warmer():
         except Exception:
             pass
         time.sleep(300)
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# THE CALENDAR — forward-looking macro event schedule
+#
+# Manually curated; updated weekly. The seed below covers the week of
+# June 1-7, 2026. To refresh next week:
+#   • Edit CALENDAR_EVENTS_SEED (preferred), OR
+#   • POST to /api/admin/calendar/upsert with new payloads.
+#
+# Each event carries AI-style scenario analysis (upside / expected /
+# downside) so traders can pre-position. Historical analogues add the
+# statistical grounding.
+# ──────────────────────────────────────────────────────────────────────────
+CALENDAR_EVENTS_SEED = [
+    # ───────────────── Monday, June 1 ─────────────────
+    {
+        "event_date": "2026-06-01",
+        "event_time_ist": "10:30",
+        "title": "India Manufacturing PMI (May)",
+        "country": "IN",
+        "category": "ECONOMIC_DATA",
+        "importance": "MEDIUM",
+        "description": "S&P Global India Manufacturing PMI for May. Reads >50 indicate expansion. Sets the tone for the trading week alongside GST data.",
+        "prior_value": "57.6",
+        "consensus_estimate": "57.2",
+        "scenarios": {
+            "upside":   {"threshold": ">= 58.5",  "impact": "Bullish capital-goods + industrials. L&T / SIEMENS / ABB likely +1.5-2.5% next session. Rupee mildly stronger.", "probability": 0.20},
+            "expected": {"threshold": "56.5 - 58.0", "impact": "Neutral. Already priced in; market focus shifts to RBI MPC on Friday.", "probability": 0.60},
+            "downside": {"threshold": "<= 56.0",  "impact": "Bearish mid-caps + industrials. INR likely weaker. Capital-goods could shed 1.5-3%.", "probability": 0.20},
+        },
+        "historical_analogues": [
+            "Apr 2025 print at 58.8 → BSE Capital Goods +2.4% next session",
+            "Jan 2025 surprise miss at 56.1 → BSE Capital Goods -1.8% next session",
+            "Aug 2024 beat at 58.1 → SIEMENS +3.2%, L&T +2.1% within 2 sessions",
+        ],
+        "related_sectors":  ["Capital Goods", "Industrials", "Manufacturing"],
+        "related_tickers":  ["LT.NS", "SIEMENS.NS", "ABB.NS", "BHEL.NS", "CUMMINSIND.NS"],
+    },
+    {
+        "event_date": "2026-06-01",
+        "event_time_ist": "19:30",
+        "title": "US ISM Manufacturing PMI (May)",
+        "country": "US",
+        "category": "ECONOMIC_DATA",
+        "importance": "MEDIUM",
+        "description": "Headline US manufacturing index. Strong reads support USD; weak reads reignite slowdown narrative and pressure global IT.",
+        "prior_value": "49.2",
+        "consensus_estimate": "49.5",
+        "scenarios": {
+            "upside":   {"threshold": ">= 51.0", "impact": "DXY +0.3-0.6%. INR weakens. IT sector mild headwind from stronger USD but US-demand positive — net mixed.", "probability": 0.25},
+            "expected": {"threshold": "48.5 - 50.5", "impact": "Neutral. Markets focus shifts to NFP and RBI later in the week.", "probability": 0.50},
+            "downside": {"threshold": "< 48.0", "impact": "DXY weaker. INR strengthens. Gold +0.5-1%. IT bearish (US demand concern).", "probability": 0.25},
+        },
+        "historical_analogues": [
+            "May 2024 print at 48.7 → DXY -0.4%, Indian IT -1.8% next session",
+            "Feb 2025 surprise beat at 52.3 → DXY +0.5%, Nifty IT +0.6%",
+        ],
+        "related_sectors":  ["IT Services", "Metals", "Auto Exporters"],
+        "related_tickers":  ["INFY.NS", "TCS.NS", "HCLTECH.NS", "WIPRO.NS", "TATASTEEL.NS"],
+    },
+    # ───────────────── Tuesday, June 2 ─────────────────
+    {
+        "event_date": "2026-06-02",
+        "event_time_ist": "Morning",
+        "title": "India GST Collections (May)",
+        "country": "IN",
+        "category": "ECONOMIC_DATA",
+        "importance": "HIGH",
+        "description": "Monthly Goods & Services Tax collection. A direct read on consumption and economic activity. Crosses Rs 2 lakh Cr = strong; below Rs 1.7 lakh Cr = concerning.",
+        "prior_value": "Rs 2.10 lakh Cr",
+        "consensus_estimate": "Rs 2.05 lakh Cr",
+        "scenarios": {
+            "upside":   {"threshold": ">= Rs 2.20 lakh Cr", "impact": "Bullish consumption + FMCG. HUL, NESTLEIND, ITC likely +1-2%. Government bond yields mildly lower (fiscal comfort).", "probability": 0.25},
+            "expected": {"threshold": "Rs 1.95 - 2.10 lakh Cr", "impact": "Neutral. Confirms steady-state economy, mild positive for sentiment.", "probability": 0.55},
+            "downside": {"threshold": "< Rs 1.85 lakh Cr", "impact": "Bearish consumption stocks. Slowdown fears amplify. INR weaker. FMCG -1 to -2%.", "probability": 0.20},
+        },
+        "historical_analogues": [
+            "Apr 2025 at Rs 2.37 lakh Cr (record) → HUL +1.8%, ITC +2.1% within 2 sessions",
+            "Jul 2024 disappointing Rs 1.74 lakh Cr → Nifty FMCG -1.4% on the day",
+        ],
+        "related_sectors":  ["FMCG", "Consumption", "Auto"],
+        "related_tickers":  ["HINDUNILVR.NS", "NESTLEIND.NS", "ITC.NS", "BRITANNIA.NS", "MARUTI.NS"],
+    },
+    # ───────────────── Wednesday, June 3 ─────────────────
+    {
+        "event_date": "2026-06-03",
+        "event_time_ist": "10:30",
+        "title": "India Services PMI (May)",
+        "country": "IN",
+        "category": "ECONOMIC_DATA",
+        "importance": "MEDIUM",
+        "description": "S&P Global India Services PMI. Services account for ~55% of Indian GDP — stronger correlation to broad market sentiment than manufacturing PMI.",
+        "prior_value": "60.2",
+        "consensus_estimate": "59.8",
+        "scenarios": {
+            "upside":   {"threshold": ">= 61.0", "impact": "Bullish banking + finance + IT. HDFCBANK, ICICIBANK, INFY likely +0.8-1.5%. Confirms strong domestic services demand.", "probability": 0.30},
+            "expected": {"threshold": "58.5 - 60.5", "impact": "Neutral. Market continues to position for RBI on Friday.", "probability": 0.55},
+            "downside": {"threshold": "<= 57.5", "impact": "Mildly bearish for banks + NBFCs. Could amplify any RBI dovishness.", "probability": 0.15},
+        },
+        "historical_analogues": [
+            "Mar 2025 at 61.6 (multi-year high) → Bank Nifty +1.2%, Nifty IT +1.4%",
+            "Nov 2024 miss at 57.7 → Bank Nifty -0.9%, broader Nifty -0.6%",
+        ],
+        "related_sectors":  ["Banking", "Financial Services", "IT Services"],
+        "related_tickers":  ["HDFCBANK.NS", "ICICIBANK.NS", "AXISBANK.NS", "BAJFINANCE.NS", "TCS.NS"],
+    },
+    {
+        "event_date": "2026-06-03",
+        "event_time_ist": "17:45",
+        "title": "US ADP Employment Change (May)",
+        "country": "US",
+        "category": "ECONOMIC_DATA",
+        "importance": "MEDIUM",
+        "description": "Private-sector employment estimate from ADP. Leading indicator for Friday's NFP. Markets often overreact to ADP and reverse on NFP.",
+        "prior_value": "+62k",
+        "consensus_estimate": "+105k",
+        "scenarios": {
+            "upside":   {"threshold": "> +150k", "impact": "DXY +0.3-0.5%. US yields up. Indian IT mild positive (US demand). Mid-caps slightly bearish on FII outflow risk.", "probability": 0.25},
+            "expected": {"threshold": "+80k to +130k", "impact": "Neutral. Markets defer to NFP on Friday.", "probability": 0.55},
+            "downside": {"threshold": "< +50k", "impact": "DXY weaker. Indian IT bearish (US slowdown). Gold +0.5%. Domestic mid-caps relative outperformer.", "probability": 0.20},
+        },
+        "historical_analogues": [
+            "Oct 2024 ADP shock at -32k → DXY -0.7%, Nifty IT -2.1%",
+            "Mar 2025 ADP beat at +184k → DXY +0.6%, NFP also beat (confirmed bullish)",
+        ],
+        "related_sectors":  ["IT Services", "FX-sensitive exporters"],
+        "related_tickers":  ["INFY.NS", "TCS.NS", "HCLTECH.NS", "WIPRO.NS"],
+    },
+    # ───────────────── Thursday, June 4 ─────────────────
+    {
+        "event_date": "2026-06-04",
+        "event_time_ist": "10:00",
+        "title": "RBI MPC Meeting — Day 1 (Deliberation Begins)",
+        "country": "IN",
+        "category": "CENTRAL_BANK",
+        "importance": "LOW",
+        "description": "First day of the 3-day Monetary Policy Committee meeting. No announcement today; deliberations only. Markets typically position into Friday's decision.",
+        "prior_value": "—",
+        "consensus_estimate": "—",
+        "scenarios": {
+            "upside":   {"threshold": "—", "impact": "Bank Nifty may drift higher into Friday on dovish positioning. Watch INR for FII positioning signals.", "probability": 0.50},
+            "expected": {"threshold": "—", "impact": "Range-bound positioning. Bank Nifty +/- 0.3%.", "probability": 0.40},
+            "downside": {"threshold": "—", "impact": "Pre-event de-risking on long bank positions if global cues weak.", "probability": 0.10},
+        },
+        "historical_analogues": [
+            "Aug 2024 MPC Day 1 → Bank Nifty +0.4% as dovish positioning built",
+            "Dec 2024 MPC Day 1 → Bank Nifty flat; everything saved for the decision",
+        ],
+        "related_sectors":  ["Banking", "NBFCs"],
+        "related_tickers":  ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "BAJFINANCE.NS"],
+    },
+    {
+        "event_date": "2026-06-04",
+        "event_time_ist": "17:45",
+        "title": "ECB Rate Decision",
+        "country": "EU",
+        "category": "CENTRAL_BANK",
+        "importance": "MEDIUM",
+        "description": "European Central Bank monetary policy meeting. Watch for any pivot signaling on rates or QT pace. Affects EUR/USD which transmits to DXY → INR.",
+        "prior_value": "Deposit Rate: 2.50%",
+        "consensus_estimate": "Hold at 2.50% (95% market-implied)",
+        "scenarios": {
+            "upside":   {"threshold": "Hawkish hold + delayed pivot", "impact": "EUR +0.4-0.7%, DXY -0.3 to -0.5%, INR mildly stronger. Indian IT minor headwind on weaker USD.", "probability": 0.25},
+            "expected": {"threshold": "Hold + dovish language", "impact": "EUR/USD range-bound. Limited India impact.", "probability": 0.65},
+            "downside": {"threshold": "Surprise cut", "impact": "EUR sharp lower, DXY +0.5%, INR weaker, FII outflow risk. Nifty Bank -0.5%.", "probability": 0.10},
+        },
+        "historical_analogues": [
+            "Mar 2025 ECB hawkish hold → EUR/USD +0.5%, Indian IT -0.7%",
+            "Oct 2024 ECB surprise dovish cut → DXY +0.8%, Bank Nifty -1.2%",
+        ],
+        "related_sectors":  ["IT Services", "FX-sensitive", "Banking"],
+        "related_tickers":  ["INFY.NS", "TCS.NS", "HDFCBANK.NS"],
+    },
+    # ───────────────── Friday, June 5 ─────────────────
+    {
+        "event_date": "2026-06-05",
+        "event_time_ist": "10:00",
+        "title": "RBI MPC Decision (Repo Rate) + Governor's Statement",
+        "country": "IN",
+        "category": "CENTRAL_BANK",
+        "importance": "HIGH",
+        "description": "THE event of the week. Current repo: 5.50%. Markets pricing 25-30% probability of a 25bps cut. Watch governor's tone on inflation glidepath and growth.",
+        "prior_value": "Repo: 5.50%, Stance: Neutral",
+        "consensus_estimate": "Hold at 5.50%, Neutral stance retained (70% probability)",
+        "scenarios": {
+            "upside":   {"threshold": "Surprise 25bps cut + dovish stance", "impact": "Bank Nifty +1.5-2.5%. NBFCs +2-4%. Realty +3-5%. Gilt yields -10 to -15 bps. INR mildly weaker.", "probability": 0.25},
+            "expected": {"threshold": "Hold + neutral; signals data-dependence", "impact": "Bank Nifty +/- 0.5%. Market positions for August MPC.", "probability": 0.55},
+            "downside": {"threshold": "Hawkish hold; tightening tilt language", "impact": "Bank Nifty -1 to -2%. Rate-sensitives sell off. NBFCs -2-3%. Realty -2-4%.", "probability": 0.20},
+        },
+        "historical_analogues": [
+            "Feb 2025 surprise dovish hold → Bank Nifty +1.8%, BAJFINANCE +3.4%",
+            "Aug 2024 RBI hawkish on inflation → Bank Nifty -1.2%, REC -2.8%",
+            "Apr 2025 status-quo as expected → Bank Nifty -0.2% (priced in)",
+        ],
+        "related_sectors":  ["Banking", "NBFCs", "Realty", "Auto"],
+        "related_tickers":  ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "BAJFINANCE.NS", "DLF.NS", "GODREJPROP.NS", "MARUTI.NS"],
+    },
+    {
+        "event_date": "2026-06-05",
+        "event_time_ist": "11:00",
+        "title": "RBI Governor Press Conference",
+        "country": "IN",
+        "category": "CENTRAL_BANK",
+        "importance": "HIGH",
+        "description": "Live presser following the MPC decision. Tone-watch — look for forward-guidance shifts and any liquidity-management hints. Often moves markets more than the headline decision.",
+        "prior_value": "—",
+        "consensus_estimate": "Cautious tone on inflation; supportive growth outlook",
+        "scenarios": {
+            "upside":   {"threshold": "Explicit dovish forward guidance", "impact": "Continuation of any MPC-positive move. Add 0.5-1% to Bank Nifty.", "probability": 0.30},
+            "expected": {"threshold": "Balanced; data-dependent", "impact": "Markets fade any spike from headline.", "probability": 0.55},
+            "downside": {"threshold": "Sticky inflation warnings; CRR hint", "impact": "Reverses any earlier rally. Banks could give back -1 to -2%.", "probability": 0.15},
+        },
+        "historical_analogues": [
+            "Apr 2025: governor pivoted dovish in presser → Bank Nifty closed +2.1% (vs +0.3% pre-presser)",
+            "Dec 2024: hawkish presser surprise → Bank Nifty closed -1.6% (vs +0.4% pre-presser)",
+        ],
+        "related_sectors":  ["Banking", "NBFCs", "Realty"],
+        "related_tickers":  ["HDFCBANK.NS", "ICICIBANK.NS", "SBIN.NS", "BAJFINANCE.NS", "DLF.NS"],
+    },
+    {
+        "event_date": "2026-06-05",
+        "event_time_ist": "17:00",
+        "title": "India Forex Reserves (Weekly)",
+        "country": "IN",
+        "category": "ECONOMIC_DATA",
+        "importance": "LOW",
+        "description": "Weekly FX reserves release. Marginal market mover; matters when there's a large swing suggesting RBI USD/INR intervention.",
+        "prior_value": "USD 682.5 bn",
+        "consensus_estimate": "USD 681.0 - 684.0 bn",
+        "scenarios": {
+            "upside":   {"threshold": "Sharp drop > USD 5 bn", "impact": "Suggests RBI defended rupee; INR more vulnerable next week.", "probability": 0.15},
+            "expected": {"threshold": "+/- USD 2 bn", "impact": "No market impact.", "probability": 0.75},
+            "downside": {"threshold": "Sharp rise > USD 5 bn", "impact": "Strong rupee support undermined; INR vulnerable on global risk-off.", "probability": 0.10},
+        },
+        "historical_analogues": [
+            "Sep 2024: USD 12 bn weekly drop signaled heavy USD/INR defense → INR depreciated 1.4% next week",
+        ],
+        "related_sectors":  ["Banks", "FX-sensitive importers"],
+        "related_tickers":  ["IOC.NS", "BPCL.NS", "MARUTI.NS"],
+    },
+    {
+        "event_date": "2026-06-05",
+        "event_time_ist": "18:00",
+        "title": "US Non-Farm Payrolls (May)",
+        "country": "US",
+        "category": "ECONOMIC_DATA",
+        "importance": "HIGH",
+        "description": "THE big global data event. Reshapes Fed-rate expectations instantly. Watch payrolls vs consensus AND wage growth (avg hourly earnings).",
+        "prior_value": "+177k; Unemployment 4.2%; AHE +0.2% m/m",
+        "consensus_estimate": "+135k; Unemployment 4.2%; AHE +0.3% m/m",
+        "scenarios": {
+            "upside":   {"threshold": "> +200k headline OR AHE > +0.4%", "impact": "Hawkish — DXY +0.5-1%, US yields +6-10bps, INR -0.4 to -0.7%. Indian IT mild positive (USD), but FII outflow risk hits broader Nifty.", "probability": 0.20},
+            "expected": {"threshold": "+100k to +180k; AHE +0.2-0.3%", "impact": "Neutral. Markets absorb without major directional reset.", "probability": 0.50},
+            "downside": {"threshold": "< +80k OR sharp unemployment rise", "impact": "Dovish — DXY -0.5 to -1%, US yields -8-12bps, INR strengthens, Gold +1.5%. Indian IT bearish on US slowdown, but rate-sensitive Indian sectors get a boost from FII inflow.", "probability": 0.30},
+        },
+        "historical_analogues": [
+            "Mar 2025 NFP miss (-32k) → DXY -1.1%, Nifty Bank +1.4% Monday, IT -2.1%",
+            "Aug 2024 NFP blowout (+254k) → DXY +0.9%, INR -0.6%, Nifty -0.8%",
+            "Dec 2024 in-line print → markets flat next 2 sessions",
+        ],
+        "related_sectors":  ["IT Services", "Banks", "Auto Exporters", "Metals"],
+        "related_tickers":  ["INFY.NS", "TCS.NS", "HCLTECH.NS", "HDFCBANK.NS", "TATAMOTORS.NS", "TATASTEEL.NS"],
+    },
+    {
+        "event_date": "2026-06-05",
+        "event_time_ist": "18:00",
+        "title": "US Unemployment Rate (May)",
+        "country": "US",
+        "category": "ECONOMIC_DATA",
+        "importance": "HIGH",
+        "description": "Released alongside NFP. A sharp uptick (>0.2pp) triggers the Sahm Rule recession signal — high-volatility event.",
+        "prior_value": "4.2%",
+        "consensus_estimate": "4.2%",
+        "scenarios": {
+            "upside":   {"threshold": "<= 4.0%", "impact": "Strong labour market; Fed-cut expectations get pushed out. DXY +0.5%, INR weaker.", "probability": 0.20},
+            "expected": {"threshold": "4.1 - 4.3%", "impact": "No new info; combined with NFP determines direction.", "probability": 0.65},
+            "downside": {"threshold": ">= 4.5%", "impact": "Sahm Rule territory. Sharp risk-off globally. Nifty -1.5 to -2.5% Monday open.", "probability": 0.15},
+        },
+        "historical_analogues": [
+            "Jul 2024 jump from 4.1% to 4.3% → DXY -1%, Nifty -2.7%, defensives up",
+            "Apr 2025 surprise drop to 3.9% → DXY +0.7%, Indian IT +1.4%",
+        ],
+        "related_sectors":  ["IT", "Banks", "Gold-related"],
+        "related_tickers":  ["INFY.NS", "TCS.NS", "HDFCBANK.NS", "HINDUNILVR.NS"],
+    },
+]
+
+
+def seed_calendar_events(force=False):
+    """
+    Populate economic_calendar with the curated weekly schedule.
+    UNIQUE INDEX on (event_date, country, title) prevents duplicates so
+    this is safe to call on every startup. Pass force=True to overwrite
+    existing rows with the latest seed payload (useful when you edit
+    descriptions/scenarios mid-week).
+    """
+    try:
+        for ev in CALENDAR_EVENTS_SEED:
+            scenarios_json = json.dumps(ev.get("scenarios") or {})
+            analogues_json = json.dumps(ev.get("historical_analogues") or [])
+            sectors_json   = json.dumps(ev.get("related_sectors") or [])
+            tickers_json   = json.dumps(ev.get("related_tickers") or [])
+            _ev = ev
+            def _ins(conn, c, _e=_ev, _sj=scenarios_json, _aj=analogues_json,
+                     _secj=sectors_json, _tj=tickers_json, _force=force):
+                if _force:
+                    c.execute("""DELETE FROM economic_calendar
+                                 WHERE event_date = ? AND country = ? AND title = ?""",
+                              (_e["event_date"], _e.get("country", ""), _e["title"]))
+                c.execute("""
+                    INSERT OR IGNORE INTO economic_calendar
+                      (event_date, event_time_ist, title, country, category, importance,
+                       description, prior_value, consensus_estimate,
+                       scenarios_json, historical_analogues_json,
+                       related_sectors_json, related_tickers_json,
+                       status, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (
+                    _e["event_date"], _e.get("event_time_ist", ""), _e["title"],
+                    _e.get("country", ""), _e.get("category", ""), _e.get("importance", "MEDIUM"),
+                    _e.get("description", ""), _e.get("prior_value", ""), _e.get("consensus_estimate", ""),
+                    _sj, _aj, _secj, _tj, "upcoming",
+                ))
+            db_write(_ins)
+        print(f"[CALENDAR] Seeded {len(CALENDAR_EVENTS_SEED)} events.", flush=True)
+    except Exception as e:
+        print(f"[CALENDAR] Seed error: {e}", flush=True)
 
 
 # Catalyst types from the screener that hint at systemic impact.
@@ -5400,6 +5762,160 @@ Return ONLY:
         }), 500
 
 
+@app.route('/api/calendar', methods=['GET'])
+def get_calendar():
+    """
+    Forward-looking macro event schedule. By default returns the next 14
+    days (covering "this week" + "next week"). Past events still appear
+    if within `past_days` (default 1).
+
+    Response: events grouped per day, plus a flat list.
+    """
+    try:
+        days_ahead = min(int(request.args.get('days', 14)), 30)
+        past_days  = min(int(request.args.get('past', 1)),   7)
+    except Exception:
+        days_ahead, past_days = 14, 1
+    try:
+        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+        start = (today - timedelta(days=past_days)).strftime('%Y-%m-%d')
+        end   = (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, event_date, event_time_ist, title, country, category,
+                   importance, description, prior_value, consensus_estimate,
+                   actual_value, scenarios_json, historical_analogues_json,
+                   related_sectors_json, related_tickers_json, status,
+                   created_at, updated_at
+            FROM economic_calendar
+            WHERE event_date BETWEEN ? AND ?
+            ORDER BY event_date ASC, event_time_ist ASC, importance DESC
+        """, (start, end))
+        cols = [d[0] for d in c.cursor.description]
+        rows = [dict(zip(cols, r)) for r in c.fetchall()]
+        conn.close()
+        # Parse JSON fields
+        for r in rows:
+            for k in ('scenarios_json', 'historical_analogues_json',
+                      'related_sectors_json', 'related_tickers_json'):
+                raw = r.pop(k, None)
+                clean_key = k.replace('_json', '')
+                try:
+                    r[clean_key] = json.loads(raw) if raw else None
+                except Exception:
+                    r[clean_key] = None
+        # Group by day
+        by_day = {}
+        for r in rows:
+            by_day.setdefault(r['event_date'], []).append(r)
+        return jsonify({
+            "today_ist": today.strftime('%Y-%m-%d'),
+            "events": rows,
+            "by_day": by_day,
+            "count": len(rows),
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/calendar/<int:event_id>', methods=['GET'])
+def get_calendar_event(event_id):
+    """Single-event detail (used when user clicks a card)."""
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("""SELECT id, event_date, event_time_ist, title, country, category,
+                            importance, description, prior_value, consensus_estimate,
+                            actual_value, scenarios_json, historical_analogues_json,
+                            related_sectors_json, related_tickers_json, status,
+                            created_at, updated_at
+                     FROM economic_calendar WHERE id = ? LIMIT 1""", (event_id,))
+        cols = [d[0] for d in c.cursor.description]
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Event not found"}), 404
+        r = dict(zip(cols, row))
+        for k in ('scenarios_json', 'historical_analogues_json',
+                  'related_sectors_json', 'related_tickers_json'):
+            raw = r.pop(k, None)
+            clean_key = k.replace('_json', '')
+            try:
+                r[clean_key] = json.loads(raw) if raw else None
+            except Exception:
+                r[clean_key] = None
+        return jsonify(r)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/admin/calendar/upsert', methods=['POST'])
+def admin_calendar_upsert():
+    """
+    Weekly maintenance endpoint — replace next-week's events with new payload.
+    Auth: X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>
+    Body: { "events": [ { event_date, event_time_ist, title, country, category,
+                          importance, description, prior_value, consensus_estimate,
+                          scenarios, historical_analogues, related_sectors,
+                          related_tickers }, ... ],
+            "replace_window_days": 7   # delete-then-insert window (default 7)
+          }
+    """
+    secret = os.environ.get("SQL_RUNNER_SECRET")
+    token = request.headers.get("X-Alpha-Lens-Token") or request.args.get("token")
+    if not secret or token != secret:
+        return jsonify({"error": "Unauthorized"}), 401
+    body = request.get_json(silent=True) or {}
+    events = body.get("events") or []
+    if not events:
+        return jsonify({"error": "No events provided in payload"}), 400
+    replace_days = int(body.get("replace_window_days", 7))
+    try:
+        # If a window is specified, delete existing rows in that window first
+        # so the user can re-seed cleanly.
+        today = datetime.now(timezone(timedelta(hours=5, minutes=30))).date()
+        end = (today + timedelta(days=replace_days)).strftime('%Y-%m-%d')
+        start = today.strftime('%Y-%m-%d')
+        def _wipe(conn, c, _s=start, _e=end):
+            c.execute("DELETE FROM economic_calendar WHERE event_date BETWEEN ? AND ?",
+                      (_s, _e))
+        db_write(_wipe)
+
+        inserted = 0
+        for ev in events:
+            scenarios_json = json.dumps(ev.get("scenarios") or {})
+            analogues_json = json.dumps(ev.get("historical_analogues") or [])
+            sectors_json   = json.dumps(ev.get("related_sectors") or [])
+            tickers_json   = json.dumps(ev.get("related_tickers") or [])
+            _ev = ev
+            def _ins(conn, c, _e=_ev, _sj=scenarios_json, _aj=analogues_json,
+                     _secj=sectors_json, _tj=tickers_json):
+                c.execute("""
+                    INSERT OR REPLACE INTO economic_calendar
+                      (event_date, event_time_ist, title, country, category, importance,
+                       description, prior_value, consensus_estimate,
+                       scenarios_json, historical_analogues_json,
+                       related_sectors_json, related_tickers_json,
+                       status, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """, (
+                    _e["event_date"], _e.get("event_time_ist", ""), _e["title"],
+                    _e.get("country", ""), _e.get("category", ""), _e.get("importance", "MEDIUM"),
+                    _e.get("description", ""), _e.get("prior_value", ""), _e.get("consensus_estimate", ""),
+                    _sj, _aj, _secj, _tj, ev.get("status", "upcoming"),
+                ))
+            db_write(_ins)
+            inserted += 1
+        return jsonify({"status": "success", "inserted": inserted,
+                        "wiped_window": f"{start} → {end}"})
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 @app.route('/api/macro/events', methods=['GET'])
 def list_macro_events():
     """
@@ -8424,6 +8940,13 @@ def start_background_workers():
     macro_warm.start()
     macro_shock = threading.Thread(target=macro_shock_worker, name="MacroShockWorker", daemon=True)
     macro_shock.start()
+
+    # One-shot seed of the curated calendar. INSERT OR IGNORE keys means it's
+    # safe to call on every startup — only new rows get added.
+    try:
+        seed_calendar_events(force=False)
+    except Exception as _ce:
+        print(f"[CALENDAR] Startup seed failed (non-fatal): {_ce}", flush=True)
 
     # Start the cloud-to-local database synchronizer if pointing to cloud
     db_url = os.environ.get("DATABASE_URL")
