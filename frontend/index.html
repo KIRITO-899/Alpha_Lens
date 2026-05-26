@@ -89,6 +89,11 @@
     <meta name="msapplication-TileColor"                    content="#050507">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" async></script>
+    <!-- D3.js for "The Ripple" force-directed propagation graph. Loaded on
+         demand: the script tag is here for preconnect/DNS resolution, but
+         openRipple() lazy-imports it only when the user actually clicks
+         "View Ripple". Saves ~80 KB on pages that never open the graph. -->
+    <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <!-- T2.7: stocks.js lazy-loaded on first search-input focus.
          Saves ~29 KB (br-compressed) on every page that doesn't use search. -->
     <script>
@@ -972,6 +977,51 @@
 
             <!-- ============================================== -->
         </main>
+    </div>
+
+    <!-- ──────────────────────────────────────────────────────────────────
+         "THE RIPPLE" — propagation graph modal
+         Mounted at root so it can overlay every view. Hidden by default;
+         openRipple(newsId) populates it and fades in. d3.js is lazy-
+         loaded on first open (saves ~80 KB on pages that never use it).
+         ────────────────────────────────────────────────────────────────── -->
+    <div id="ripple-modal" class="ripple-modal hidden" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="ripple-modal-backdrop" data-close-ripple></div>
+        <div class="ripple-modal-shell">
+            <div class="ripple-modal-header">
+                <div class="ripple-modal-kicker">
+                    <span class="ripple-pulse"></span>
+                    <span>The Ripple · macro propagation graph</span>
+                </div>
+                <button class="ripple-modal-close" data-close-ripple aria-label="Close ripple view">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <h2 id="ripple-headline" class="ripple-modal-headline">—</h2>
+            <p id="ripple-summary" class="ripple-modal-summary"></p>
+            <div class="ripple-modal-body">
+                <div id="ripple-graph-wrap" class="ripple-graph-wrap">
+                    <div id="ripple-loading" class="ripple-loading">
+                        <div class="ripple-loading-ring"></div>
+                        <div class="ripple-loading-text">Building propagation graph<span class="ripple-dots"><span>.</span><span>.</span><span>.</span></span></div>
+                    </div>
+                    <svg id="ripple-graph" style="display:none"></svg>
+                </div>
+                <aside id="ripple-side" class="ripple-side">
+                    <div class="ripple-side-empty">
+                        <div class="ripple-side-empty-icon">⚡</div>
+                        <div class="ripple-side-empty-text">Click any stock node to see the causal chain</div>
+                    </div>
+                </aside>
+            </div>
+            <div id="ripple-legend" class="ripple-legend">
+                <span class="ripple-legend-item"><span class="ripple-dot ripple-dot-bull"></span>Bullish</span>
+                <span class="ripple-legend-item"><span class="ripple-dot ripple-dot-bear"></span>Bearish</span>
+                <span class="ripple-legend-item"><span class="ripple-tier-dot ripple-tier-1"></span>Tier 1 · Direct</span>
+                <span class="ripple-legend-item"><span class="ripple-tier-dot ripple-tier-2"></span>Tier 2 · Supply chain</span>
+                <span class="ripple-legend-item"><span class="ripple-tier-dot ripple-tier-3"></span>Tier 3 · Macro transmission</span>
+            </div>
+        </div>
     </div>
 
     <!-- Extracted to app.js. `defer` keeps end-of-body execution timing. -->

@@ -774,11 +774,24 @@
                     <div class="nc-back-body">${escapeHtml(aamJanta.length > 320 ? aamJanta.slice(0, 320) + '…' : aamJanta)}</div>
                 </div>
             ` : '';
+            // "View Ripple" badge — only for big macro events. Backend sets
+            // news.has_ripple = 1 after the propagation graph is generated.
+            const rippleCta = news.has_ripple ? `
+                <button class="ripple-cta" data-ripple-id="${news.id}" aria-label="Open propagation graph">
+                    <span class="ripple-cta-icon"></span>
+                    The Ripple
+                    ${news.ripple_score ? `<span class="ripple-cta-score">${news.ripple_score}</span>` : ''}
+                </button>
+            ` : '';
+
             item.innerHTML = `
                 <div class="nc-front">
-                    <div class="flex items-center gap-1.5 text-[9px] text-violet-400 font-mono mb-2">
-                        <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                        ${dateStr} · ${timeStr}
+                    <div class="flex items-center justify-between gap-2 mb-2">
+                        <div class="flex items-center gap-1.5 text-[9px] text-violet-400 font-mono">
+                            <svg class="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                            ${dateStr} · ${timeStr}
+                        </div>
+                        ${rippleCta}
                     </div>
                     <div class="flex items-start justify-between gap-4 mb-1">
                         <h3 class="text-base font-bold text-slate-100 leading-snug flex-1">${escapeHtml(news.headline)}</h3>
@@ -792,6 +805,15 @@
                 </div>
                 ${backHtml}
             `;
+            // Wire the Ripple CTA — stop propagation so clicking the badge
+            // doesn't also fire the card's "open article" handler.
+            const ctaEl = item.querySelector('[data-ripple-id]');
+            if (ctaEl) {
+                ctaEl.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    openRipple(parseInt(ctaEl.getAttribute('data-ripple-id'), 10));
+                });
+            }
             return item;
         }
 
@@ -2840,3 +2862,270 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         document.addEventListener('click', () => {
             if (Notification.permission === 'default') Notification.requestPermission();
         }, { once: true });
+
+// ════════════════════════════════════════════════════════════════════════
+// "THE RIPPLE" — macro propagation graph
+//
+// Premium feature: for macro-grade news events (commodity shocks, RBI/Fed
+// decisions, geopolitical, election, policy), the backend pre-generates a
+// 3-tier graph showing how the news ripples across NSE stocks. This block
+// handles opening the modal, fetching the graph, lazy-loading d3.js, and
+// rendering it as a force-directed visualization with a side panel.
+// ════════════════════════════════════════════════════════════════════════
+
+let _d3Promise = null;
+function _ensureD3() {
+    if (typeof window.d3 !== 'undefined') return Promise.resolve(window.d3);
+    if (_d3Promise) return _d3Promise;
+    _d3Promise = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js';
+        s.async = true;
+        s.onload = () => resolve(window.d3);
+        s.onerror = () => reject(new Error('d3 failed to load'));
+        document.head.appendChild(s);
+    });
+    return _d3Promise;
+}
+
+function _rippleColorForDirection(dir) {
+    return (dir || '').toUpperCase() === 'BULLISH' ? '#10b981' : '#f43f5e';
+}
+function _rippleTierColor(tier) {
+    return tier === 1 ? '#fbbf24' : tier === 2 ? '#60a5fa' : '#a78bfa';
+}
+
+function _renderRippleSidePanel(node, container) {
+    if (!node) {
+        container.innerHTML = `
+            <div class="ripple-side-empty">
+                <div class="ripple-side-empty-icon">⚡</div>
+                <div class="ripple-side-empty-text">Click any stock node to see the causal chain</div>
+            </div>`;
+        return;
+    }
+    const dir = (node.direction || '').toUpperCase();
+    const dirCls = dir === 'BULLISH' ? 'bullish' : 'bearish';
+    const tierLabels = {1: 'Tier 1 · Direct Impact', 2: 'Tier 2 · Supply Chain', 3: 'Tier 3 · Macro Transmission'};
+    container.innerHTML = `
+        <div class="ripple-side-card">
+            <div class="ripple-side-tier-label">${tierLabels[node.tier] || ''}</div>
+            <div class="ripple-side-ticker">${escapeHtml(node.ticker || '')}</div>
+            <div class="flex items-center gap-3">
+                <span class="ripple-side-direction ${dirCls}">${dir || 'NEUTRAL'}</span>
+                <span class="ripple-side-conf">Confidence ${node.confidence != null ? node.confidence : '—'}%</span>
+            </div>
+            <div class="ripple-side-reason">${escapeHtml(node.reason || 'No detailed reason provided.')}</div>
+        </div>`;
+}
+
+async function _renderRippleGraph(payload) {
+    const d3 = await _ensureD3();
+    const svgEl = document.getElementById('ripple-graph');
+    const wrap = document.getElementById('ripple-graph-wrap');
+    const sideEl = document.getElementById('ripple-side');
+    const loadingEl = document.getElementById('ripple-loading');
+
+    if (loadingEl) loadingEl.style.display = 'none';
+    if (svgEl) svgEl.style.display = 'block';
+
+    // Clear any previous render
+    const svg = d3.select('#ripple-graph');
+    svg.selectAll('*').remove();
+
+    const rect = wrap.getBoundingClientRect();
+    const width = Math.max(400, rect.width);
+    const height = Math.max(460, rect.height || 460);
+    svg.attr('viewBox', `0 0 ${width} ${height}`)
+       .attr('preserveAspectRatio', 'xMidYMid meet');
+
+    // Build nodes + links from the payload tiers
+    const nodes = [{ id: 'center', label: 'NEWS', isCenter: true, tier: 0 }];
+    const links = [];
+    const tiers = Array.isArray(payload.tiers) ? payload.tiers : [];
+    tiers.forEach(tier => {
+        const tNum = tier.tier;
+        (tier.nodes || []).forEach(n => {
+            const id = `${tNum}:${n.ticker}`;
+            nodes.push({
+                id,
+                label: n.ticker,
+                ticker: n.ticker,
+                direction: n.direction,
+                confidence: n.confidence,
+                reason: n.reason,
+                tier: tNum,
+            });
+            // Connect to center for tier-1, otherwise to a random tier-(N-1) node
+            if (tNum === 1) {
+                links.push({ source: 'center', target: id });
+            } else {
+                const prevTier = tiers.find(x => x.tier === tNum - 1);
+                if (prevTier && prevTier.nodes && prevTier.nodes.length) {
+                    const parent = prevTier.nodes[Math.floor(Math.random() * prevTier.nodes.length)];
+                    links.push({ source: `${tNum - 1}:${parent.ticker}`, target: id });
+                } else {
+                    links.push({ source: 'center', target: id });
+                }
+            }
+        });
+    });
+
+    // Concentric guide rings (purely decorative)
+    const cx = width / 2, cy = height / 2;
+    const ringRadii = [Math.min(width, height) * 0.18, Math.min(width, height) * 0.32, Math.min(width, height) * 0.46];
+    svg.append('g')
+        .selectAll('circle')
+        .data(ringRadii)
+        .enter().append('circle')
+        .attr('class', 'ripple-tier-ring')
+        .attr('cx', cx).attr('cy', cy)
+        .attr('r', d => d);
+
+    // Edges layer
+    const linkSel = svg.append('g').selectAll('line')
+        .data(links).enter().append('line')
+        .attr('class', d => {
+            const target = nodes.find(n => n.id === (d.target.id || d.target));
+            const dir = (target && target.direction || '').toUpperCase();
+            if (!target || target.isCenter) return 'ripple-edge center';
+            return 'ripple-edge ' + (dir === 'BULLISH' ? 'bullish' : 'bearish');
+        })
+        .attr('stroke-width', 1.4);
+
+    // Node group (circle + label)
+    const nodeSel = svg.append('g').selectAll('g')
+        .data(nodes).enter().append('g')
+        .style('cursor', d => d.isCenter ? 'default' : 'pointer');
+
+    nodeSel.append('circle')
+        .attr('class', d => d.isCenter ? 'ripple-node-circle ripple-node-center' : 'ripple-node-circle')
+        .attr('r', d => d.isCenter ? 34 : (d.tier === 1 ? 16 : d.tier === 2 ? 13 : 11))
+        .attr('fill', d => {
+            if (d.isCenter) return null; // handled by class
+            const base = _rippleColorForDirection(d.direction);
+            return base;
+        })
+        .attr('fill-opacity', d => d.isCenter ? null : 0.22)
+        .attr('stroke', d => d.isCenter ? null : _rippleColorForDirection(d.direction))
+        .attr('stroke-width', 1.6)
+        .on('click', (event, d) => {
+            if (d.isCenter) return;
+            _renderRippleSidePanel(d, sideEl);
+        });
+
+    nodeSel.append('text')
+        .attr('class', 'ripple-node-label')
+        .attr('text-anchor', 'middle')
+        .attr('dy', d => d.isCenter ? 4 : (d.tier === 1 ? 28 : 22))
+        .text(d => d.isCenter ? '⚡' : (d.label || ''));
+
+    // Force simulation — radial constraint pulls nodes toward their tier ring
+    const sim = d3.forceSimulation(nodes)
+        .force('link', d3.forceLink(links).id(d => d.id).distance(d => {
+            const t = (typeof d.target === 'object' ? d.target.tier : 0);
+            return t === 1 ? 110 : t === 2 ? 90 : 80;
+        }).strength(0.55))
+        .force('charge', d3.forceManyBody().strength(d => d.isCenter ? -800 : -260))
+        .force('center', d3.forceCenter(cx, cy))
+        .force('collide', d3.forceCollide().radius(d => (d.isCenter ? 40 : (d.tier === 1 ? 22 : 17))))
+        .force('radial', d3.forceRadial(d => {
+            if (d.isCenter) return 0;
+            if (d.tier === 1) return ringRadii[0];
+            if (d.tier === 2) return ringRadii[1];
+            return ringRadii[2];
+        }, cx, cy).strength(0.85))
+        .on('tick', () => {
+            linkSel
+                .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+                .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+            nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+        });
+
+    // Stop the simulation eventually so it doesn't burn CPU forever.
+    setTimeout(() => sim.alphaTarget(0).stop(), 4000);
+}
+
+async function openRipple(newsId) {
+    const modal = document.getElementById('ripple-modal');
+    const headline = document.getElementById('ripple-headline');
+    const summary = document.getElementById('ripple-summary');
+    const loading = document.getElementById('ripple-loading');
+    const svg = document.getElementById('ripple-graph');
+    const side = document.getElementById('ripple-side');
+
+    if (!modal) return;
+    headline.innerText = 'Loading…';
+    summary.innerText = '';
+    if (loading) loading.style.display = 'flex';
+    if (svg) { svg.style.display = 'none'; }
+    if (side) {
+        side.innerHTML = `
+            <div class="ripple-side-empty">
+                <div class="ripple-side-empty-icon">⚡</div>
+                <div class="ripple-side-empty-text">Click any stock node to see the causal chain</div>
+            </div>`;
+    }
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+
+    try {
+        const res = await fetch(`/api/news/${newsId}/ripple`);
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            headline.innerText = 'Could not load The Ripple';
+            summary.innerText = errBody.error || `HTTP ${res.status}`;
+            if (loading) loading.style.display = 'none';
+            return;
+        }
+        const data = await res.json();
+        headline.innerText = data.headline || '';
+        summary.innerText = data.summary || '';
+        await _renderRippleGraph(data);
+    } catch (err) {
+        headline.innerText = 'Could not load The Ripple';
+        summary.innerText = String(err && err.message ? err.message : err);
+        if (loading) loading.style.display = 'none';
+    }
+}
+
+function closeRipple() {
+    const modal = document.getElementById('ripple-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+}
+
+// Global click handlers for backdrop + close button (delegated so they
+// survive re-renders).
+document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close-ripple]')) {
+        closeRipple();
+    }
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') closeRipple();
+});
+
+// Re-render the graph on window resize so the SVG fills the new wrap size.
+let _rippleResizeTimer = null;
+window.addEventListener('resize', () => {
+    const modal = document.getElementById('ripple-modal');
+    if (!modal || modal.classList.contains('hidden')) return;
+    clearTimeout(_rippleResizeTimer);
+    _rippleResizeTimer = setTimeout(() => {
+        // Re-fit viewBox; the existing simulation positions are still valid.
+        const svg = document.getElementById('ripple-graph');
+        const wrap = document.getElementById('ripple-graph-wrap');
+        if (svg && wrap) {
+            const r = wrap.getBoundingClientRect();
+            svg.setAttribute('viewBox', `0 0 ${r.width} ${r.height || 460}`);
+        }
+    }, 150);
+});
+
+// Expose globally for inline handlers / debugging
+window.openRipple = openRipple;
+window.closeRipple = closeRipple;

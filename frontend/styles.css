@@ -1634,3 +1634,257 @@ main.container {
 
 /* moved from inline <style> at line 657 of old index.html */
 .archive-filter-btn { cursor: pointer; }
+
+/* ============================================================
+   "THE RIPPLE" — premium propagation-graph modal
+   ============================================================ */
+.ripple-modal {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  opacity: 0; transition: opacity .25s ease;
+  pointer-events: none;
+}
+.ripple-modal:not(.hidden) { opacity: 1; pointer-events: auto; }
+.ripple-modal.hidden { display: none; }
+.ripple-modal-backdrop {
+  position: absolute; inset: 0;
+  background: radial-gradient(circle at 50% 40%, rgba(168,85,247,0.10), rgba(5,5,7,0.96) 60%);
+  backdrop-filter: blur(18px) saturate(1.4);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+}
+.ripple-modal-shell {
+  position: relative; z-index: 1;
+  width: min(1280px, 96vw);
+  max-height: 92vh;
+  background: linear-gradient(180deg, rgba(15,15,20,0.92), rgba(8,8,12,0.96));
+  border: 1px solid rgba(168,85,247,0.22);
+  border-radius: 22px;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.04) inset,
+    0 40px 120px rgba(0,0,0,0.6),
+    0 0 120px rgba(168,85,247,0.15);
+  padding: 28px 32px 24px;
+  display: flex; flex-direction: column; gap: 14px;
+  overflow: hidden;
+  transform: translateY(8px) scale(0.985);
+  transition: transform .3s cubic-bezier(.2,.8,.2,1);
+}
+.ripple-modal:not(.hidden) .ripple-modal-shell { transform: translateY(0) scale(1); }
+
+.ripple-modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+}
+.ripple-modal-kicker {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: #c4b5fd;
+}
+.ripple-pulse {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #a855f7;
+  box-shadow: 0 0 0 0 rgba(168,85,247,0.7);
+  animation: ripplePulse 1.8s infinite;
+}
+@keyframes ripplePulse {
+  0%   { box-shadow: 0 0 0 0   rgba(168,85,247,0.7); }
+  70%  { box-shadow: 0 0 0 14px rgba(168,85,247,0); }
+  100% { box-shadow: 0 0 0 0   rgba(168,85,247,0); }
+}
+.ripple-modal-close {
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+  color: #cbd5e1;
+  width: 38px; height: 38px;
+  border-radius: 12px;
+  display: inline-flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.ripple-modal-close:hover { background: rgba(168,85,247,0.15); color: #fff; border-color: rgba(168,85,247,0.4); }
+
+.ripple-modal-headline {
+  font-family: 'Space Grotesk', sans-serif;
+  font-size: clamp(20px, 2.4vw, 30px);
+  font-weight: 800; line-height: 1.18;
+  background: linear-gradient(135deg,#fff 0%,#cbd5e1 60%,#a855f7 100%);
+  -webkit-background-clip: text; background-clip: text;
+  color: transparent;
+  letter-spacing: -0.012em;
+  margin: 0;
+}
+.ripple-modal-summary {
+  color: #94a3b8; font-size: 13px; line-height: 1.55;
+  margin: 0; max-width: 80ch;
+}
+
+.ripple-modal-body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 18px;
+  flex: 1 1 auto; min-height: 0;
+}
+@media (max-width: 900px) {
+  .ripple-modal-body { grid-template-columns: 1fr; }
+  .ripple-side { max-height: 240px; }
+}
+
+.ripple-graph-wrap {
+  position: relative;
+  background:
+    radial-gradient(ellipse at center, rgba(168,85,247,0.06), transparent 70%),
+    rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px;
+  overflow: hidden;
+  min-height: 460px;
+}
+#ripple-graph { width: 100%; height: 100%; min-height: 460px; display: block; }
+.ripple-loading {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 18px; color: #c4b5fd;
+}
+.ripple-loading-ring {
+  width: 56px; height: 56px;
+  border: 3px solid rgba(168,85,247,0.18);
+  border-top-color: #a855f7;
+  border-radius: 50%;
+  animation: rippleSpin 1.1s linear infinite;
+}
+@keyframes rippleSpin { to { transform: rotate(360deg); } }
+.ripple-loading-text { font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.ripple-dots span { animation: rippleDots 1.4s infinite; opacity: 0; }
+.ripple-dots span:nth-child(2) { animation-delay: 0.2s; }
+.ripple-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes rippleDots { 0%, 80% { opacity: 0; } 40% { opacity: 1; } }
+
+.ripple-side {
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: 14px;
+  padding: 20px;
+  overflow-y: auto;
+}
+.ripple-side-empty {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 12px;
+  color: #64748b; text-align: center;
+}
+.ripple-side-empty-icon { font-size: 36px; opacity: 0.5; }
+.ripple-side-empty-text { font-size: 12px; letter-spacing: 0.08em; max-width: 220px; }
+.ripple-side-card { display: flex; flex-direction: column; gap: 12px; }
+.ripple-side-ticker {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 20px; font-weight: 800; letter-spacing: 0.04em;
+  color: #fff;
+}
+.ripple-side-direction {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 99px;
+  font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+}
+.ripple-side-direction.bullish { color: #34d399; background: rgba(16,185,129,0.10); border: 1px solid rgba(16,185,129,0.30); }
+.ripple-side-direction.bearish { color: #fb7185; background: rgba(244,63,94,0.10); border: 1px solid rgba(244,63,94,0.30); }
+.ripple-side-conf {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; color: #cbd5e1;
+}
+.ripple-side-reason {
+  color: #cbd5e1; font-size: 13px; line-height: 1.55;
+  padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.06);
+}
+.ripple-side-tier-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: #a855f7;
+}
+
+.ripple-legend {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; letter-spacing: 0.10em; text-transform: uppercase;
+  color: #64748b;
+  padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.05);
+}
+.ripple-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.ripple-dot { width: 9px; height: 9px; border-radius: 50%; }
+.ripple-dot-bull { background: #10b981; box-shadow: 0 0 8px rgba(16,185,129,0.6); }
+.ripple-dot-bear { background: #f43f5e; box-shadow: 0 0 8px rgba(244,63,94,0.6); }
+.ripple-tier-dot { width: 9px; height: 9px; border-radius: 50%; opacity: 0.85; }
+.ripple-tier-1 { background: #fbbf24; }
+.ripple-tier-2 { background: #60a5fa; }
+.ripple-tier-3 { background: #a78bfa; }
+
+/* SVG node + edge styling */
+#ripple-graph .ripple-edge {
+  stroke-opacity: 0.35;
+  fill: none;
+  transition: stroke-opacity .15s ease;
+}
+#ripple-graph .ripple-edge.bullish { stroke: #10b981; }
+#ripple-graph .ripple-edge.bearish { stroke: #f43f5e; }
+#ripple-graph .ripple-edge.center  { stroke: #a855f7; stroke-opacity: 0.55; }
+#ripple-graph .ripple-node-circle {
+  cursor: pointer;
+  transition: r .2s ease, stroke-width .15s ease, filter .15s ease;
+}
+#ripple-graph .ripple-node-circle:hover {
+  filter: brightness(1.18) drop-shadow(0 0 14px currentColor);
+  stroke-width: 2.4;
+}
+#ripple-graph .ripple-node-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px; font-weight: 700; fill: #fff;
+  pointer-events: none;
+  paint-order: stroke;
+  stroke: rgba(0,0,0,0.75);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+#ripple-graph .ripple-node-center {
+  fill: rgba(168,85,247,0.18);
+  stroke: #a855f7;
+  stroke-width: 2;
+}
+#ripple-graph .ripple-tier-ring {
+  fill: none;
+  stroke: rgba(168,85,247,0.10);
+  stroke-dasharray: 4 8;
+}
+
+/* "View Ripple" badge on news cards */
+.ripple-cta {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 10px;
+  border-radius: 99px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
+  color: #fff;
+  background: linear-gradient(135deg, rgba(168,85,247,0.20), rgba(99,102,241,0.20));
+  border: 1px solid rgba(168,85,247,0.45);
+  box-shadow: 0 0 16px rgba(168,85,247,0.25);
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.ripple-cta:hover {
+  background: linear-gradient(135deg, rgba(168,85,247,0.32), rgba(99,102,241,0.32));
+  box-shadow: 0 0 22px rgba(168,85,247,0.45);
+  transform: translateY(-1px);
+}
+.ripple-cta-icon {
+  display: inline-block;
+  width: 12px; height: 12px;
+  background: radial-gradient(circle, #a855f7 30%, transparent 65%);
+  border-radius: 50%;
+  animation: ripplePulse 1.8s infinite;
+}
+.ripple-cta-score {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 99px;
+  background: rgba(168,85,247,0.30);
+  color: #f3e8ff;
+  font-weight: 800;
+}

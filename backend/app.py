@@ -792,6 +792,24 @@ def init_news_db():
     # Default 'screened' so any pre-existing rows are not treated as pending.
     run_query_safe("ALTER TABLE news ADD COLUMN ai_status TEXT DEFAULT 'screened'")
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_ai_status ON news(ai_status)")
+
+    # ── "The Ripple" — propagation graphs for macro-grade big news ──
+    # Stored separately so we can drop/regenerate without touching the
+    # news table, and so the body row doesn't bloat with rare-but-large
+    # JSON blobs. ripple_score 0-100; is_big_news triggers UI badge.
+    run_query_safe('''
+        CREATE TABLE IF NOT EXISTS news_ripple (
+            news_id      INTEGER PRIMARY KEY,
+            ripple_score INTEGER DEFAULT 0,
+            is_big_news  INTEGER DEFAULT 0,
+            ripple_json  TEXT,
+            generated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_ripple_big ON news_ripple(is_big_news)")
+    # Quick flag on the news row itself — avoids a JOIN on the hot listing
+    # endpoint just to know whether to show the "View Ripple" badge.
+    run_query_safe("ALTER TABLE news ADD COLUMN has_ripple INTEGER DEFAULT 0")
     
     run_query_safe('''
         CREATE TABLE IF NOT EXISTS stock_impact (
@@ -1484,6 +1502,239 @@ def clean_json(raw_text):
     if cleaned.startswith("```"):
         cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0]
     return json.loads(cleaned.strip())
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# "THE RIPPLE" — propagation graphs for macro-grade big news
+# Most news is a single-stock story. A small subset is *systemic* — crude
+# crashing 5%, RBI cutting rates, a war breaking out, a major policy shift —
+# and these events ripple across many stocks in predictable cascades.
+# Show those (and only those) as a force-directed propagation graph.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Keywords that hint at macro/systemic news (one of many factors in the score).
+_BIG_NEWS_KEYWORDS = (
+    # central banks + rates
+    "rbi", "monetary policy", "mpc", "repo rate", "crr", "slr",
+    "federal reserve", "fed ", "fomc", "ecb", "boj", "pboc",
+    "rate cut", "rate hike", "rate decision", "yield curve",
+    # commodities (systemic when they move materially)
+    "crude oil", "brent crude", "wti crude", "opec",
+    "natural gas", "lng",
+    "gold price", "silver price",
+    "copper", "aluminium", "aluminum", "zinc", "iron ore", "steel",
+    # currency
+    "rupee", "dollar index", "dxy", "usd/inr", "yuan", "euro",
+    "currency war", "devaluation",
+    # geopolitics
+    "war", "ceasefire", "invasion", "sanctions", "tariff",
+    "trade deal", "trade war", "embargo",
+    "russia", "ukraine", "iran", "israel", "taiwan", "middle east",
+    # India macro
+    "budget", "gst council", "fiscal deficit", "inflation",
+    "cpi", "wpi", "iip", "gdp",
+    "election result", "exit poll", "lok sabha",
+    "fii outflow", "fii inflow", "dii flow",
+    # global shocks
+    "recession", "bear market", "circuit breaker",
+    "stimulus package", "qe ", "quantitative easing",
+)
+
+# Catalyst types from the screener that hint at systemic impact.
+_MACRO_CATALYST_TYPES = (
+    "RBI", "FED", "FOMC", "MONETARY",
+    "RATE", "POLICY", "BUDGET", "FISCAL",
+    "COMMODITY", "CRUDE", "CURRENCY",
+    "GEOPOLITICAL", "WAR", "TARIFF", "SANCTIONS",
+    "ELECTION", "MACRO", "INFLATION",
+)
+
+
+def _ripple_score_for_signal(signal, impact_count=1):
+    """
+    Score 0-100 for how "ripple-worthy" a news event is. Not every
+    material headline deserves a propagation graph — only events with
+    cross-sector or cross-asset implications do.
+
+    Factors combined into a single score:
+      • Screener materiality_score (0-100) — base signal.
+      • Catalyst type matching a macro category (+15).
+      • Headline containing a macro keyword (+15).
+      • Multi-stock impact already detected (+5 per extra ticker).
+      • After-hours or weekend (+10 — bigger time for impact to brew).
+
+    Threshold for the UI badge: score >= BIG_NEWS_THRESHOLD (default 75).
+    """
+    materiality = 0
+    try:
+        materiality = int(float(signal.get("quality_score") or 0))
+    except Exception:
+        materiality = 0
+
+    score = max(0, min(100, materiality))
+
+    catalyst = (signal.get("catalyst_type") or "").upper()
+    if any(m in catalyst for m in _MACRO_CATALYST_TYPES):
+        score += 15
+
+    headline = (signal.get("headline") or "").lower()
+    if any(k in headline for k in _BIG_NEWS_KEYWORDS):
+        score += 15
+
+    # Bonus for events that affected multiple tickers in the same screener pass.
+    if impact_count > 1:
+        score += min(15, (impact_count - 1) * 5)
+
+    # After-hours / weekend amplification — big news outside market hours has
+    # the whole next session to digest, often amplifying the move.
+    try:
+        _ist = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(_ist)
+        if now_ist.weekday() >= 5:  # Saturday/Sunday
+            score += 10
+        else:
+            _t = now_ist.hour * 60 + now_ist.minute
+            if _t < (9 * 60 + 15) or _t >= (15 * 60 + 30):
+                score += 10
+    except Exception:
+        pass
+
+    return max(0, min(100, score))
+
+
+def is_big_news(signal, impact_count=1):
+    """Convenience wrapper — returns (is_big, score)."""
+    threshold = int(os.environ.get("BIG_NEWS_THRESHOLD", "75"))
+    score = _ripple_score_for_signal(signal, impact_count=impact_count)
+    return (score >= threshold, score)
+
+
+def generate_ripple_graph(headline, body, catalyst_type, primary_tickers):
+    """
+    Single Gemini call that expands a macro news event into a 3-tier
+    propagation graph.
+
+    Returns a dict with the shape:
+        {
+          "summary": "1-sentence framing of why this is systemic",
+          "tiers": [
+            {"tier": 1, "label": "Direct Impact", "nodes": [
+                {"ticker": "ONGC.NS", "direction": "BEARISH",
+                 "confidence": 88, "reason": "..."}
+            ]},
+            {"tier": 2, "label": "Second-Order (Supply Chain)", "nodes": [...]},
+            {"tier": 3, "label": "Macro Transmission", "nodes": [...]}
+          ]
+        }
+    or None if generation failed.
+
+    Designed to be called from a background thread or the API endpoint —
+    never inline in the worker save loop because it costs ~3-4s of latency.
+    """
+    available = _available_gemini_key_indices()
+    if not available:
+        return None
+
+    primary_tickers_str = ", ".join(primary_tickers) if primary_tickers else "none yet identified"
+    prompt = f"""You are the Chief Macro Strategist at a top Indian hedge fund.
+A SYSTEMIC news event just hit. Your job: build the propagation graph showing
+HOW this event will ripple across the Indian equity market in 3 tiers.
+
+EVENT
+  Headline:   {headline}
+  Catalyst:   {catalyst_type or "macro event"}
+  Direct hits identified so far: {primary_tickers_str}
+  Context:    {(body or "")[:600]}
+
+OUTPUT — three tiers of impact, NSE-listed tickers only (.NS suffix):
+
+TIER 1 — DIRECT IMPACT (3-6 tickers)
+  Companies directly named or whose P&L is hit in the next session.
+  Example: crude crashes → ONGC, RELIANCE, Cairn
+
+TIER 2 — SECOND-ORDER / SUPPLY CHAIN (5-10 tickers)
+  Companies one step removed: customers / suppliers / competitors.
+  Example: crude down → BPCL/IOC margin EXPANSION (refining win),
+           airlines (INDIGO) fuel cost win,
+           tyres (APOLLOTYRE) input cost win
+
+TIER 3 — MACRO TRANSMISSION (5-10 tickers)
+  Companies hit by the broader macro consequence — inflation, rates,
+  FII flow, currency, sector rotation.
+  Example: crude down → RBI dovish path → rate-sensitives (HDFCBANK,
+           DLF, BAJFINANCE) → AUTO via rural demand (MARUTI)
+
+For each ticker also state:
+  • direction:   BULLISH or BEARISH
+  • confidence:  0-100, honest probability the predicted move plays out
+                  in next 1-3 sessions
+  • reason:      one-sentence specific causal chain (NOT generic)
+
+Return STRICT valid JSON, no markdown fences:
+
+{{
+  "summary": "1-sentence framing of why this is systemic",
+  "tiers": [
+    {{ "tier": 1, "label": "Direct Impact",
+       "nodes": [
+         {{ "ticker": "X.NS", "direction": "BEARISH", "confidence": 85,
+            "reason": "specific reason" }}
+       ]
+    }},
+    {{ "tier": 2, "label": "Second-Order (Supply Chain)",
+       "nodes": [ ... ]
+    }},
+    {{ "tier": 3, "label": "Macro Transmission",
+       "nodes": [ ... ]
+    }}
+  ]
+}}"""
+
+    # Randomize starting key so concurrent ripples spread across the rotation.
+    import random as _rnd
+    try_order = list(available)
+    _rnd.shuffle(try_order)
+
+    raw = None
+    for _key_idx in try_order:
+        try:
+            _set_active_gemini_client(_key_idx)
+            resp = client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            raw = resp.text
+            break
+        except Exception as _e:
+            if _is_gemini_quota_error(_e):
+                _mark_gemini_key_quota_hit(_key_idx)
+                continue
+            continue
+
+    if not raw:
+        return None
+    try:
+        data = clean_json(raw)
+    except Exception:
+        return None
+    if not isinstance(data, dict) or "tiers" not in data:
+        return None
+    return data
+
+
+def save_ripple_to_db(news_id, ripple_score, is_big, ripple_data):
+    """Persist a ripple graph against a news_id; flip news.has_ripple."""
+    payload = json.dumps(ripple_data) if ripple_data else None
+    def _write(conn, c, _nid=news_id, _sc=ripple_score, _big=int(bool(is_big)), _pl=payload):
+        c.execute(
+            "INSERT OR REPLACE INTO news_ripple (news_id, ripple_score, is_big_news, ripple_json, generated_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            (_nid, _sc, _big, _pl)
+        )
+        c.execute("UPDATE news SET has_ripple = ? WHERE id = ?", (1 if _pl else 0, _nid))
+    db_write(_write)
+
 
 def strip_html(value):
     if not value:
@@ -3357,6 +3608,51 @@ Return ONLY valid JSON matching this shape:
                 # circuit-breaker above can see the trend on subsequent signals.
                 RECENT_DIRECTIONS.append(result['direction'])
 
+                # ── "The Ripple" — auto-generate propagation graph for BIG news ──
+                # Only fires for events that clear the macro-grade threshold
+                # (commodity shocks, central-bank decisions, geopolitical,
+                # election, policy, currency). Backgrounded so the save loop
+                # never blocks on the extra Gemini call.
+                try:
+                    _ripple_impact_count = len([s for s in screened_signals if s.get('headline') == headline])
+                    _is_big, _ripple_sc = is_big_news(signal, impact_count=_ripple_impact_count)
+                    if _is_big and news_id:
+                        # Avoid re-generating if we already did one for this news_id this session.
+                        # Cheap memo via module-level set.
+                        try:
+                            _ripple_inflight = globals().setdefault('_RIPPLE_INFLIGHT', set())
+                        except Exception:
+                            _ripple_inflight = set()
+                        if news_id not in _ripple_inflight:
+                            _ripple_inflight.add(news_id)
+                            _ripple_payload = {
+                                'news_id':        news_id,
+                                'headline':       headline,
+                                'body':           body_text,
+                                'catalyst_type':  signal.get('catalyst_type', ''),
+                                'primary':        [ticker],
+                                'score':          _ripple_sc,
+                            }
+                            def _gen_ripple(p=_ripple_payload):
+                                try:
+                                    print(f"   [RIPPLE] Building propagation graph for news_id={p['news_id']} (score={p['score']})...", flush=True)
+                                    graph = generate_ripple_graph(
+                                        p['headline'], p['body'], p['catalyst_type'], p['primary']
+                                    )
+                                    if graph:
+                                        save_ripple_to_db(p['news_id'], p['score'], True, graph)
+                                        print(f"   [RIPPLE] Saved ripple for news_id={p['news_id']}", flush=True)
+                                    else:
+                                        # Save the score even if generation failed so the badge
+                                        # still shows; the endpoint can retry on click.
+                                        save_ripple_to_db(p['news_id'], p['score'], True, None)
+                                        print(f"   [RIPPLE] Generation failed for news_id={p['news_id']} (will retry on click)", flush=True)
+                                except Exception as _re:
+                                    print(f"   [RIPPLE] error: {_re}", flush=True)
+                            threading.Thread(target=_gen_ripple, daemon=True, name=f"Ripple-{news_id}").start()
+                except Exception as _ripple_err:
+                    print(f"   [RIPPLE] dispatch error (non-fatal): {_ripple_err}", flush=True)
+
                 # ── WhatsApp alert dispatch (high-conviction only) ──
                 # Spawned on a daemon thread so Meta Cloud API latency NEVER
                 # blocks the signal-save loop. Previously a slow API call
@@ -4726,6 +5022,106 @@ Return ONLY:
         }), 500
 
 
+@app.route('/api/news/<int:news_id>/ripple', methods=['GET'])
+def get_news_ripple(news_id):
+    """
+    "The Ripple" — returns the 3-tier propagation graph for a big news event.
+
+    Behaviour:
+      • Cached graph exists → return it instantly.
+      • Marked is_big_news but no JSON yet (background gen failed) →
+        regenerate inline as a single Gemini call.
+      • Not a big-news event → 404 (frontend should never link to it
+        because the news.has_ripple flag tells it whether to show the
+        "View Ripple" badge).
+
+    Response shape:
+      {
+        "news_id": 123,
+        "headline": "...",
+        "ripple_score": 92,
+        "summary": "1-sentence framing",
+        "tiers": [
+          {"tier": 1, "label": "Direct Impact", "nodes": [...]},
+          {"tier": 2, "label": "Second-Order (Supply Chain)", "nodes": [...]},
+          {"tier": 3, "label": "Macro Transmission", "nodes": [...]}
+        ],
+        "generated_at": "..."
+      }
+    """
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT n.id, n.headline, n.body, n.category,
+                   r.ripple_score, r.is_big_news, r.ripple_json, r.generated_at
+            FROM news n
+            LEFT JOIN news_ripple r ON r.news_id = n.id
+            WHERE n.id = ?
+            LIMIT 1
+        """, (news_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "News not found", "id": news_id}), 404
+
+        _, headline, body, _cat, ripple_score, is_big, ripple_json, generated_at = row
+
+        # If we have cached JSON, return it directly.
+        if ripple_json:
+            try:
+                graph = json.loads(ripple_json)
+            except Exception:
+                graph = None
+            if graph:
+                return jsonify({
+                    "news_id":      news_id,
+                    "headline":     headline,
+                    "ripple_score": ripple_score or 0,
+                    "summary":      graph.get("summary", ""),
+                    "tiers":        graph.get("tiers", []),
+                    "generated_at": str(generated_at) if generated_at else None,
+                    "cached":       True,
+                })
+
+        # No JSON yet — generate inline. (Only proceed if this was already
+        # tagged big-news, OR if the user explicitly forces regeneration.)
+        force = request.args.get('force', '').lower() in ('1', 'true', 'yes')
+        if not is_big and not force:
+            return jsonify({
+                "error": "This news event isn't tagged as big-enough for a ripple graph.",
+                "hint": "Pass ?force=1 to override (admin/debug).",
+            }), 404
+
+        available = _available_gemini_key_indices()
+        if not available:
+            return jsonify({
+                "error": "All AI keys on cooldown — try again in a few minutes.",
+            }), 503
+
+        graph = generate_ripple_graph(headline, body or '', '', [])
+        if not graph:
+            return jsonify({"error": "Ripple generation failed."}), 503
+
+        save_ripple_to_db(news_id, ripple_score or 75, True, graph)
+
+        return jsonify({
+            "news_id":      news_id,
+            "headline":     headline,
+            "ripple_score": ripple_score or 75,
+            "summary":      graph.get("summary", ""),
+            "tiers":        graph.get("tiers", []),
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "cached":       False,
+        })
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }), 500
+
+
 @app.route('/api/news/all', methods=['GET'])
 def get_all_news():
     """
@@ -4792,6 +5188,22 @@ def get_all_news():
         impacts_by_news_id = {}
         if news_ids:
             placeholders = ','.join(['?'] * len(news_ids))
+
+            # ── Bonus query 2b: ripple_score for cards that have one ──
+            # Tiny — only big-news rows exist here. Stitched onto news_items
+            # so the UI can render "⚡ Ripple · 92" on the badge.
+            try:
+                c.execute(
+                    f"SELECT news_id, ripple_score FROM news_ripple WHERE news_id IN ({placeholders})",
+                    tuple(news_ids)
+                )
+                _ripple_scores = {r[0]: r[1] for r in c.fetchall()}
+                for ni in news_items:
+                    if ni['id'] in _ripple_scores:
+                        ni['ripple_score'] = _ripple_scores[ni['id']]
+            except Exception:
+                pass
+
             c.execute(
                 f"SELECT * FROM stock_impact WHERE news_id IN ({placeholders})",
                 tuple(news_ids)
