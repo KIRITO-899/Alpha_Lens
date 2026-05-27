@@ -8894,6 +8894,199 @@ def backfill_pending_predictions():
                     "note": "Running in background. Poll GET /api/admin/backfill-pending-predictions (with token) or watch the pending count for progress."})
 
 
+@app.route('/api/admin/apply-claude-predictions', methods=['POST'])
+def apply_claude_predictions():
+    """
+    ONE-TIME, MANUAL. Accepts Claude-generated screener results for pending
+    news (the AI step that Gemini normally does — but Gemini's daily quota is
+    spent, so Claude did it instead) and runs the SAME ensemble the worker
+    uses: the rule models (historical / technical / sector / market) PLUS the
+    AI vote supplied by Claude, then the ATR gate + save/merge, and flips the
+    rows to 'screened'. Makes ZERO Gemini calls (the AI vote is injected via
+    force_precalculated, which short-circuits before any Gemini client call).
+
+    Win rate stays consistent: only the AI *provider* changed (Gemini→Claude);
+    the ensemble math, the 60/3 gate, ATR sizing, and save/merge are identical
+    to normally-generated signals. ADDITIVE ONLY — no existing code path or the
+    worker is touched.
+
+    Auth: X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>
+    Body: {
+      "results": [
+        {"news_id": 123, "headline": "...", "material": true,
+         "impacts": [{"ticker":"TCS.NS","direction":"BULLISH","confidence":82,
+                      "impact_type":"DIRECT","reason":"..."}]},
+        {"news_id": 124, "headline": "...", "material": false, "impacts": []}
+      ]
+    }
+    A result with material=false (or no valid impacts) is still flipped to
+    'screened' (analysed, no equity impact) — clearing its "AI Analysis
+    Pending" badge in the UI.
+    """
+    secret = os.environ.get("SQL_RUNNER_SECRET")
+    if not secret or request.headers.get("X-Alpha-Lens-Token") != secret:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    data = request.get_json(silent=True) or {}
+    results = data.get("results") or []
+    if not results:
+        return jsonify({"error": "no results provided"}), 400
+
+    ensemble = EnsemblePredictor()
+    market_regime = get_market_regime()
+    _require_atr = os.environ.get("REQUIRE_ATR", "1").lower() in ("1", "true", "yes")
+    summary = {"received": len(results), "screened": 0, "material": 0,
+               "signals_saved": 0, "errors": 0}
+    screened_ids = []
+    approved_signals = []
+
+    for res in results:
+        try:
+            nid = res.get("news_id")
+            if nid is None:
+                summary["errors"] += 1
+                continue
+            screened_ids.append(nid)
+            if not res.get("material"):
+                continue
+            headline = res.get("headline") or ""
+            impacts = res.get("impacts") or []
+            summary["material"] += 1
+            # Rank exactly like the Gemini screener does: dedupe by ticker,
+            # apply the impact-type confidence haircut, keep top 3.
+            ranked = {}
+            for imp in impacts:
+                tk = normalize_ticker(imp.get("ticker", ""))
+                dr = (imp.get("direction", "") or "").upper().strip()
+                if not (tk and dr in ("BULLISH", "BEARISH") and is_supported_equity_ticker(tk)):
+                    continue
+                try:
+                    cf = int(float(imp.get("confidence", 75)))
+                except Exception:
+                    cf = 75
+                it = str(imp.get("impact_type", "DIRECT")).upper()
+                if it == "SECOND_ORDER":
+                    cf = max(10, cf - 2)
+                elif it == "MACRO_TRANSMISSION":
+                    cf = max(10, cf - 3)
+                cf = max(10, min(99, cf))
+                cur = ranked.get(tk)
+                if not cur or cf > cur["quality_score"]:
+                    ranked[tk] = {"ticker": tk, "direction": dr, "quality_score": cf, "reason": imp.get("reason", "")}
+            top = sorted(ranked.values(), key=lambda x: x["quality_score"], reverse=True)[:3]
+            for r in top:
+                ticker = r["ticker"]; base_direction = r["direction"]
+                tech_data = get_stock_technical_context(ticker)
+                tech_context_str = json.dumps(tech_data) if tech_data else ""
+                _atr = float(tech_data['atr_pct']) if (tech_data and tech_data.get('atr_pct')) else 0.0
+                if _atr > 0:
+                    _stop = round(min(2.5, max(1.0, _atr * 1.0)), 2)
+                    _tgt = round(min(5.0, max(2.0, _atr * 2.0)), 2)
+                elif _require_atr:
+                    continue
+                else:
+                    _stop = TRADE_STOP_PCT; _tgt = TRADE_TARGET_PCT
+                try:
+                    _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
+                    _ltp = round(float(_ltp), 2) if (_ltp and _ltp > 0) else 0.0
+                    _prev = round(float(_prev), 2) if (_prev and _prev > 0) else 0.0
+                except Exception:
+                    _ltp = _prev = 0.0
+                base_price = _ltp if _ltp > 0 else _prev
+                current_price_now = base_price
+                _pub = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                # Claude's per-ticker confidence is injected as the ensemble's
+                # AI vote (m7) via force_precalculated — so NO Gemini call, but
+                # the rule models + gate run exactly as for a live signal.
+                result = ensemble.predict(
+                    headline=headline, ticker=ticker, direction=base_direction,
+                    tech_data=tech_data, market_regime=market_regime, db_connect_fn=connect_news_db,
+                    api_client=None, model_name=MODEL_NAME, min_score=MIN_CONFIDENCE,
+                    get_client_fn=None, precalculated_score=r["quality_score"],
+                    catalyst_type=None, news_age_hours=None, force_precalculated=True)
+                if not result['approved']:
+                    continue
+                view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
+                reason = (f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). "
+                          f"ATR stop: {_stop:.1f}% | target: {_tgt:.1f}%. Stock-pick quality: {r['quality_score']}/100. [Claude-analysed]")
+                approved_signals.append((nid, ticker, result['direction'], _tgt, view, reason,
+                                         base_price, current_price_now, result['final_score'],
+                                         tech_context_str, result['detail'], _pub))
+                RECENT_DIRECTIONS.append(result['direction'])
+        except Exception:
+            summary["errors"] += 1
+            continue
+
+    if approved_signals:
+        _sigs = approved_signals
+        def _insert_signals(conn, c, _s=_sigs):
+            for sig in _s:
+                news_id, ticker, impact, est_change, view_str, reason_str, bp, cp, conf, tech_ctx, ens_det, created_at_str = sig
+                c.execute("""SELECT id, confidence_score, reason, base_price, created_at, impact
+                             FROM stock_impact WHERE ticker = ? AND status = 'Active View'
+                             ORDER BY created_at DESC LIMIT 1""", (ticker,))
+                row = c.fetchone()
+                merged = False
+                if row:
+                    db_id, db_conf, db_reason, db_bp, db_created, db_impact = row
+                    try:
+                        new_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        new_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+                    try:
+                        db_dt = datetime.strptime(db_created, '%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        db_dt = new_dt
+                    if abs((new_dt - db_dt).total_seconds()) <= 86400:
+                        is_similar = False
+                        if db_bp == 0.0 or bp == 0.0:
+                            is_similar = True
+                        else:
+                            if abs(db_bp - bp) / db_bp <= 0.025:
+                                is_similar = True
+                        if is_similar:
+                            _prior_merges = (db_reason or "").count("[Consensus Boost")
+                            try:
+                                _boost_schedule = [int(x) for x in os.environ.get("MERGE_BOOST_SCHEDULE", "5,3,2,1").split(",")]
+                            except Exception:
+                                _boost_schedule = [5, 3, 2, 1]
+                            _this_boost = _boost_schedule[min(_prior_merges, len(_boost_schedule) - 1)]
+                            _raw_boosted = max(db_conf, conf) + _this_boost
+                            _merge_cap = int(os.environ.get("MERGE_CONF_CAP", "80"))
+                            _high_base = int(os.environ.get("MERGE_HIGH_BASE", "85"))
+                            if not ((db_conf >= _high_base) or (conf >= _high_base)):
+                                _raw_boosted = min(_raw_boosted, _merge_cap)
+                            boosted_conf = min(99, _raw_boosted)
+                            new_view = 'High Conviction' if boosted_conf >= 85 else 'Moderate Conviction'
+                            c.execute("SELECT headline FROM news WHERE id = ?", (news_id,))
+                            hl_row = c.fetchone()
+                            new_hl = hl_row[0] if hl_row else "Consensus News"
+                            if impact != db_impact:
+                                final_impact = impact if conf > db_conf else db_impact
+                                merged_reason = f"{db_reason} | [Consensus Boost ({impact}): '{new_hl}'] {reason_str}"
+                            else:
+                                final_impact = db_impact
+                                merged_reason = f"{db_reason} | [Consensus Boost: '{new_hl}'] {reason_str}"
+                            c.execute("""UPDATE stock_impact SET confidence_score = ?, view = ?, reason = ?, impact = ?
+                                         WHERE id = ?""", (boosted_conf, new_view, merged_reason, final_impact, db_id))
+                            merged = True
+                if not merged:
+                    c.execute('''INSERT OR IGNORE INTO stock_impact
+                        (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', sig)
+        db_write(_insert_signals)
+        summary["signals_saved"] = len(approved_signals)
+
+    if screened_ids:
+        def _mark(conn, c, _ids=screened_ids):
+            ph = ",".join(["?"] * len(_ids))
+            c.execute(f"UPDATE news SET ai_status='screened' WHERE id IN ({ph}) AND ai_status='pending'", tuple(_ids))
+        db_write(_mark)
+        summary["screened"] = len(screened_ids)
+
+    return jsonify({"status": "ok", "summary": summary})
+
+
 @app.route('/api/debug-sql-runner', methods=['POST'])
 def debug_sql_runner():
     # Bug #6 fix: do NOT compare against a hardcoded literal token.
