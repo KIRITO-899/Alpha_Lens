@@ -161,7 +161,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v2-2026-05-27-cal-fix">
+    <link rel="stylesheet" href="/styles.css?v=al-v2-2026-05-27-rm-splash">
 </head>
 
 <body class="antialiased">
@@ -198,36 +198,8 @@
     <!-- Hover-preview popover (UI-7) — repositioned on mouseenter of any .ticker-hover-target -->
     <div id="ticker-hover-card" aria-hidden="true"></div>
 
-    <!-- ============================================== -->
-    <!-- ELEGANT LOGO FADE OVERLAY                     -->
-    <!-- ============================================== -->
-    <div id="gsap-welcome"
-        class="fixed inset-0 z-[999] flex flex-col items-center justify-center pointer-events-none bg-[#080808]">
-        <div class="absolute inset-0 flex items-center justify-center">
-            <div id="welcome-glow"
-                class="w-[700px] h-[700px] rounded-full bg-violet-700/5 blur-[120px] mix-blend-screen opacity-0"></div>
-        </div>
-        <div id="welcome-logo-container"
-            class="relative z-10 flex items-center gap-6 md:gap-8 opacity-0 scale-110 blur-md">
-            <div class="relative flex items-center justify-center w-12 h-12 md:w-16 md:h-16">
-                <!-- Outer ring pulsing softly -->
-                <div id="welcome-orb-ring" class="absolute inset-0 rounded-full border border-violet-500/20 opacity-20">
-                </div>
-                <!-- Inner core -->
-                <div
-                    class="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gradient-to-tr from-violet-500 to-indigo-400 shadow-[0_0_50px_rgba(124,58,237,0.3)]">
-                </div>
-            </div>
-            <div class="text-5xl md:text-7xl font-display flex items-baseline">
-                <span
-                    class="font-black tracking-tighter bg-clip-text text-transparent bg-gradient-to-r from-violet-500 via-violet-400 to-indigo-300">ALPHA</span>
-                <span class="font-normal tracking-[0.2em] text-white ml-3">LENS</span>
-            </div>
-        </div>
-        <div id="welcome-subtitle" class="mt-8 overflow-hidden opacity-0">
-            <p class="text-slate-400 font-mono tracking-[0.5em] text-xs uppercase">Initializing desk environment</p>
-        </div>
-    </div>
+    <!-- (Removed the "INITIALIZING DESK ENVIRONMENT" #gsap-welcome splash —
+         the cinematic #onboarding-overlay letter-reveal is the only intro now.) -->
 
     <!-- SIGNAL TOAST CONTAINER -->
     <div id="signal-toast-container"></div>
@@ -1113,7 +1085,7 @@
     <!-- Extracted to app.js. `defer` keeps end-of-body execution timing.
          Version query mirrors sw.js CACHE_VERSION so browsers HTTP-cache only
          within a single deploy and fetch fresh on every version bump. -->
-    <script src="/app.js?v=al-v2-2026-05-27-cal-fix" defer></script>
+    <script src="/app.js?v=al-v2-2026-05-27-rm-splash" defer></script>
 </body>
 
 </html>

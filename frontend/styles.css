@@ -1290,7 +1290,6 @@ body {
     color: var(--accent-bright) !important;
     box-shadow: 0 0 12px var(--accent-glow) !important;
 }
-#gsap-welcome{background:var(--bg-base)!important}
 
 /* ── PREMIUM NEWS CARDS ── */
 .news-card-hover {

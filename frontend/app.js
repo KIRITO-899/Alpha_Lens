@@ -1569,32 +1569,10 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             });
         }
 
-        function playInitialWelcome() {
-            gsap.set(".glass-panel", { y: 20, opacity: 0 });
-            gsap.set("nav", { y: -20, opacity: 0 });
-
-            const tl = gsap.timeline();
-
-            // Elegantly unblur and scale down the logo perfectly
-            tl.to("#welcome-logo-container", { opacity: 1, scale: 1, filter: "blur(0px)", duration: 2.5, ease: "power2.out" })
-                // Fade in the soft background glow
-                .to("#welcome-glow", { opacity: 1, duration: 2 }, "-=2")
-                // Let the orb ring pulse
-                .to("#welcome-orb-ring", { scale: 1.5, opacity: 0, duration: 2, repeat: -1, ease: "power1.out" }, "-=2")
-                // Fade in subtitle
-                .to("#welcome-subtitle", { opacity: 1, y: -5, duration: 1.5, ease: "power2.out" }, "-=1.0")
-
-                // Hold for a moment to let the user admire the logo
-                .to({}, { duration: 1.0 })
-
-                // Very slow, dreamy fade out of the entire overlay
-                .to("#gsap-welcome", { opacity: 0, duration: 1.5, ease: "power2.inOut" })
-                .set("#gsap-welcome", { display: "none" })
-
-                // Dashboard fades in smoothly without sudden jerky staggers
-                .to("nav", { y: 0, opacity: 1, duration: 1.5, ease: "power3.out" }, "-=1.0")
-                .to(".glass-panel", { y: 0, opacity: 1, duration: 1.2, stagger: 0.1, ease: "power3.out" }, "-=1.2");
-        }
+        // playInitialWelcome() removed — the "INITIALIZING DESK ENVIRONMENT"
+        // (#gsap-welcome) splash is gone. The cinematic #onboarding-overlay
+        // letter-reveal is the only intro now, and the dashboard is visible
+        // at its natural opacity underneath it (no gsap hide/reveal needed).
 
         async function fetchIndices() {
             try {
@@ -1703,7 +1681,6 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
 
         window.onload = () => {
             maybeShowOnboarding();          // #3 cinematic onboarding (first session per tab)
-            playInitialWelcome();
             checkAuthStatus();
             startSmartPolling();
             renderWatchlistPanel();
