@@ -8733,12 +8733,16 @@ Return ONLY valid JSON matching this shape:
                 _ctx = art.get("deep_context") or art.get("summary") or ""
                 if _ctx:
                     _ai_input = f"{art['headline']}\nContext: {_ctx}"
+                # force_precalculated=True: the ensemble's AI model reuses the
+                # screener's quality_score instead of a fresh per-ticker Gemini
+                # call, so the whole backfill costs ~1 Gemini call per batch
+                # (the screener) instead of ~10. Stretches scarce quota ~10x.
                 result = ensemble.predict(
                     headline=_ai_input, ticker=ticker, direction=base_direction,
                     tech_data=tech_data, market_regime=market_regime, db_connect_fn=connect_news_db,
                     api_client=client, model_name=MODEL_NAME, min_score=MIN_CONFIDENCE,
                     get_client_fn=get_and_rotate_client, precalculated_score=r.get("quality_score"),
-                    catalyst_type=_catalyst, news_age_hours=None)
+                    catalyst_type=_catalyst, news_age_hours=None, force_precalculated=True)
                 if not result['approved']:
                     continue
                 view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'

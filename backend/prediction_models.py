@@ -509,7 +509,7 @@ class AILogicModel:
                 pass
         return cls._sm_client
 
-    def score(self, headline, ticker, direction, tech_data, api_client, model_name, market_regime='NEUTRAL', get_client_fn=None, precalculated_score=None, catalyst_type=None, news_age_hours=None):
+    def score(self, headline, ticker, direction, tech_data, api_client, model_name, market_regime='NEUTRAL', get_client_fn=None, precalculated_score=None, catalyst_type=None, news_age_hours=None, force_precalculated=False):
         import re, json as _json
         # ── Synthesis short-circuit (intentionally DISABLED by default) ──
         # Was unconditional: the screener's quality_score was echoed back here
@@ -517,9 +517,14 @@ class AILogicModel:
         # ensemble — was just rubber-stamping materiality. Live data showed
         # 90+ confidence trades performing WORSE than 60-69 because materiality
         # ≠ tradeability.
-        # Set USE_PRECALCULATED_AI_SCORE=1 to revert (e.g. during a Gemini
-        # quota crunch where we'd rather take cheap echoes than no signal).
-        if precalculated_score is not None and os.environ.get("USE_PRECALCULATED_AI_SCORE", "0").lower() in ("1", "true", "yes"):
+        # Set USE_PRECALCULATED_AI_SCORE=1 to revert globally (e.g. during a
+        # Gemini quota crunch where we'd rather take cheap echoes than no
+        # signal). `force_precalculated=True` is a per-call override used by the
+        # one-time backlog backfill so it spends ~1 Gemini call per BATCH (the
+        # screener) instead of one per ticker here — the live worker never
+        # passes it, so its fresh per-ticker AI vote is unchanged.
+        _use_precalc = force_precalculated or os.environ.get("USE_PRECALCULATED_AI_SCORE", "0").lower() in ("1", "true", "yes")
+        if precalculated_score is not None and _use_precalc:
             try:
                 parsed_val = int(float(precalculated_score))
                 clamped_val = max(10, min(95, parsed_val))
@@ -753,7 +758,7 @@ class EnsemblePredictor:
     def predict(self, headline, ticker, direction, tech_data, market_regime,
                 db_connect_fn, api_client=None, model_name=None, min_score=50,
                 get_client_fn=None, precalculated_score=None,
-                catalyst_type=None, news_age_hours=None):
+                catalyst_type=None, news_age_hours=None, force_precalculated=False):
         s2 = self.m2.score(headline, ticker, direction, db_connect_fn)
         s3 = self.m3.score(tech_data, direction)
         s4 = self.m4.score(ticker, direction, market_regime)
@@ -764,7 +769,8 @@ class EnsemblePredictor:
                            market_regime=market_regime, get_client_fn=get_client_fn,
                            precalculated_score=precalculated_score,
                            catalyst_type=catalyst_type,
-                           news_age_hours=news_age_hours)
+                           news_age_hours=news_age_hours,
+                           force_precalculated=force_precalculated)
 
         w_hist = self.WEIGHTS['historical']
         w_tech = self.WEIGHTS['technical']
