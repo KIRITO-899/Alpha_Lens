@@ -8522,6 +8522,361 @@ def debug_gemini_keys():
     })
 
 
+# ── ONE-TIME pending-backlog backfill state ──
+# Progress is tracked in-process so the slow work can run in a daemon thread
+# (it can take minutes under Gemini quota pressure) while the HTTP request
+# returns immediately — otherwise Render/Cloudflare's ~60s gateway would kill
+# a synchronous call. GET the endpoint (with token) to read this.
+_BACKFILL_STATE = {"running": False, "started_at": None, "finished_at": None,
+                   "limit": None, "summary": None}
+
+
+def _run_backfill_pending(limit):
+    """
+    The actual one-time backlog backfill. Runs the SAME prediction pipeline
+    ai_news_worker uses — Gemini screener -> EnsemblePredictor -> ATR gate ->
+    save/merge — over news rows still at ai_status='pending', then flips them
+    to 'screened'. Mirrors the worker's screener prompt + ensemble + ATR +
+    save/merge verbatim so predictions (and win rate) stay consistent. SKIPS
+    the ripple-graph and WhatsApp side effects on purpose (no point firing
+    hundreds of alerts / extra Gemini calls for old news).
+
+    Runs inside a daemon thread (see route below). Returns a summary dict.
+    Batches with no usable key are left 'pending' (quota_skipped) for re-run.
+    """
+    try:
+        _c = connect_news_db(); _cur = _c.cursor()
+        _cur.execute("""SELECT id, headline, news_time, body FROM news
+                        WHERE ai_status = 'pending'
+                        ORDER BY created_at DESC LIMIT ?""", (limit,))
+        rows = _cur.fetchall(); _c.close()
+    except Exception as e:
+        return {"error": f"pending fetch failed: {e}"}
+
+    if not rows:
+        return {"status": "done", "processed": 0, "message": "No pending articles."}
+
+    articles = [{"headline": h, "time": (t or ""), "url": None,
+                 "summary": (b or ""), "deep_context": (b or ""), "_nid": nid}
+                for (nid, h, t, b) in rows]
+
+    ensemble = EnsemblePredictor()
+    market_regime = get_market_regime()
+    _ctx_chars = int(os.environ.get("SCRAPER_CONTEXT_CHARS", "200"))
+    BATCH_SIZE = int(os.environ.get("SCRAPER_BATCH_SIZE", "8"))
+    _require_atr = os.environ.get("REQUIRE_ATR", "1").lower() in ("1", "true", "yes")
+
+    summary = {"pending_pulled": len(articles), "screened": 0,
+               "material_articles": 0, "signals_saved": 0, "quota_skipped": 0}
+    screened_ids = []
+
+    import random as _rnd
+    import concurrent.futures as _cf2
+    import time as _time
+
+    for _bi in range(0, len(articles), BATCH_SIZE):
+        batch = articles[_bi:_bi + BATCH_SIZE]
+        avail = _available_gemini_key_indices()
+        if not avail:
+            summary["quota_skipped"] += len(batch)
+            continue
+        try_order = list(avail); _rnd.shuffle(try_order)
+
+        numbered = "\n".join(
+            f"{i+1}. Headline: {a['headline']}\n   Context: {(a.get('deep_context') or a.get('summary') or 'Not available')[:_ctx_chars]}"
+            for i, a in enumerate(batch))
+        schema_example = json.dumps([
+            {"index": 1, "material": True, "catalyst_type": "EARNINGS_BEAT", "materiality_score": 87,
+             "impacts": [{"ticker": "TCS.NS", "direction": "BULLISH", "confidence": 88, "impact_type": "DIRECT",
+                          "reason": "Q4 PAT beat consensus and deal pipeline improved; similar beats can drive a 3-7% move in 1-5 sessions."}]},
+            {"index": 2, "material": False, "catalyst_type": "NOISE", "materiality_score": 12, "impacts": []}
+        ], indent=2)
+        # NOTE: prompt copied verbatim from quant_ai_screener (the active one
+        # at ~line 3766). Keep these in sync if the worker prompt ever changes.
+        prompt = f"""You are the Chief Investment Strategist at India's top macro hedge fund, managing ₹50,000 Cr AUM. You are NOT a keyword matcher — you are a MACRO STRATEGIST who sees connections that retail traders completely miss.
+
+Your EDGE: You analyze news through HIDDEN SUPPLY CHAINS, GEOPOLITICAL TRANSMISSION, and SECOND/THIRD-ORDER EFFECTS. When retail traders read "Japan restricts semiconductor exports" they see nothing. YOU see: chip shortage → auto production cuts → MARUTI.NS/TMPV.NS BEARISH, IT hardware delays → INFY.NS BEARISH, but chip design outsourcing opportunity → TATAELXSI.NS BULLISH.
+
+Analyze exactly {len(batch)} news items. For EVERY article, think through these HIDDEN CHAINS:
+
+LAYER 1 — OBVIOUS (what retail sees): Which company is directly named?
+LAYER 2 — SUPPLY CHAIN (what smart money sees): Who supplies to or buys from the affected company? Who competes? What raw materials flow into their products?
+  Examples: Steel price surge → input cost for MARUTI (BEARISH), revenue for TATASTEEL (BULLISH)
+           China slowdown → metal demand drop → HINDALCO/JSWSTEEL BEARISH
+           US visa restrictions → onsite revenue pressure → INFY/TCS BEARISH
+LAYER 3 — MACRO TRANSMISSION (what only PMs see): How does this ripple through the Indian economy?
+  Examples: Japan chip export ban → global auto production cut → Indian auto parts exporters BEARISH → BUT import substitution plays BULLISH
+           Middle East conflict → crude spike → OMC margin compression BEARISH → but ONGC windfall BULLISH → RBI inflation worry → rate hike fear → real estate BEARISH
+           US Fed pause → dollar weakening → rupee strengthens → IT exporters BEARISH → FII inflows → banking BULLISH
+LAYER 4 — FLOW POSITIONING: Will FIIs/DIIs be forced to rebalance? Will index weights shift? Will options market reprice?
+
+CRITICAL RULES FOR HIDDEN CHAINS:
+✅ ALWAYS map global commodity news to Indian users/producers (crude→airlines/OMCs/paint, steel→auto/infra, copper→power)
+✅ ALWAYS map geopolitical tension to Indian supply chain dependencies (China/Taiwan/Japan → IT/auto/electronics/pharma APIs)
+✅ ALWAYS map central bank decisions (Fed/ECB/BOJ/RBI) to FII flow impact on Indian equities
+✅ ALWAYS map currency moves to export/import-heavy sectors
+✅ MAP government policy/regulation to specific sector P&L impact (PLI, tariffs, subsidies, environmental norms)
+✅ MAP monsoon/weather to agri-dependent sectors (FMCG, fertilizers, rural consumption)
+
+REJECT zero-signal noise:
+- Generic "Nifty may rise/fall" commentary without a causal mechanism
+- Analyst target reiterations without NEW catalyst
+- Technical chart analysis, "stocks to watch" listicles
+- Repeat coverage of events already priced in
+- Weak sector sympathy without a clear P&L transmission path
+
+Rules:
+- Return a complete JSON array with one object for every input index
+- For no stock impact: set material=false, impacts=[]
+- For material articles: return 1-3 HIGHEST-CONVICTION stocks with DEEP reasoning
+- reason MUST explain the HIDDEN CHAIN (e.g., "Japan chip curbs → auto production delays → Maruti depends on Denso/Aisin for ECUs → 15% of components are chip-dependent → production cut risk")
+- Use exact NSE ticker.NS format. Do NOT invent tickers.
+- confidence and materiality_score: 0-100
+
+News items to analyze:
+{numbered}
+
+Return ONLY valid JSON matching this shape:
+{schema_example}"""
+
+        resp = None
+        for _key_idx in try_order:
+            _ai_client = genai.Client(api_key=API_KEYS[_key_idx])
+            try:
+                _tex = _cf2.ThreadPoolExecutor(max_workers=1)
+                try:
+                    _fut = _tex.submit(lambda _cl=_ai_client, _p=prompt: _cl.models.generate_content(
+                        model=MODEL_NAME, contents=_p,
+                        config=types.GenerateContentConfig(response_mime_type="application/json")))
+                    resp = _fut.result(timeout=60)
+                finally:
+                    _tex.shutdown(wait=False, cancel_futures=True)
+                _set_active_gemini_client(_key_idx)
+                _reset_gemini_key_strikes(_key_idx)
+                break
+            except Exception as _e:
+                if _is_gemini_quota_error(_e):
+                    _mark_gemini_key_quota_hit(_key_idx); _time.sleep(1); continue
+                if _is_gemini_transient_error(_e):
+                    _mark_gemini_key_quota_hit(_key_idx, cooldown_secs=_GEMINI_TRANSIENT_COOLDOWN_SECS); _time.sleep(1); continue
+                _mark_gemini_key_quota_hit(_key_idx, cooldown_secs=30); _time.sleep(1); continue
+        if resp is None:
+            summary["quota_skipped"] += len(batch); continue
+
+        parsed = extract_json_from_text(resp.text)
+        if isinstance(parsed, dict):
+            for v in parsed.values():
+                if isinstance(v, list):
+                    parsed = v; break
+        if not isinstance(parsed, list):
+            summary["quota_skipped"] += len(batch); continue
+
+        approved_signals = []
+        for item in parsed:
+            try:
+                idx = int(item.get("index", 0)) - 1
+            except Exception:
+                continue
+            if not (0 <= idx < len(batch)):
+                continue
+            art = batch[idx]
+            if not item.get("material", False):
+                continue
+            cand = []
+            for impact in item.get("impacts", []):
+                tk = normalize_ticker(impact.get("ticker", ""))
+                dr = (impact.get("direction", "") or "").upper().strip()
+                if tk and dr in ("BULLISH", "BEARISH") and is_supported_equity_ticker(tk):
+                    try:
+                        cf = int(float(impact.get("confidence", item.get("materiality_score", 75))))
+                    except Exception:
+                        cf = 75
+                    it = str(impact.get("impact_type", "DIRECT")).upper()
+                    if it == "SECOND_ORDER":
+                        cf = max(10, cf - 2)
+                    elif it == "MACRO_TRANSMISSION":
+                        cf = max(10, cf - 3)
+                    cand.append({"ticker": tk, "direction": dr, "confidence": cf, "reason": impact.get("reason", "")})
+            ranked = {}
+            for ci in cand:
+                q = max(10, min(99, int(float(ci.get("confidence", 70)))))
+                cur = ranked.get(ci["ticker"])
+                if not cur or q > cur["quality_score"]:
+                    ranked[ci["ticker"]] = {"ticker": ci["ticker"], "direction": ci["direction"], "quality_score": q, "reason": ci.get("reason", "")}
+            top = sorted(ranked.values(), key=lambda x: x["quality_score"], reverse=True)[:3]
+            if not top:
+                continue
+            _catalyst = (item.get("catalyst_type") or "").upper().replace(" ", "_")
+            summary["material_articles"] += 1
+            for r in top:
+                ticker = r["ticker"]; base_direction = r["direction"]
+                tech_data = get_stock_technical_context(ticker)
+                tech_context_str = json.dumps(tech_data) if tech_data else ""
+                _atr = float(tech_data['atr_pct']) if (tech_data and tech_data.get('atr_pct')) else 0.0
+                if _atr > 0:
+                    _stop = round(min(2.5, max(1.0, _atr * 1.0)), 2)
+                    _tgt = round(min(5.0, max(2.0, _atr * 2.0)), 2)
+                elif _require_atr:
+                    continue
+                else:
+                    _stop = TRADE_STOP_PCT; _tgt = TRADE_TARGET_PCT
+                try:
+                    _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
+                    _ltp = round(float(_ltp), 2) if (_ltp and _ltp > 0) else 0.0
+                    _prev = round(float(_prev), 2) if (_prev and _prev > 0) else 0.0
+                except Exception:
+                    _ltp = _prev = 0.0
+                base_price = _ltp if _ltp > 0 else _prev
+                current_price_now = base_price
+                _pub = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                _ai_input = art["headline"]
+                _ctx = art.get("deep_context") or art.get("summary") or ""
+                if _ctx:
+                    _ai_input = f"{art['headline']}\nContext: {_ctx}"
+                result = ensemble.predict(
+                    headline=_ai_input, ticker=ticker, direction=base_direction,
+                    tech_data=tech_data, market_regime=market_regime, db_connect_fn=connect_news_db,
+                    api_client=client, model_name=MODEL_NAME, min_score=MIN_CONFIDENCE,
+                    get_client_fn=get_and_rotate_client, precalculated_score=r.get("quality_score"),
+                    catalyst_type=_catalyst, news_age_hours=None)
+                if not result['approved']:
+                    continue
+                view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
+                quality = r.get("quality_score")
+                qnote = f" Stock-pick quality: {quality}/100." if quality else ""
+                reason = (f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). "
+                          f"ATR stop: {_stop:.1f}% | target: {_tgt:.1f}%.{qnote}")
+                approved_signals.append((art["_nid"], ticker, result['direction'], _tgt, view, reason,
+                                         base_price, current_price_now, result['final_score'],
+                                         tech_context_str, result['detail'], _pub))
+                RECENT_DIRECTIONS.append(result['direction'])
+
+        if approved_signals:
+            _sigs = approved_signals
+            def _insert_signals(conn, c, _s=_sigs):
+                for sig in _s:
+                    news_id, ticker, impact, est_change, view_str, reason_str, bp, cp, conf, tech_ctx, ens_det, created_at_str = sig
+                    c.execute("""SELECT id, confidence_score, reason, base_price, created_at, impact
+                                 FROM stock_impact WHERE ticker = ? AND status = 'Active View'
+                                 ORDER BY created_at DESC LIMIT 1""", (ticker,))
+                    row = c.fetchone()
+                    merged = False
+                    if row:
+                        db_id, db_conf, db_reason, db_bp, db_created, db_impact = row
+                        try:
+                            new_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S')
+                        except Exception:
+                            new_dt = datetime.now(timezone.utc).replace(tzinfo=None)
+                        try:
+                            db_dt = datetime.strptime(db_created, '%Y-%m-%d %H:%M:%S')
+                        except Exception:
+                            db_dt = new_dt
+                        if abs((new_dt - db_dt).total_seconds()) <= 86400:
+                            is_similar = False
+                            if db_bp == 0.0 or bp == 0.0:
+                                is_similar = True
+                            else:
+                                if abs(db_bp - bp) / db_bp <= 0.025:
+                                    is_similar = True
+                            if is_similar:
+                                _prior_merges = (db_reason or "").count("[Consensus Boost")
+                                try:
+                                    _boost_schedule = [int(x) for x in os.environ.get("MERGE_BOOST_SCHEDULE", "5,3,2,1").split(",")]
+                                except Exception:
+                                    _boost_schedule = [5, 3, 2, 1]
+                                _this_boost = _boost_schedule[min(_prior_merges, len(_boost_schedule) - 1)]
+                                _raw_boosted = max(db_conf, conf) + _this_boost
+                                _merge_cap = int(os.environ.get("MERGE_CONF_CAP", "80"))
+                                _high_base = int(os.environ.get("MERGE_HIGH_BASE", "85"))
+                                if not ((db_conf >= _high_base) or (conf >= _high_base)):
+                                    _raw_boosted = min(_raw_boosted, _merge_cap)
+                                boosted_conf = min(99, _raw_boosted)
+                                new_view = 'High Conviction' if boosted_conf >= 85 else 'Moderate Conviction'
+                                c.execute("SELECT headline FROM news WHERE id = ?", (news_id,))
+                                hl_row = c.fetchone()
+                                new_hl = hl_row[0] if hl_row else "Consensus News"
+                                if impact != db_impact:
+                                    final_impact = impact if conf > db_conf else db_impact
+                                    merged_reason = f"{db_reason} | [Consensus Boost ({impact}): '{new_hl}'] {reason_str}"
+                                else:
+                                    final_impact = db_impact
+                                    merged_reason = f"{db_reason} | [Consensus Boost: '{new_hl}'] {reason_str}"
+                                c.execute("""UPDATE stock_impact SET confidence_score = ?, view = ?, reason = ?, impact = ?
+                                             WHERE id = ?""", (boosted_conf, new_view, merged_reason, final_impact, db_id))
+                                merged = True
+                    if not merged:
+                        c.execute('''INSERT OR IGNORE INTO stock_impact
+                            (news_id, ticker, impact, estimated_change_percent, view, reason, base_price, current_price, confidence_score, technical_context, ensemble_detail, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', sig)
+            db_write(_insert_signals)
+            summary["signals_saved"] += len(approved_signals)
+
+        # Every article in a successfully-screened batch (material or not) is
+        # marked screened — same semantics as the worker's rescreen completion.
+        screened_ids.extend([a["_nid"] for a in batch])
+
+    if screened_ids:
+        def _mark(conn, c, _ids=screened_ids):
+            ph = ",".join(["?"] * len(_ids))
+            c.execute(f"UPDATE news SET ai_status='screened' WHERE id IN ({ph}) AND ai_status='pending'", tuple(_ids))
+        db_write(_mark)
+        summary["screened"] = len(screened_ids)
+
+    return {"status": "ok", "summary": summary}
+
+
+@app.route('/api/admin/backfill-pending-predictions', methods=['POST', 'GET'])
+def backfill_pending_predictions():
+    """
+    ONE-TIME, MANUAL backlog backfill (NOT automated, NOT wired into any
+    worker). POST starts a background pass over ai_status='pending' news,
+    runs the faithful prediction pipeline (see _run_backfill_pending), and
+    flips processed rows to 'screened'. ADDITIVE ONLY — the worker and every
+    existing code path are untouched, so fresh news keeps working identically.
+
+    Auth:  X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>
+    POST body: { "limit": <int> }  newest-N pending to process (default 5).
+               Run a small N first, inspect, then raise it to drain all 420.
+    GET: returns current/last run progress (poll this instead of waiting on
+         the POST, which returns immediately).
+
+    The work runs in a daemon thread because under Gemini quota pressure it
+    can take minutes — a synchronous response would exceed the gateway timeout.
+    """
+    secret = os.environ.get("SQL_RUNNER_SECRET")
+    if not secret or request.headers.get("X-Alpha-Lens-Token") != secret:
+        return jsonify({"error": "Unauthorized"}), 401
+
+    if request.method == 'GET':
+        return jsonify(_BACKFILL_STATE)
+
+    if _BACKFILL_STATE.get("running"):
+        return jsonify({"status": "already_running", "state": _BACKFILL_STATE}), 409
+
+    data = request.get_json(silent=True) or {}
+    try:
+        limit = max(1, min(2000, int(data.get("limit", 5))))
+    except Exception:
+        limit = 5
+
+    def _job(_limit=limit):
+        _BACKFILL_STATE.update({"running": True,
+                                "started_at": datetime.now(timezone.utc).isoformat(),
+                                "finished_at": None, "limit": _limit, "summary": None})
+        try:
+            _BACKFILL_STATE["summary"] = _run_backfill_pending(_limit)
+        except Exception as _e:
+            import traceback
+            _BACKFILL_STATE["summary"] = {"error": str(_e), "traceback": traceback.format_exc()[:2000]}
+        finally:
+            _BACKFILL_STATE["running"] = False
+            _BACKFILL_STATE["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+    threading.Thread(target=_job, daemon=True, name="BackfillPending").start()
+    return jsonify({"status": "started", "limit": limit,
+                    "note": "Running in background. Poll GET /api/admin/backfill-pending-predictions (with token) or watch the pending count for progress."})
+
+
 @app.route('/api/debug-sql-runner', methods=['POST'])
 def debug_sql_runner():
     # Bug #6 fix: do NOT compare against a hardcoded literal token.
