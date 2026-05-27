@@ -8936,7 +8936,9 @@ def apply_claude_predictions():
     market_regime = get_market_regime()
     _require_atr = os.environ.get("REQUIRE_ATR", "1").lower() in ("1", "true", "yes")
     summary = {"received": len(results), "screened": 0, "material": 0,
-               "signals_saved": 0, "errors": 0}
+               "signals_saved": 0, "errors": 0,
+               "atr_skipped": 0, "ensemble_rejected": 0, "evaluated": 0,
+               "sample_detail": None}
     screened_ids = []
     approved_signals = []
 
@@ -8983,6 +8985,7 @@ def apply_claude_predictions():
                     _stop = round(min(2.5, max(1.0, _atr * 1.0)), 2)
                     _tgt = round(min(5.0, max(2.0, _atr * 2.0)), 2)
                 elif _require_atr:
+                    summary["atr_skipped"] += 1
                     continue
                 else:
                     _stop = TRADE_STOP_PCT; _tgt = TRADE_TARGET_PCT
@@ -9004,7 +9007,11 @@ def apply_claude_predictions():
                     api_client=None, model_name=MODEL_NAME, min_score=MIN_CONFIDENCE,
                     get_client_fn=None, precalculated_score=r["quality_score"],
                     catalyst_type=None, news_age_hours=None, force_precalculated=True)
+                summary["evaluated"] += 1
+                if summary["sample_detail"] is None:
+                    summary["sample_detail"] = f"{ticker}: {result.get('detail')} approved={result.get('approved')}"
                 if not result['approved']:
+                    summary["ensemble_rejected"] += 1
                     continue
                 view = 'High Conviction' if result['final_score'] >= 85 else 'Moderate Conviction'
                 reason = (f"Ensemble Score: {result['final_score']} ({result['models_agreeing']}/5 models approve). "
