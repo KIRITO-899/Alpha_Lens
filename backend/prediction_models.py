@@ -792,14 +792,13 @@ class EnsemblePredictor:
         else:
             s7_val = s7
             valid_models.append(s7)
-            # 5 models available. Relaxed to 2/5 (from 4/5 → 3/5 → 2/5) to lift
-            # approved-signal volume in a weak market where the technical/market
-            # models score bullish calls low. Combined with MIN_CONFIDENCE=50
-            # and the agree-threshold dropped to >50, the gate is now "final
-            # score >= 50 AND >= 2 of 5 models agree AND no technical veto".
-            # This deliberately trades some precision for volume — env-tunable
-            # back up (ENSEMBLE_MIN_AGREE) when conditions normalise.
-            min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "2"))
+            # 5 models available. Back to 3/5 (after a temporary 2/5 to drain
+            # the backlog in a weak tape) for better precision now that the
+            # queue is cleared. Combined with MIN_CONFIDENCE=50 and the
+            # agree-threshold at >50, the gate is "final score >= 50 AND >= 3
+            # of 5 models agree AND no technical veto" — keeps only the
+            # multi-model-confirmed calls. Env-tunable via ENSEMBLE_MIN_AGREE.
+            min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "3"))
 
             final = int(
                 s2 * w_hist +

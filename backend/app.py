@@ -3454,7 +3454,7 @@ def _get_yahoo_official_close(ticker):
 
 def ai_news_worker():
     print("[SYSTEM] Alpha Lens v6.0 AI ENSEMBLE Engine Started!")
-    _min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "2"))
+    _min_agree = int(os.environ.get("ENSEMBLE_MIN_AGREE", "3"))
     print(f"   Pipeline: RSS -> AI Gatekeeper (Gemini) -> Duplicate Filter -> 5-Model Ensemble (>= {MIN_CONFIDENCE} score & {_min_agree}/5 vote, no technical-model veto)")
     print(f"   Background: Batch Gemini for Aam Janta explanations only")
     print(f"   Settings: Min Confidence={MIN_CONFIDENCE} | R:R = {TRADE_STOP_PCT}% stop : {TRADE_TARGET_PCT}% target")
