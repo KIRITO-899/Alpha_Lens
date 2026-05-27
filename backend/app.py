@@ -4436,7 +4436,19 @@ Return ONLY valid JSON matching this shape:
             except Exception:
                 _news_age_h = None
 
-            # Predict using Ensemble
+            # Predict using Ensemble.
+            # ── Adaptive quota saver ──
+            # The ensemble's AI model normally makes a fresh per-ticker Gemini
+            # call (best quality). But that's ~1 call per stock — under a quota
+            # crunch it drains the daily free-tier budget mid-day and then NO
+            # signals get produced at all. So when usable keys are scarce we
+            # switch that AI vote to the screener's already-computed score (0
+            # extra calls), so predictions keep flowing on the quota that's
+            # left. When keys are plentiful we use the fresh vote as before, so
+            # there's no quality hit in the normal case. Threshold env-tunable;
+            # set AI_SCARCE_KEY_THRESHOLD=0 to always use the fresh vote.
+            _scarce_thr = int(os.environ.get("AI_SCARCE_KEY_THRESHOLD", "4"))
+            _keys_scarce = len(_available_gemini_key_indices()) < _scarce_thr
             result = ensemble.predict(
                 headline=ai_input,
                 ticker=ticker,
@@ -4451,6 +4463,7 @@ Return ONLY valid JSON matching this shape:
                 precalculated_score=signal.get("quality_score"),
                 catalyst_type=_signal_catalyst,
                 news_age_hours=_news_age_h,
+                force_precalculated=_keys_scarce,
             )
 
             if result['approved']:
