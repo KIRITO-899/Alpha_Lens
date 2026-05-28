@@ -336,6 +336,24 @@
         // zero meaning when the user has toggled off the stock-mode UI.
         const STOCK_NAV_IDS = ['nav-portfolio', 'nav-stocks', 'nav-terminal'];
 
+        function updateAppHeaderOffset() {
+            const headerEls = [
+                document.getElementById('premium-ticker-bar'),
+                document.querySelector('nav.glass-panel')
+            ];
+            const bottom = headerEls.reduce((max, el) => {
+                if (!el) return max;
+                const style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden') return max;
+                const rect = el.getBoundingClientRect();
+                if (rect.width <= 0 || rect.height <= 0 || rect.bottom <= 0) return max;
+                return Math.max(max, Math.min(window.innerHeight, rect.bottom));
+            }, 0);
+            if (bottom > 0) {
+                document.documentElement.style.setProperty('--app-header-offset', `${Math.ceil(bottom)}px`);
+            }
+        }
+
         function switchTab(targetTabId) {
             tabs.forEach(id => {
                 const view = document.getElementById(`view-${id}`);
@@ -361,6 +379,7 @@
             if (targetTabId === 'terminal') fetchTerminalData();
             if (targetTabId === 'stocks') fetchBacktestStats();
             if (targetTabId === 'macro-pulse') fetchMacroPulse();
+            updateAppHeaderOffset();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
@@ -3389,10 +3408,12 @@ function openCalendarEvent(eventId) {
     const modal = document.getElementById('cal-event-modal');
     const body  = document.getElementById('cal-event-body');
     if (!modal || !body) return;
+    updateAppHeaderOffset();
     const shell = modal.querySelector('.cal-event-shell');
     if (shell) shell.scrollTop = 0;
     body.innerHTML = '<div class="text-slate-400 p-8 text-center text-sm">Loading event details…</div>';
     modal.classList.remove('hidden');
+    requestAnimationFrame(updateAppHeaderOffset);
     fetch(`/api/calendar/${eventId}`)
         .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
         .then(ev => {
@@ -3582,6 +3603,11 @@ document.addEventListener('click', (e) => {
     if (e.target.closest('[data-close-cal]')) closeCalendarEvent();
 });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeCalendarEvent(); });
+window.addEventListener('resize', updateAppHeaderOffset);
+window.addEventListener('scroll', () => {
+    const modal = document.getElementById('cal-event-modal');
+    if (modal && !modal.classList.contains('hidden')) updateAppHeaderOffset();
+}, { passive: true });
 
 window.openCalendarEvent = openCalendarEvent;
 window.closeCalendarEvent = closeCalendarEvent;
