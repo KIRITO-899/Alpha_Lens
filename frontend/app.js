@@ -296,7 +296,7 @@
                 }
                 // If user is on a hidden tab, redirect to top-news
                 // (terminal is stock-only — signals are by definition ticker-based)
-                const hiddenTabs = ['portfolio', 'stocks', 'terminal'];
+                const hiddenTabs = ['macro-pulse', 'calendar', 'portfolio', 'stocks', 'terminal'];
                 const activeView = hiddenTabs.find(t => !document.getElementById(`view-${t}`).classList.contains('hidden'));
                 if (activeView) switchTab('top-news');
 
@@ -334,7 +334,7 @@
         // Nav links that must stay hidden in non-stock mode
         // Terminal is stock-only — every row is a ticker signal, so it has
         // zero meaning when the user has toggled off the stock-mode UI.
-        const STOCK_NAV_IDS = ['nav-portfolio', 'nav-stocks', 'nav-terminal'];
+        const STOCK_NAV_IDS = ['nav-macro-pulse', 'nav-calendar', 'nav-portfolio', 'nav-stocks', 'nav-terminal'];
 
         function updateAppHeaderOffset() {
             const headerEls = [
@@ -355,6 +355,9 @@
         }
 
         function switchTab(targetTabId) {
+            if (isNonStockMode && STOCK_NAV_IDS.includes(`nav-${targetTabId}`)) {
+                targetTabId = 'top-news';
+            }
             tabs.forEach(id => {
                 const view = document.getElementById(`view-${id}`);
                 const nav = document.getElementById(`nav-${id}`);
