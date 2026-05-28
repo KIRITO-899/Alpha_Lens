@@ -80,20 +80,21 @@ from prediction_models import EnsemblePredictor
 # Update this dict each year when NSE releases the official holiday calendar.
 NSE_HOLIDAYS_2026 = {
     (1, 26),   # Republic Day
-    (2, 19),   # Chhatrapati Shivaji Maharaj Jayanti
-    (3, 25),   # Holi
-    (4, 2),    # Ram Navami / Good Friday (tentative)
-    (4, 10),   # Good Friday
-    (4, 14),   # Dr. Ambedkar Jayanti / Mahavir Jayanti
-    (5, 1),    # Maharashtra Day / Labour Day
-    (6, 2),    # Eid ul Adha
+    (3, 3),    # Holi
+    (3, 26),   # Ram Navami
+    (3, 31),   # Mahavir Jayanti
+    (4, 3),    # Good Friday
+    (4, 14),   # Dr. Ambedkar Jayanti
+    (5, 1),    # Maharashtra Day
+    (5, 28),   # Bakri Id (Eid ul Adha)
+    (6, 26),   # Muharram
     (8, 15),   # Independence Day
-    (8, 27),   # Ganesh Chaturthi
+    (9, 14),   # Ganesh Chaturthi
     (10, 2),   # Gandhi Jayanti
-    (10, 21),  # Dussehra
-    (10, 22),  # Dussehra (additional)
-    (11, 5),   # Diwali - Laxmi Puja
-    (11, 6),   # Diwali (Balipratipada)
+    (10, 20),  # Dussehra
+    (11, 8),   # Diwali - Laxmi Puja
+    (11, 10),  # Diwali (Balipratipada)
+    (11, 24),  # Guru Nanak Jayanti
     (12, 25),  # Christmas
 }
 
@@ -298,8 +299,8 @@ _CACHE_RULES = (
     ("/api/indices",                 "public, max-age=30, stale-while-revalidate=30"),
     ("/api/news/top",                "public, max-age=30, stale-while-revalidate=60"),
     ("/api/news/all",                "public, max-age=60, stale-while-revalidate=120"),
-    ("/api/signal-terminal",         "public, max-age=30, stale-while-revalidate=30"),
-    ("/api/backtest-stats",          "public, max-age=300, stale-while-revalidate=600"),
+    ("/api/signal-terminal",         "public, max-age=5, stale-while-revalidate=10"),
+    ("/api/backtest-stats",          "public, max-age=10, stale-while-revalidate=30"),
     ("/api/stock-price/",            "public, max-age=20, stale-while-revalidate=60"),
     ("/api/stock-search",            "public, max-age=120"),
     # ── Never cache: live status & user-specific endpoints ──
@@ -1198,19 +1199,32 @@ print("[DEBUG] WAL checkpoint completed", flush=True)
 # We no longer use in-memory cache for news, but we keep it here just in case.
 LIVE_NEWS_CACHE = []
 
-# Your Gemini API Keys for rotation.
-# Slots 1..15 are read from the environment; unset slots are filtered out
-# below, so adding/removing keys is purely a deploy-time env change — no
-# code edit needed. Rotation/cooldown logic iterates over API_KEYS, so any
-# present slot automatically participates.
-API_KEYS = [
-    os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 24)
-]
-# Do NOT hardcode API keys in source code. Set them in the deploy
-# environment (Render dashboard → Environment → Add Environment Variable):
-#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_23
+# ── Gemini API Key Pools ──
+# LIST 1: keys 1–23 — primary rotation pool (used first).
+# LIST 2: keys 24–35 — fallback pool, engaged automatically when EVERY key
+#          in List 1 is on quota cooldown simultaneously.
+#
+# All keys are read from environment variables — no hardcoding. Deploy-time
+# changes (adding/removing keys) are purely env changes; no code edit needed.
+#
+# Set on Render dashboard → Environment → Add Environment Variable:
+#   GEMINI_API_KEY_1  ... GEMINI_API_KEY_23   ← List 1
+#   GEMINI_API_KEY_24 ... GEMINI_API_KEY_35   ← List 2
 
-API_KEYS = [key for key in API_KEYS if key]  # Filter out unset keys
+API_KEYS_LIST1 = [
+    k for k in (os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(1, 24)) if k
+]
+API_KEYS_LIST2 = [
+    k for k in (os.environ.get(f"GEMINI_API_KEY_{i}") for i in range(24, 36)) if k
+]
+
+# API_KEYS is the active pool used by all rotation helpers.
+# It starts as List 1; the fallback logic in get_and_rotate_client() switches
+# it to List 2 when all List 1 keys are exhausted, and logs the transition.
+API_KEYS = list(API_KEYS_LIST1)  # starts with List 1
+
+# Track which list is currently active so the debug endpoint can report it.
+_ACTIVE_KEY_LIST = 1  # 1 or 2
 
 # ── Per-key cooldown after 429/503 ──
 # 429 on the Gemini free tier almost always means the key's RPD (daily) limit
@@ -1375,6 +1389,46 @@ def _bootstrap_gemini_client():
 current_key_idx = 0
 client = _bootstrap_gemini_client()
 
+
+def _try_switch_to_list2():
+    """
+    Called when every key in the current active pool is on cooldown.
+    If List 2 has keys and we are currently on List 1, switch the active
+    pool to List 2 (and vice versa when List 2 is also exhausted).
+    Returns True if the pool was switched, False otherwise.
+    """
+    global API_KEYS, _ACTIVE_KEY_LIST, _KEY_QUOTA_COOLDOWN_UNTIL, _KEY_QUOTA_STRIKE_COUNT, _KEY_QUOTA_LAST_HIT
+
+    if _ACTIVE_KEY_LIST == 1 and API_KEYS_LIST2:
+        safe_print(
+            f"   [AI Rotation] All {len(API_KEYS_LIST1)} List-1 keys exhausted — "
+            f"switching to List 2 ({len(API_KEYS_LIST2)} keys)."
+        )
+        API_KEYS = list(API_KEYS_LIST2)
+        _ACTIVE_KEY_LIST = 2
+        # Reset cooldown state for the new pool.
+        _KEY_QUOTA_COOLDOWN_UNTIL.clear()
+        _KEY_QUOTA_STRIKE_COUNT.clear()
+        _KEY_QUOTA_LAST_HIT.clear()
+        return True
+
+    if _ACTIVE_KEY_LIST == 2 and API_KEYS_LIST1:
+        # List 2 is also exhausted — roll back to List 1 (its daily quota may
+        # have reset by now; keys will be re-probed on their normal cooldown).
+        safe_print(
+            f"   [AI Rotation] All List-2 keys also exhausted — "
+            f"falling back to List 1 ({len(API_KEYS_LIST1)} keys) for re-probe."
+        )
+        API_KEYS = list(API_KEYS_LIST1)
+        _ACTIVE_KEY_LIST = 1
+        _KEY_QUOTA_COOLDOWN_UNTIL.clear()
+        _KEY_QUOTA_STRIKE_COUNT.clear()
+        _KEY_QUOTA_LAST_HIT.clear()
+        return True
+
+    return False
+
+
 def get_and_rotate_client(last_failed_idx=None, is_timeout=False, is_quota=True, is_transient=False):
     if last_failed_idx is not None:
         if is_quota or is_timeout or is_transient:
@@ -1394,15 +1448,21 @@ def get_and_rotate_client(last_failed_idx=None, is_timeout=False, is_quota=True,
                 status_str = f"hit transient error (cooldown {cooldown_label})"
             else:
                 status_str = f"hit quota limit (cooldown {cooldown_label})"
-            safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} {status_str}.")
+            safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} (List {_ACTIVE_KEY_LIST}) {status_str}.")
         else:
-            safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} failed due to network/DNS error. Retrying without cooldown.")
-    
+            safe_print(f"   [AI Rotation] Key {last_failed_idx + 1} (List {_ACTIVE_KEY_LIST}) failed due to network/DNS error. Retrying without cooldown.")
+
     idx = _next_available_gemini_key_idx(current_key_idx if last_failed_idx is None else (last_failed_idx + 1) % len(API_KEYS))
+
+    # If no key is available in the current pool, try switching to the other list.
     if idx is None:
-        safe_print("   [AI Rotation] No available Gemini keys left.")
+        if _try_switch_to_list2():
+            idx = _next_available_gemini_key_idx(0)
+
+    if idx is None:
+        safe_print(f"   [AI Rotation] No available Gemini keys left in either list.")
         return None, None
-    
+
     _set_active_gemini_client(idx)
     return client, idx
 # Keep the live signal engine on a quota-friendly model by default. The previous
@@ -2773,6 +2833,7 @@ STOCK_KEYWORD_MAP = {
     'bharat forge': 'BHARATFORG.NS',
     'exide industries': 'EXIDEIND.NS', 'exide': 'EXIDEIND.NS',
     'amara raja': 'AMARAJABAT.NS',
+    'panasonic energy': 'LAKHNNATNL.NS', 'panasonic': 'LAKHNNATNL.NS',
     'marico': 'MARICO.NS',
     'dabur': 'DABUR.NS',
     'colgate palmolive': 'COLPAL.NS', 'colgate': 'COLPAL.NS',
@@ -8035,7 +8096,7 @@ NIFTY50_UNIVERSE = [
 ]
 
 @app.route('/api/backtest-stats', methods=['GET'])
-@route_cache(ttl_seconds=180)
+@route_cache(ttl_seconds=10)
 def get_backtest_stats():
     """
     Aggregate signal performance for the Track Record page.
@@ -8535,22 +8596,47 @@ def debug_gemini_keys():
     Does not return key material — only counts, indices, and cooldown timing.
     """
     now = time.time()
-    per_key = []
+
+    def _pool_status(pool_keys, pool_label, slot_range):
+        per_key = []
+        for i, _ in enumerate(pool_keys):
+            slot_num = slot_range[i]
+            until = _KEY_QUOTA_COOLDOWN_UNTIL.get(i, 0) if _ACTIVE_KEY_LIST == (1 if pool_label == "List 1" else 2) else 0
+            per_key.append({
+                "index": i + 1,
+                "env_var": f"GEMINI_API_KEY_{slot_num}",
+                "available": until <= now,
+                "cooldown_secs_remaining": max(0, int(until - now)),
+            })
+        return per_key
+
+    list1_slots = list(range(1, 24))
+    list2_slots = list(range(24, 36))
+
+    list1_status = _pool_status(API_KEYS_LIST1, "List 1", list1_slots)
+    list2_status = _pool_status(API_KEYS_LIST2, "List 2", list2_slots)
+
+    # currently active pool keys with live cooldown info
+    active_per_key = []
     for i in range(len(API_KEYS)):
         until = _KEY_QUOTA_COOLDOWN_UNTIL.get(i, 0)
-        per_key.append({
+        active_per_key.append({
             "index": i + 1,
-            "env_var": f"GEMINI_API_KEY_{i + 1}",
             "available": until <= now,
             "cooldown_secs_remaining": max(0, int(until - now)),
         })
-    declared_slots = list(range(1, 13))
+
+    declared_slots = list(range(1, 36))
     declared_present = {n: bool(os.environ.get(f"GEMINI_API_KEY_{n}")) for n in declared_slots}
     return jsonify({
-        "loaded_key_count": len(API_KEYS),
-        "max_supported_slots": 12,
+        "active_list": _ACTIVE_KEY_LIST,
+        "list1_key_count": len(API_KEYS_LIST1),
+        "list2_key_count": len(API_KEYS_LIST2),
+        "total_key_count": len(API_KEYS_LIST1) + len(API_KEYS_LIST2),
         "currently_active_index": (current_key_idx + 1) if current_key_idx is not None else None,
-        "keys": per_key,
+        "active_pool_keys": active_per_key,
+        "list1_keys": list1_status,
+        "list2_keys": list2_status,
         "env_slots_present": declared_present,
     })
 
@@ -9596,12 +9682,13 @@ def prune_low_value_news():
     """
     PRUNE_NO_PRED_LIMIT      = int(os.environ.get("PRUNE_NO_PRED_LIMIT", "3000"))
     PRUNE_NO_ACTIVE_LIMIT    = int(os.environ.get("PRUNE_NO_ACTIVE_LIMIT", "4000"))
+    PRUNE_NO_PRED_RETAIN     = int(os.environ.get("PRUNE_NO_PRED_RETAIN", "750"))
 
     def _prune(conn, c):
         deleted_news = 0
         deleted_impacts = 0
 
-        # ── Pass 1: oldest N news with NO stock_impact rows at all ──
+        # ── Pass 1: oldest N news with NO stock_impact rows at all (retaining the most recent N) ──
         # IMPORTANT: rows with ai_status='pending' are exempt — those were
         # saved during AI downtime and are still waiting for the rescreen
         # pass to attach predictions. Nuking them would lose news the user
@@ -9612,9 +9699,17 @@ def prune_low_value_news():
                 SELECT 1 FROM stock_impact si WHERE si.news_id = n.id
             )
               AND (n.ai_status IS NULL OR n.ai_status != 'pending')
+              AND n.id NOT IN (
+                  SELECT id FROM news
+                  WHERE NOT EXISTS (
+                      SELECT 1 FROM stock_impact si WHERE si.news_id = news.id
+                  )
+                  ORDER BY created_at DESC
+                  LIMIT ?
+              )
             ORDER BY n.created_at ASC
             LIMIT ?
-        """, (PRUNE_NO_PRED_LIMIT,))
+        """, (PRUNE_NO_PRED_RETAIN, PRUNE_NO_PRED_LIMIT))
         ids_p1 = [r[0] for r in c.fetchall()]
         if ids_p1:
             placeholders = ','.join(['?'] * len(ids_p1))
@@ -9635,7 +9730,10 @@ def prune_low_value_news():
         _retain_cutoff = (datetime.now(timezone.utc) - timedelta(days=_retain_days)).strftime('%Y-%m-%d %H:%M:%S')
         c.execute("""
             SELECT n.id FROM news n
-            WHERE NOT EXISTS (
+            WHERE EXISTS (
+                SELECT 1 FROM stock_impact si WHERE si.news_id = n.id
+            )
+              AND NOT EXISTS (
                 SELECT 1 FROM stock_impact si
                 WHERE si.news_id = n.id AND si.status = 'Active View'
             )

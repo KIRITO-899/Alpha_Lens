@@ -66,6 +66,31 @@ services:
         sync: false
       - key: GEMINI_API_KEY_23
         sync: false
+      # List 2 keys — fallback pool (24-35), engaged when all List 1 keys are exhausted
+      - key: GEMINI_API_KEY_24
+        sync: false
+      - key: GEMINI_API_KEY_25
+        sync: false
+      - key: GEMINI_API_KEY_26
+        sync: false
+      - key: GEMINI_API_KEY_27
+        sync: false
+      - key: GEMINI_API_KEY_28
+        sync: false
+      - key: GEMINI_API_KEY_29
+        sync: false
+      - key: GEMINI_API_KEY_30
+        sync: false
+      - key: GEMINI_API_KEY_31
+        sync: false
+      - key: GEMINI_API_KEY_32
+        sync: false
+      - key: GEMINI_API_KEY_33
+        sync: false
+      - key: GEMINI_API_KEY_34
+        sync: false
+      - key: GEMINI_API_KEY_35
+        sync: false
       - key: SENDGRID_API_KEY
         sync: false
       - key: SENDGRID_FROM_EMAIL
