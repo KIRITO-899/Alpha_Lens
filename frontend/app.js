@@ -3389,11 +3389,18 @@ function openCalendarEvent(eventId) {
     const modal = document.getElementById('cal-event-modal');
     const body  = document.getElementById('cal-event-body');
     if (!modal || !body) return;
+    const shell = modal.querySelector('.cal-event-shell');
+    if (shell) shell.scrollTop = 0;
     body.innerHTML = '<div class="text-slate-400 p-8 text-center text-sm">Loading event details…</div>';
     modal.classList.remove('hidden');
     fetch(`/api/calendar/${eventId}`)
         .then(r => r.ok ? r.json() : Promise.reject(r.statusText))
-        .then(ev => { _renderCalEventDetail(body, ev); })
+        .then(ev => {
+            _renderCalEventDetail(body, ev);
+            requestAnimationFrame(() => {
+                if (shell) shell.scrollTop = 0;
+            });
+        })
         .catch(err => { body.innerHTML = `<div class="text-rose-300 p-8">Could not load event: ${escapeHtml(String(err))}</div>`; });
 }
 
