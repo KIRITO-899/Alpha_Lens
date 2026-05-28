@@ -8,7 +8,7 @@
         let currentArchiveFilter = 'all';
         let selectedHeadlineKey = '';
         let marketOpen = true;  // Updated from API — controls whether stock changes are shown
-        const tabs = ['top-news', 'all-news', 'calendar', 'portfolio', 'stocks', 'terminal'];
+        const tabs = ['top-news', 'all-news', 'macro-pulse', 'calendar', 'portfolio', 'stocks', 'terminal'];
 
         function getNewsKey(newsItem) {
             return (newsItem?.headline || '').trim().toLowerCase();
@@ -360,6 +360,7 @@
             // Lazy-load premium views
             if (targetTabId === 'terminal') fetchTerminalData();
             if (targetTabId === 'stocks') fetchBacktestStats();
+            if (targetTabId === 'macro-pulse') fetchMacroPulse();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
@@ -3092,17 +3093,32 @@ async function fetchMacroPulse() {
     if (!wrap || !chipsEl) return;
     try {
         const res = await fetch('/api/macro/events');
-        if (!res.ok) {
-            wrap.classList.add('hidden');
-            return;
-        }
+         if (!res.ok) {
+             wrap.classList.remove('hidden');
+             chipsEl.innerHTML = `
+                 <div class="w-full py-12 text-center">
+                     <div class="text-4xl mb-3">⚠️</div>
+                     <div class="text-white font-display font-bold text-lg mb-1">Feed Offline</div>
+                     <p class="text-slate-400 text-sm max-w-md mx-auto">Unable to fetch live macroeconomic events. Check connection.</p>
+                 </div>
+             `;
+             if (countEl) countEl.innerText = "Error";
+             return;
+         }
         const data = await res.json();
         const events = (data && data.events) || [];
+        wrap.classList.remove('hidden');
         if (!events.length) {
-            wrap.classList.add('hidden');
+            chipsEl.innerHTML = `
+                <div class="w-full py-12 text-center">
+                    <div class="text-3xl mb-3">🟢</div>
+                    <div class="text-white font-display font-bold text-lg mb-1">System Stable</div>
+                    <p class="text-slate-400 text-sm max-w-sm mx-auto">No macroeconomic shock thresholds have been breached in the last 24 hours. Global systems are nominal.</p>
+                </div>
+            `;
+            if (countEl) countEl.innerText = "0 shocks";
             return;
         }
-        wrap.classList.remove('hidden');
         if (countEl) countEl.innerText = `${events.length} active shock${events.length === 1 ? '' : 's'}`;
         chipsEl.innerHTML = events.map(ev => {
             const pct = parseFloat(ev.change_pct_1d || 0);

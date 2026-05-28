@@ -345,11 +345,13 @@
                 </div>
             </a>
 
-            <div class="hidden md:flex space-x-7 items-center text-[10px] font-bold tracking-[0.14em] uppercase">
+            <div class="hidden md:flex space-x-5 items-center text-[10px] font-bold tracking-[0.14em] uppercase">
                 <a href="#" id="nav-top-news" onclick="switchTab('top-news'); return false;"
                     class="text-violet-400 border-b-2 border-violet-500/20 pb-1 transition">Top News</a>
                 <a href="#" id="nav-all-news" onclick="switchTab('all-news'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition">All News</a>
+                <a href="#" id="nav-macro-pulse" onclick="switchTab('macro-pulse'); return false;"
+                    class="nav-link text-slate-300 hover:text-white transition">Macro Pulse</a>
                 <a href="#" id="nav-calendar" onclick="switchTab('calendar'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition">Calendar</a>
                 <a href="#" id="nav-portfolio" onclick="switchTab('portfolio'); return false;"
@@ -363,7 +365,7 @@
             </div>
 
             <!-- Non-Stock Mode and Access Terminal / Logout re-ordered -->
-            <div class="flex items-center gap-10 xl:gap-14">
+            <div class="flex items-center gap-6 xl:gap-10 ml-auto">
                 <button id="modeToggle"
                     class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/40 border border-white/5 hover:border-violet-500/30 transition cursor-pointer group shadow-sm"
                     onclick="toggleNonStockMode()">
@@ -421,24 +423,7 @@
             <div id="view-top-news" class="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
                 <div id="top-news-main-col" class="col-span-1 xl:col-span-8 space-y-8">
 
-                    <!-- ──────────────────────────────────────────────────────
-                         MACRO PULSE — purely quantitative shock detector strip.
-                         Populated by /api/macro/events. Each shock chip opens
-                         the Ripple modal with the propagation graph for that
-                         instrument. Hidden when nothing is shocked.
-                         ────────────────────────────────────────────────────── -->
-                    <div id="macro-pulse-wrap" class="macro-pulse hidden">
-                        <div class="macro-pulse-header">
-                            <span class="macro-pulse-kicker">
-                                <span class="ripple-pulse"></span>
-                                Macro Pulse · live shock detector
-                            </span>
-                            <span id="macro-pulse-count" class="macro-pulse-count">0 shocks</span>
-                        </div>
-                        <div id="macro-pulse-chips" class="macro-pulse-chips">
-                            <!-- chips injected by renderMacroPulse() -->
-                        </div>
-                    </div>
+
 
                     <div class="glass-panel premium-shell p-5 rounded-2xl">
                         <div class="flex justify-between items-center mb-3">
@@ -597,6 +582,40 @@
                     </div>
 
                 </aside>
+            </div>
+
+            <!-- ============================================== -->
+            <!-- VIEW: MACRO PULSE (shock detector)            -->
+            <!-- ============================================== -->
+            <div id="view-macro-pulse" class="hidden max-w-5xl mx-auto w-full mt-4 space-y-6">
+                <div class="glass-panel p-8 rounded-xl relative overflow-hidden">
+                    <div class="absolute inset-0 bg-gradient-to-r from-purple-900/10 via-transparent to-transparent"></div>
+                    <div class="relative z-10">
+                        <div class="section-kicker w-max mb-3">
+                            <span>System Monitor · Real-time</span>
+                        </div>
+                        <h1 class="text-3xl md:text-5xl font-display font-black tracking-tight gradient-heading">
+                            Macro Pulse
+                        </h1>
+                        <p class="text-slate-400 text-sm md:text-base mt-2 max-w-2xl leading-relaxed">
+                            Continuous quantitative scanning of the global macro regime. 
+                            Breaches of historical standard deviation bands trigger actionable shock signals across currencies, commodities, and yields.
+                        </p>
+                    </div>
+                </div>
+
+                <div id="macro-pulse-wrap" class="macro-pulse">
+                    <div class="macro-pulse-header">
+                        <span class="macro-pulse-kicker">
+                            <span class="ripple-pulse"></span>
+                            Macro Pulse · live shock detector
+                        </span>
+                        <span id="macro-pulse-count" class="macro-pulse-count">0 shocks</span>
+                    </div>
+                    <div id="macro-pulse-chips" class="macro-pulse-chips">
+                        <!-- chips injected by renderMacroPulse() -->
+                    </div>
+                </div>
             </div>
 
             <!-- ============================================== -->
