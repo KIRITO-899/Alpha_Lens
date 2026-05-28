@@ -3090,6 +3090,7 @@ async function fetchMacroPulse() {
     const wrap = document.getElementById('macro-pulse-wrap');
     const chipsEl = document.getElementById('macro-pulse-chips');
     const countEl = document.getElementById('macro-pulse-count');
+    const snapGrid = document.getElementById('macro-snapshot-grid');
     if (!wrap || !chipsEl) return;
     try {
         const res = await fetch('/api/macro/events');
@@ -3107,6 +3108,7 @@ async function fetchMacroPulse() {
          }
         const data = await res.json();
         const events = (data && data.events) || [];
+        const snapshot = (data && data.snapshot) || [];
         wrap.classList.remove('hidden');
         if (!events.length) {
             chipsEl.innerHTML = `
@@ -3117,43 +3119,75 @@ async function fetchMacroPulse() {
                 </div>
             `;
             if (countEl) countEl.innerText = "0 shocks";
-            return;
-        }
-        if (countEl) countEl.innerText = `${events.length} active shock${events.length === 1 ? '' : 's'}`;
-        chipsEl.innerHTML = events.map(ev => {
-            const pct = parseFloat(ev.change_pct_1d || 0);
-            const dirClass = pct >= 0 ? 'up' : 'down';
-            const arrow = pct >= 0
-                ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
-                : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
-            const levelClass = (ev.shock_level || '').toLowerCase() === 'major' ? 'major' : 'significant';
-            // Actionability — shock printed while NSE was closed is alpha
-            // the user can still position into. During NSE hours = mostly
-            // already absorbed.
-            const isActionable = !ev.during_nse_hours;
-            const actionBadge = isActionable
-                ? '<span class="macro-chip-action actionable" title="NSE was closed when detected — positioning window for next open">⚡ Actionable</span>'
-                : '<span class="macro-chip-action info" title="NSE was open when detected — likely already in price">ⓘ Info</span>';
-            return `
-                <button class="macro-chip ${isActionable ? 'is-actionable' : 'is-info'}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open macro shock ripple">
-                    <span class="macro-chip-arrow ${dirClass === 'up' ? 'text-emerald-400' : 'text-rose-400'}">${arrow}</span>
-                    <span class="macro-chip-label">${escapeHtml(ev.instrument_label || ev.symbol || ev.instrument_key)}</span>
-                    <span class="macro-chip-pct ${dirClass}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>
-                    <span class="macro-chip-level ${levelClass}">${escapeHtml(ev.shock_level || '')}</span>
-                    ${actionBadge}
-                </button>
-            `;
-        }).join('');
-        // Wire click → openMacroRipple
-        chipsEl.querySelectorAll('[data-macro-event-id]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                openMacroRipple(parseInt(btn.getAttribute('data-macro-event-id'), 10));
+        } else {
+            if (countEl) countEl.innerText = `${events.length} active shock${events.length === 1 ? '' : 's'}`;
+            chipsEl.innerHTML = events.map(ev => {
+                const pct = parseFloat(ev.change_pct_1d || 0);
+                const dirClass = pct >= 0 ? 'up' : 'down';
+                const arrow = pct >= 0
+                    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
+                    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
+                const levelClass = (ev.shock_level || '').toLowerCase() === 'major' ? 'major' : 'significant';
+                const isActionable = !ev.during_nse_hours;
+                const actionBadge = isActionable
+                    ? '<span class="macro-chip-action actionable" title="NSE was closed when detected — positioning window for next open">⚡ Actionable</span>'
+                    : '<span class="macro-chip-action info" title="NSE was open when detected — likely already in price">ⓘ Info</span>';
+                return `
+                    <button class="macro-chip ${isActionable ? 'is-actionable' : 'is-info'}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open macro shock ripple">
+                        <span class="macro-chip-arrow ${dirClass === 'up' ? 'text-emerald-400' : 'text-rose-400'}">${arrow}</span>
+                        <span class="macro-chip-label">${escapeHtml(ev.instrument_label || ev.symbol || ev.instrument_key)}</span>
+                        <span class="macro-chip-pct ${dirClass}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>
+                        <span class="macro-chip-level ${levelClass}">${escapeHtml(ev.shock_level || '')}</span>
+                        ${actionBadge}
+                    </button>
+                `;
+            }).join('');
+            // Wire click → openMacroRipple
+            chipsEl.querySelectorAll('[data-macro-event-id]').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    openMacroRipple(parseInt(btn.getAttribute('data-macro-event-id'), 10));
+                });
             });
-        });
-    } catch (_err) {
-        wrap.classList.add('hidden');
+        }
+
+        // Render live snapshot grid — always shown regardless of shocks
+        if (snapGrid && snapshot.length) {
+            snapGrid.innerHTML = snapshot.map(item => {
+                const pct = parseFloat(item.change_pct_1d || 0);
+                const isUp = pct >= 0;
+                const pctFmt = `${isUp ? '+' : ''}${pct.toFixed(2)}%`;
+                const pctColor = isUp ? '#34d399' : '#fb7185';
+                const pctBg = isUp ? 'rgba(16,185,129,0.10)' : 'rgba(244,63,94,0.10)';
+                const pctBorder = isUp ? 'rgba(16,185,129,0.25)' : 'rgba(244,63,94,0.25)';
+                const arrow = isUp
+                    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
+                    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
+                const lastPx = item.last_price != null ? parseFloat(item.last_price).toLocaleString(undefined, {maximumFractionDigits: 4}) : '—';
+                return `
+                    <div class="macro-snap-card">
+                        <div class="macro-snap-label">${escapeHtml(item.instrument_label || item.instrument_key || '')}</div>
+                        <div class="macro-snap-price">${lastPx}</div>
+                        <div class="macro-snap-pct" style="color:${pctColor};background:${pctBg};border:1px solid ${pctBorder};">
+                            <span style="display:inline-flex;align-items:center;gap:3px;color:${pctColor}">${arrow}${pctFmt}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        } else if (snapGrid) {
+            snapGrid.innerHTML = '';
+        }
+    } catch (err) {
+        console.error('[MacroPulse] fetch error:', err);
+        wrap.classList.remove('hidden');
+        chipsEl.innerHTML = `
+            <div class="w-full py-8 text-center">
+                <div class="text-3xl mb-2">⚠️</div>
+                <div class="text-slate-300 text-sm">Could not load macro data. Will retry shortly.</div>
+            </div>
+        `;
     }
 }
+
 
 async function openMacroRipple(eventId) {
     // Reuse the existing ripple-modal shell + D3 renderer; just point at
