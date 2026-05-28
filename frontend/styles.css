@@ -279,7 +279,7 @@ body {
 
 /* ── PREMIUM TICKER BAR ── */
 #premium-ticker-bar{
-    position:sticky;top:0;z-index:200;
+    position:sticky;top:0;z-index:10001;
     background:var(--glass-bg);
     backdrop-filter:blur(28px) saturate(160%);
     -webkit-backdrop-filter:blur(28px) saturate(160%);
@@ -289,6 +289,10 @@ body {
     height:38px;overflow:hidden;
     font-family:'JetBrains Mono',monospace;
 }
+/* Ensure nav always sits above cal-event-modal (z-index:9999) */
+#premium-ticker-bar ~ div > nav,
+.relative.z-10 nav,
+nav.glass-panel { z-index: 10001 !important; }
 #premium-ticker-bar .ticker-logo-pill{
     display: none !important;
     flex-shrink:0;

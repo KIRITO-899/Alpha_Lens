@@ -161,7 +161,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v4-2026-05-28-cal-fix">
+    <link rel="stylesheet" href="/styles.css?v=al-v4-2026-05-28-cal-fix2">
 </head>
 
 <body class="antialiased">
@@ -329,7 +329,7 @@
         <!-- NAVIGATION BAR -->
         <nav
             class="glass-panel sticky top-3 z-50 px-6 py-3.5 flex flex-col lg:flex-row justify-between items-center gap-4 rounded-2xl mx-4 mt-3"
-            style="backdrop-filter:blur(40px);border-color:rgba(255,255,255,0.07);">
+            style="backdrop-filter:blur(40px);border-color:rgba(255,255,255,0.07);z-index:10001;">
             <a href="#" onclick="switchTab('top-news'); return false;"
                 class="flex items-center gap-3 hover:opacity-80 transition cursor-pointer group">
                 <div class="relative flex items-center justify-center w-6 h-6">
@@ -1114,7 +1114,7 @@
     <!-- Extracted to app.js. `defer` keeps end-of-body execution timing.
          Version query mirrors sw.js CACHE_VERSION so browsers HTTP-cache only
          within a single deploy and fetch fresh on every version bump. -->
-    <script src="/app.js?v=al-v4-2026-05-28-cal-fix" defer></script>
+    <script src="/app.js?v=al-v4-2026-05-28-cal-fix2" defer></script>
 </body>
 
 </html>
