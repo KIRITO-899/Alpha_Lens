@@ -3433,8 +3433,8 @@ def get_price_with_range(ticker, market_open=None):
     """
     Returns (current_price, eval_high, eval_low) for stop/target evaluation.
     MARKET OPEN  : Angel One LTP + day high/low (live, real-time).
-    MARKET CLOSED: Yahoo Finance official 3:30 PM close (authoritative NSE close).
-                   Falls back to Angel One LTP if Yahoo fails.
+    MARKET CLOSED: Completed daily-session close, matching portfolio pricing.
+                   Falls back to Yahoo/meta and then Angel One quote data.
     """
     if market_open is None:
         market_open = is_market_open()
@@ -3448,7 +3448,13 @@ def get_price_with_range(ticker, market_open=None):
         eval_low  = round(float(dl), 2) if dl and dl > 0 else current
         return current, eval_high, eval_low
     else:
-        # Market closed: authoritative NSE close from Yahoo
+        # Market closed: use the completed daily-session close used by the
+        # portfolio cards. Yahoo regularMarketPrice can drift from the actual
+        # official close for some NSE symbols after hours.
+        last_close, _ = get_last_closed_session_quote(ticker)
+        if last_close and last_close > 0:
+            return last_close, last_close, last_close
+
         official_close = _get_yahoo_official_close(ticker)
         if official_close and official_close > 0:
             return official_close, official_close, official_close
@@ -3471,9 +3477,9 @@ _YAHOO_CLOSE_CACHE_TTL = 300  # 5 minutes
 def _get_yahoo_official_close(ticker):
     """
     Fetch the most recent official closing price from Yahoo Finance.
-    Uses meta.regularMarketPrice from the daily chart endpoint — this is
-    Yahoo's authoritative live/last-close price and avoids the old bug
-    of scanning 1-min candles and returning stale data from the wrong day.
+    Uses the last non-null daily close from the chart endpoint. Do not prefer
+    meta.regularMarketPrice here; for NSE symbols it can diverge from the
+    completed-session close after hours.
     Results cached for 5 minutes.
     """
     import time as _time
@@ -3488,17 +3494,22 @@ def _get_yahoo_official_close(ticker):
         url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1d"
         resp = requests.get(url, headers=_h, timeout=8)
         data = resp.json()
-        meta = data.get('chart', {}).get('result', [{}])[0].get('meta', {})
+        result = data.get('chart', {}).get('result', [{}])[0]
+        meta = result.get('meta', {})
+        quote = result.get('indicators', {}).get('quote', [{}])[0]
+        closes = quote.get('close', [])
 
-        # regularMarketPrice = Yahoo's authoritative current/last-close price
-        rmp = meta.get('regularMarketPrice')
-        if rmp and rmp > 0:
-            close_price = round(float(rmp), 2)
-            _YAHOO_CLOSE_CACHE[ticker] = (close_price, now_ts)
-            return close_price
+        for close in reversed(closes):
+            try:
+                close_price = round(float(close), 2)
+            except Exception:
+                continue
+            if close_price > 0:
+                _YAHOO_CLOSE_CACHE[ticker] = (close_price, now_ts)
+                return close_price
 
-        # Fallback: previousClose from meta
-        prev = meta.get('chartPreviousClose') or meta.get('previousClose')
+        # Fallback: meta close fields, then regularMarketPrice as a last resort.
+        prev = meta.get('chartPreviousClose') or meta.get('previousClose') or meta.get('regularMarketPrice')
         if prev and prev > 0:
             close_price = round(float(prev), 2)
             _YAHOO_CLOSE_CACHE[ticker] = (close_price, now_ts)
@@ -5213,8 +5224,14 @@ def yfinance_worker():
                                 # Historical check must start from NEXT session, not signal day
                                 _hist_start_date = _next_session_date
 
-                            # If next trading session hasn't started yet, keep diff at 0%
+                            # If next trading session hasn't started yet, keep
+                            # diff at 0% using the authoritative last close.
                             if not has_market_traded_since(created_at_str):
+                                if current_price and current_price > 0 and abs(float(base_price) - float(current_price)) > 0.01:
+                                    base_price = current_price
+                                    def _update_waiting_base(conn, c, _sid=stock_id, _bp=base_price):
+                                        c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_bp, _sid))
+                                    db_write(_update_waiting_base)
                                 current_price = base_price
                     except Exception:
                         pass
@@ -7920,12 +7937,14 @@ def get_stock_market_change_quote(ticker, market_open=None):
     if cached and (now_ts - cached.get("ts", 0)) < cache_ttl:
         return dict(cached["quote"])
 
-    lp, prev = yf.get_ltp(ticker)
-    price = _positive_float(lp)
-    prev_close = _positive_float(prev)
     price_label = "Live" if market_open else "Last Close"
+    price = None
+    prev_close = None
 
     if market_open:
+        lp, prev = yf.get_ltp(ticker)
+        price = _positive_float(lp)
+        prev_close = _positive_float(prev)
         if not prev_close:
             last_close, _ = get_last_closed_session_quote(ticker)
             prev_close = _positive_float(last_close)
@@ -7935,6 +7954,13 @@ def get_stock_market_change_quote(ticker, market_open=None):
             price = last_close
         if prior_close:
             prev_close = prior_close
+
+        if (not price) or (not prev_close):
+            lp, prev = yf.get_ltp(ticker)
+            if not price:
+                price = _positive_float(lp)
+            if not prev_close:
+                prev_close = _positive_float(prev)
 
     if (not price) or (not prev_close):
         cached_price, cached_prev_close = get_cached_stock_close_from_db(ticker)
@@ -7991,6 +8017,7 @@ def get_signal_terminal():
         conn.close()
 
         mkt_open = is_market_open()
+        market_quote_cache = {}
         signals = []
         for row in rows:
             d = dict(row)
@@ -7998,9 +8025,27 @@ def get_signal_terminal():
             cp = d.get('current_price') or bp
             status = d.get('status', 'Active View')
             created_at = d.get('created_at')
+            stored_cp = d.get('current_price') or 0
+
+            quote_price = None
+            quote_ticker = normalize_ticker(d.get('ticker')) or d.get('ticker')
+            if quote_ticker:
+                try:
+                    if quote_ticker not in market_quote_cache:
+                        market_quote_cache[quote_ticker] = get_stock_market_change_quote(
+                            quote_ticker,
+                            market_open=mkt_open
+                        )
+                    quote_price = _positive_float(market_quote_cache[quote_ticker].get('price'))
+                    if quote_price:
+                        cp = quote_price
+                except Exception:
+                    quote_price = None
 
             # If market hasn't traded since news publication, show entry price as current price
             if not mkt_open and status == 'Active View' and not has_market_traded_since(created_at):
+                if quote_price and (not bp or not stored_cp or abs(float(stored_cp) - float(bp)) < 0.01):
+                    bp = quote_price
                 cp = bp
                 diff = 0.0
                 progress_pct = 0.0
@@ -8059,7 +8104,7 @@ def get_signal_terminal():
                 'detail': d.get('ensemble_detail') or '',
                 'created_at': d.get('created_at', ''),
             })
-        return jsonify({'signals': signals, 'count': len(signals), 'market_open': is_market_open()})
+        return jsonify({'signals': signals, 'count': len(signals), 'market_open': mkt_open})
     except Exception as e:
         print(f"[signal-terminal] Error: {e}")
         return jsonify({'signals': [], 'count': 0, 'market_open': False})
