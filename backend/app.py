@@ -287,10 +287,10 @@ _CACHE_RULES = (
     # the index.html cache. Safe to cache aggressively.
     ("/stocks.js",                   "public, max-age=86400, stale-while-revalidate=86400"),
     # ── Newly-extracted frontend chunks (was inline in index.html) ──
-    # Browser caches these separately; small tweaks to one file don't bust
-    # the others. SW revalidates on every load (handled by sw.js).
-    ("/app.js",                      "public, max-age=86400, stale-while-revalidate=86400"),
-    ("/styles.css",                  "public, max-age=86400, stale-while-revalidate=86400"),
+    # Use no-cache so browsers ALWAYS revalidate — avoids stale JS/CSS after
+    # deploys. The server returns 304 Not Modified quickly when unchanged.
+    ("/app.js",                      "no-cache, must-revalidate"),
+    ("/styles.css",                  "no-cache, must-revalidate"),
     # ── Macro Pulse — refresh moderately fast for live shock view ──
     ("/api/macro/events",            "public, max-age=60, stale-while-revalidate=120"),
     # ── Calendar — events change weekly; cache aggressively ──
