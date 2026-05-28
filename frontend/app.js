@@ -3162,10 +3162,15 @@ async function fetchMacroPulse() {
                 const arrow = isUp
                     ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
                     : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
-                const lastPx = item.last_price != null ? parseFloat(item.last_price).toLocaleString(undefined, {maximumFractionDigits: 4}) : '—';
+                // snapshot uses: item.label, item.key, item.last (not instrument_label/last_price)
+                const label = item.label || item.instrument_label || item.key || item.instrument_key || '';
+                const lastPx = (item.last != null ? item.last : item.last_price) != null
+                    ? parseFloat(item.last != null ? item.last : item.last_price).toLocaleString(undefined, {maximumFractionDigits: 4})
+                    : '—';
+                const isShock = item.is_shock_3pct || item.is_shock_5pct;
                 return `
-                    <div class="macro-snap-card">
-                        <div class="macro-snap-label">${escapeHtml(item.instrument_label || item.instrument_key || '')}</div>
+                    <div class="macro-snap-card${isShock ? ' is-shock' : ''}">
+                        <div class="macro-snap-label">${escapeHtml(label)}${isShock ? ' <span style="color:#fb7185;font-size:9px;">⚡</span>' : ''}</div>
                         <div class="macro-snap-price">${lastPx}</div>
                         <div class="macro-snap-pct" style="color:${pctColor};background:${pctBg};border:1px solid ${pctBorder};">
                             <span style="display:inline-flex;align-items:center;gap:3px;color:${pctColor}">${arrow}${pctFmt}</span>

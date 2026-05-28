@@ -2029,6 +2029,11 @@ main.container {
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 14px;
 }
+.macro-snap-card.is-shock {
+  border-color: rgba(244,63,94,0.35);
+  background: rgba(244,63,94,0.06);
+}
+
 
 
 
