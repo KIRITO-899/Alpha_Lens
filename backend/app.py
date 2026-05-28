@@ -3429,6 +3429,110 @@ def get_base_price_at_time(ticker, pub_dt_ist):
     return 0.0
 
 
+def get_close_on_or_before_publication(ticker, pub_dt_ist, lookback_days=10):
+    """
+    Return the last completed daily close at or before the publication time.
+    Used for news that lands outside market hours, including delayed AI
+    analysis after Gemini keys recover.
+    """
+    try:
+        hist = yf.Ticker(ticker).history(period=f'{lookback_days}d', interval='1d')
+        if hist is None or hist.empty or 'Close' not in hist:
+            return 0.0
+
+        if getattr(hist.index, 'tz', None) is None:
+            idx = hist.index.tz_localize(timezone.utc)
+        else:
+            idx = hist.index.tz_convert(timezone(timedelta(hours=5, minutes=30)))
+
+        closes = []
+        pub_date = pub_dt_ist.date()
+        for dt_idx, close in zip(idx, hist['Close'].tolist()):
+            try:
+                bar_date = dt_idx.date()
+                close_price = float(close)
+            except Exception:
+                continue
+            if close_price > 0 and bar_date <= pub_date:
+                closes.append((bar_date, close_price))
+
+        if closes:
+            return round(closes[-1][1], 2)
+    except Exception as e:
+        print(f"   [Price] Historical daily close error for {ticker}: {e}")
+
+    return 0.0
+
+
+def get_signal_prices_for_publication(ticker, publication_time):
+    """
+    Resolve signal entry/current prices from the original news publication
+    timestamp, not the time the AI analysis happens.
+    Returns (base_price, current_price_now, publication_utc_str).
+    """
+    ist = timezone(timedelta(hours=5, minutes=30))
+    pub_dt = None
+    if isinstance(publication_time, datetime):
+        pub_dt = publication_time
+    elif publication_time:
+        try:
+            pub_dt = parsedate_to_datetime(str(publication_time))
+        except Exception:
+            try:
+                pub_dt = datetime.strptime(str(publication_time), '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+            except Exception:
+                pub_dt = None
+
+    if pub_dt is None:
+        pub_dt = datetime.now(timezone.utc)
+    if pub_dt.tzinfo is None:
+        pub_dt = pub_dt.replace(tzinfo=timezone.utc)
+
+    pub_dt_ist = pub_dt.astimezone(ist)
+    pub_dt_utc_str = pub_dt_ist.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+
+    news_during_market = (
+        pub_dt_ist.weekday() < 5 and
+        not is_market_holiday(pub_dt_ist.month, pub_dt_ist.day, pub_dt_ist.year) and
+        (9 * 60 + 15) <= (pub_dt_ist.hour * 60 + pub_dt_ist.minute) < (15 * 60 + 30)
+    )
+
+    ltp_val = prev_val = 0.0
+    try:
+        ltp, prev, _, _ = yf._get_cached_quote(ticker)
+        ltp_val = round(float(ltp), 2) if (ltp and ltp > 0) else 0.0
+        prev_val = round(float(prev), 2) if (prev and prev > 0) else 0.0
+    except Exception:
+        pass
+
+    if news_during_market:
+        base_price = get_base_price_at_time(ticker, pub_dt_ist)
+        if base_price <= 0:
+            base_price = get_close_on_or_before_publication(ticker, pub_dt_ist)
+        if base_price <= 0:
+            base_price = prev_val if prev_val > 0 else ltp_val
+    else:
+        base_price = get_close_on_or_before_publication(ticker, pub_dt_ist)
+        if base_price <= 0:
+            base_price = prev_val if prev_val > 0 else ltp_val
+
+    if has_market_traded_since(pub_dt_utc_str):
+        current_price_now = ltp_val if ltp_val > 0 else base_price
+        if not is_market_open():
+            try:
+                quote_fn = globals().get('get_stock_market_change_quote')
+                if quote_fn:
+                    quote_price = _positive_float(quote_fn(ticker, market_open=False).get('price'))
+                    if quote_price:
+                        current_price_now = quote_price
+            except Exception:
+                pass
+    else:
+        current_price_now = base_price
+
+    return round(base_price, 2) if base_price else 0.0, round(current_price_now, 2) if current_price_now else 0.0, pub_dt_utc_str
+
+
 def get_price_with_range(ticker, market_open=None):
     """
     Returns (current_price, eval_high, eval_low) for stop/target evaluation.
@@ -4380,53 +4484,13 @@ Return ONLY valid JSON matching this shape:
             current_price_now = 0.0
             _pub_dt_utc_str = ""
             try:
-                _pub_dt = parsedate_to_datetime(signal['time']).astimezone(_ist)
-                _pub_dt_utc_str = _pub_dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
-
-                # Check if news was published during trading hours
-                _news_during_market = True
-                if _pub_dt.weekday() >= 5 or is_market_holiday(_pub_dt.month, _pub_dt.day, _pub_dt.year):
-                    _news_during_market = False
-                else:
-                    _t = _pub_dt.hour * 60 + _pub_dt.minute
-                    # Bug #23 fix: market closes AT 15:30, so use strict <
-                    if not ((9 * 60 + 15) <= _t < (15 * 60 + 30)):
-                        _news_during_market = False
-
-                # Get current LTP + prev_close from Angel One
-                _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
-                _ltp_val = round(float(_ltp), 2) if (_ltp and _ltp > 0) else 0.0
-                _prev_val = round(float(_prev), 2) if (_prev and _prev > 0) else 0.0
-
-                if _news_during_market:
-                    # News during market hours: get exact price at publication time
-                    base_price = get_base_price_at_time(ticker, _pub_dt)
-                    current_price_now = _ltp_val if _ltp_val > 0 else _prev_val
-                    # If intraday price lookup failed, use prev_close as baseline
-                    if base_price <= 0:
-                        base_price = _prev_val if _prev_val > 0 else _ltp_val
-                else:
-                    # NEWS AFTER MARKET HOURS:
-                    # base_price = official NSE closing price of today's session
-                    # If Yahoo fails, use Angel One prev_close before falling back to LTP.
-                    _official_close = _get_yahoo_official_close(ticker)
-                    if _official_close and _official_close > 0:
-                        base_price = _official_close
-                        current_price_now = _official_close
-                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (Yahoo official close, 0% until market opens)")
-                    elif _prev_val > 0:
-                        base_price = _prev_val
-                        current_price_now = _prev_val
-                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (AO prev_close fallback, 0% until market opens)")
-                    elif _ltp_val > 0:
-                        base_price = _ltp_val
-                        current_price_now = _ltp_val
-                        print(f"   [Price] {ticker}: After-hours → base=current={base_price} (AO LTP fallback, 0% until market opens)")
-
-
+                base_price, current_price_now, _pub_dt_utc_str = get_signal_prices_for_publication(
+                    ticker,
+                    signal.get('time')
+                )
             except Exception as _e:
                 if not _pub_dt_utc_str:
-                    _pub_dt_utc_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                    _pub_dt_utc_str = signal.get('time') or datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
                 print(f"   [!] Price fetch error for {ticker}: {_e}")
 
             # ── DUPLICATE SIGNAL GUARD / MERGE CHECK ──
@@ -5037,8 +5101,6 @@ def repair_existing_signal_statuses(days=14):
                 ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
             next_open, next_session_date = _next_session_open_price(ticker, created_dt, ohlc_cache[ticker])
             if next_open and next_open > 0:
-                if abs(base_price - next_open) > 0.01:
-                    base_price = next_open
                 start_date = next_session_date
 
         if start_date is None:
@@ -5179,8 +5241,9 @@ def yfinance_worker():
                     db_write(_init_base)
                     print(f"   [YF] Initialized base_price=current_price={base_price} for {ticker} (ID={_sid_init})")
 
-                # ── KEY RULE: After-hours signals → base_price = NEXT OPEN PRICE ──
-                # This MUST run before the historical hit check below.
+                # For outside-market-hours news, keep base_price anchored to
+                # the news-time close, but start target/stop evaluation from
+                # the next tradable session.
                 _IST = timezone(timedelta(hours=5, minutes=30))
                 _hist_start_date = None  # Will be set to next session date for after-hours signals
 
@@ -5216,22 +5279,12 @@ def yfinance_worker():
                                     break
 
                             if _next_open_price and _next_open_price > 0:
-                                if abs(base_price - _next_open_price) > 0.01:
-                                    base_price = _next_open_price
-                                    def _update_base(conn, c, _sid=stock_id, _bp=base_price):
-                                        c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_bp, _sid))
-                                    db_write(_update_base)
                                 # Historical check must start from NEXT session, not signal day
                                 _hist_start_date = _next_session_date
 
                             # If next trading session hasn't started yet, keep
-                            # diff at 0% using the authoritative last close.
+                            # diff at 0% using the original news-time base.
                             if not has_market_traded_since(created_at_str):
-                                if current_price and current_price > 0 and abs(float(base_price) - float(current_price)) > 0.01:
-                                    base_price = current_price
-                                    def _update_waiting_base(conn, c, _sid=stock_id, _bp=base_price):
-                                        c.execute("UPDATE stock_impact SET base_price=? WHERE id=?", (_bp, _sid))
-                                    db_write(_update_waiting_base)
                                 current_price = base_price
                     except Exception:
                         pass
@@ -8884,15 +8937,10 @@ Return ONLY valid JSON matching this shape:
                     continue
                 else:
                     _stop = TRADE_STOP_PCT; _tgt = TRADE_TARGET_PCT
-                try:
-                    _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
-                    _ltp = round(float(_ltp), 2) if (_ltp and _ltp > 0) else 0.0
-                    _prev = round(float(_prev), 2) if (_prev and _prev > 0) else 0.0
-                except Exception:
-                    _ltp = _prev = 0.0
-                base_price = _ltp if _ltp > 0 else _prev
-                current_price_now = base_price
-                _pub = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                base_price, current_price_now, _pub = get_signal_prices_for_publication(
+                    ticker,
+                    art.get("time")
+                )
                 _ai_input = art["headline"]
                 _ctx = art.get("deep_context") or art.get("summary") or ""
                 if _ctx:
@@ -9103,6 +9151,18 @@ def apply_claude_predictions():
             if not res.get("material"):
                 continue
             headline = res.get("headline") or ""
+            news_publication_time = res.get("news_time") or res.get("created_at") or ""
+            if not news_publication_time:
+                try:
+                    _news_conn = connect_news_db()
+                    _news_cur = _news_conn.cursor()
+                    _news_cur.execute("SELECT news_time, created_at FROM news WHERE id = ? LIMIT 1", (nid,))
+                    _news_row = _news_cur.fetchone()
+                    _news_conn.close()
+                    if _news_row:
+                        news_publication_time = (_news_row[0] or _news_row[1] or "")
+                except Exception:
+                    news_publication_time = ""
             impacts = res.get("impacts") or []
             summary["material"] += 1
             # Rank exactly like the Gemini screener does: dedupe by ticker,
@@ -9140,15 +9200,10 @@ def apply_claude_predictions():
                     continue
                 else:
                     _stop = TRADE_STOP_PCT; _tgt = TRADE_TARGET_PCT
-                try:
-                    _ltp, _prev, _, _ = yf._get_cached_quote(ticker)
-                    _ltp = round(float(_ltp), 2) if (_ltp and _ltp > 0) else 0.0
-                    _prev = round(float(_prev), 2) if (_prev and _prev > 0) else 0.0
-                except Exception:
-                    _ltp = _prev = 0.0
-                base_price = _ltp if _ltp > 0 else _prev
-                current_price_now = base_price
-                _pub = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+                base_price, current_price_now, _pub = get_signal_prices_for_publication(
+                    ticker,
+                    news_publication_time
+                )
                 # Claude's per-ticker confidence is injected as the ensemble's
                 # AI vote (m7) via force_precalculated — so NO Gemini call, but
                 # the rule models + gate run exactly as for a live signal.
