@@ -587,46 +587,113 @@
             <!-- ============================================== -->
             <!-- VIEW: MACRO PULSE (shock detector)            -->
             <!-- ============================================== -->
-            <div id="view-macro-pulse" class="hidden max-w-5xl mx-auto w-full mt-4 space-y-6">
-                <div class="glass-panel p-8 rounded-xl relative overflow-hidden">
-                    <div class="absolute inset-0 bg-gradient-to-r from-purple-900/10 via-transparent to-transparent"></div>
-                    <div class="relative z-10">
-                        <div class="section-kicker w-max mb-3">
-                            <span>System Monitor · Real-time</span>
+            <div id="view-macro-pulse" class="hidden max-w-7xl mx-auto w-full mt-4 space-y-5">
+
+                <!-- ── HERO HEADER ── -->
+                <div class="mp-hero glass-panel rounded-2xl relative overflow-hidden">
+                    <div class="mp-hero-glow-a"></div>
+                    <div class="mp-hero-glow-b"></div>
+                    <div class="mp-hero-grid-bg"></div>
+                    <div class="relative z-10 flex flex-col md:flex-row md:items-end md:justify-between gap-6 p-8 md:p-10">
+                        <div>
+                            <div class="mp-kicker mb-4">
+                                <span class="mp-live-dot"></span>
+                                <span class="mp-kicker-text">LIVE · QUANTITATIVE SHOCK DETECTOR</span>
+                            </div>
+                            <h1 class="mp-hero-title">Macro <span class="mp-hero-title-accent">Pulse</span></h1>
+                            <p class="mp-hero-subtitle">
+                                Continuous &sigma;-band surveillance across FX, rates, commodities &amp; equity indices.<br>
+                                Threshold breaches auto-trigger actionable signals before NSE open.
+                            </p>
                         </div>
-                        <h1 class="text-3xl md:text-5xl font-display font-black tracking-tight gradient-heading">
-                            Macro Pulse
-                        </h1>
-                        <p class="text-slate-400 text-sm md:text-base mt-2 max-w-2xl leading-relaxed">
-                            Continuous quantitative scanning of the global macro regime. 
-                            Breaches of historical standard deviation bands trigger actionable shock signals across currencies, commodities, and yields.
-                        </p>
+                        <div class="flex flex-col gap-3 min-w-max">
+                            <div class="mp-regime-card" id="mp-regime-card">
+                                <div class="mp-regime-label">MACRO REGIME</div>
+                                <div class="mp-regime-value" id="mp-regime-value">SCANNING…</div>
+                                <div class="mp-regime-bar"><div class="mp-regime-fill" id="mp-regime-fill"></div></div>
+                            </div>
+                            <div class="mp-stats-row">
+                                <div class="mp-stat-cell">
+                                    <div class="mp-stat-value" id="mp-shock-count">&mdash;</div>
+                                    <div class="mp-stat-label">Active Shocks</div>
+                                </div>
+                                <div class="mp-stat-divider"></div>
+                                <div class="mp-stat-cell">
+                                    <div class="mp-stat-value" id="mp-actionable-count">&mdash;</div>
+                                    <div class="mp-stat-label">Actionable</div>
+                                </div>
+                                <div class="mp-stat-divider"></div>
+                                <div class="mp-stat-cell">
+                                    <div class="mp-stat-value" id="mp-instruments-count">&mdash;</div>
+                                    <div class="mp-stat-label">Instruments</div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <div id="macro-pulse-wrap" class="macro-pulse">
-                    <div class="macro-pulse-header">
-                        <span class="macro-pulse-kicker">
-                            <span class="ripple-pulse"></span>
-                            Macro Pulse · live shock detector
-                        </span>
-                        <span id="macro-pulse-count" class="macro-pulse-count">0 shocks</span>
+                <!-- ── ACTIVE SHOCK ALERTS ── -->
+                <div id="mp-alerts-section">
+                    <div class="mp-section-header">
+                        <div class="mp-section-title">
+                            <span class="mp-alert-dot" id="mp-alert-indicator"></span>
+                            Active Shock Alerts
+                        </div>
+                        <span id="macro-pulse-count" class="mp-section-badge">0 shocks</span>
                     </div>
-                    <div id="macro-pulse-chips" class="macro-pulse-chips">
-                        <!-- chips injected by renderMacroPulse() -->
+                    <div id="macro-pulse-chips" class="mp-alerts-grid">
+                        <div class="mp-alert-skeleton"></div>
+                        <div class="mp-alert-skeleton"></div>
                     </div>
                 </div>
 
-                <!-- Live snapshot grid — always visible, shows all tracked instruments -->
-                <div id="macro-snapshot-grid" class="macro-snapshot-grid">
-                    <!-- injected by fetchMacroPulse() -->
-                    <div class="macro-snap-skeleton animate-pulse"></div>
-                    <div class="macro-snap-skeleton animate-pulse"></div>
-                    <div class="macro-snap-skeleton animate-pulse"></div>
-                    <div class="macro-snap-skeleton animate-pulse"></div>
-                    <div class="macro-snap-skeleton animate-pulse"></div>
-                    <div class="macro-snap-skeleton animate-pulse"></div>
+                <!-- ── LIVE SNAPSHOT TABLE ── -->
+                <div class="glass-panel rounded-2xl overflow-hidden">
+                    <div class="mp-table-header">
+                        <div class="mp-section-title">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                            Live Instrument Monitor
+                        </div>
+                        <div class="mp-table-legend">
+                            <span class="mp-legend-item mp-legend-up">&uarr; Gaining</span>
+                            <span class="mp-legend-item mp-legend-dn">&darr; Losing</span>
+                            <span class="mp-legend-item mp-legend-shock">&zap; Shock</span>
+                        </div>
+                    </div>
+                    <div class="mp-table-scroll">
+                        <table class="mp-table">
+                            <thead>
+                                <tr>
+                                    <th>Instrument</th>
+                                    <th class="text-right">Last Price</th>
+                                    <th class="text-right">1D Change</th>
+                                    <th class="text-center">Momentum Bar</th>
+                                    <th class="text-center">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="macro-snapshot-grid">
+                                <tr class="mp-row-skeleton"><td colspan="5"><div class="mp-row-skel-bar animate-pulse"></div></td></tr>
+                                <tr class="mp-row-skeleton"><td colspan="5"><div class="mp-row-skel-bar animate-pulse"></div></td></tr>
+                                <tr class="mp-row-skeleton"><td colspan="5"><div class="mp-row-skel-bar animate-pulse"></div></td></tr>
+                                <tr class="mp-row-skeleton"><td colspan="5"><div class="mp-row-skel-bar animate-pulse"></div></td></tr>
+                                <tr class="mp-row-skeleton"><td colspan="5"><div class="mp-row-skel-bar animate-pulse"></div></td></tr>
+                                <tr class="mp-row-skeleton"><td colspan="5"><div class="mp-row-skel-bar animate-pulse"></div></td></tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
+
+                <!-- ── METHODOLOGY BAR ── -->
+                <div class="mp-methodology-bar">
+                    <div class="mp-method-item"><span class="mp-method-icon">&#x1F4E1;</span><span>Real-time feeds across 20+ global macro instruments</span></div>
+                    <div class="mp-method-sep"></div>
+                    <div class="mp-method-item"><span class="mp-method-icon">&#x1F4CA;</span><span>Alerts when move exceeds &plusmn;3&sigma; of historical daily range</span></div>
+                    <div class="mp-method-sep"></div>
+                    <div class="mp-method-item"><span class="mp-method-icon">&#x26A1;</span><span>Actionable = before NSE open &nbsp;&middot;&nbsp; Info = already priced in</span></div>
+                    <div class="mp-method-sep"></div>
+                    <div class="mp-method-item"><span class="mp-method-icon">&#x1F504;</span><span>Auto-refreshes every 90 seconds</span></div>
+                </div>
+
             </div>
 
 

@@ -3109,62 +3109,62 @@ window.closeRipple = closeRipple;
 // ════════════════════════════════════════════════════════════════════════
 
 async function fetchMacroPulse() {
-    const wrap = document.getElementById('macro-pulse-wrap');
-    const chipsEl = document.getElementById('macro-pulse-chips');
-    const countEl = document.getElementById('macro-pulse-count');
+    const chipsEl  = document.getElementById('macro-pulse-chips');
+    const countEl  = document.getElementById('macro-pulse-count');
     const snapGrid = document.getElementById('macro-snapshot-grid');
-    if (!wrap || !chipsEl) return;
+    // New UI elements
+    const shockCountEl      = document.getElementById('mp-shock-count');
+    const actionableCountEl = document.getElementById('mp-actionable-count');
+    const instrumentCountEl = document.getElementById('mp-instruments-count');
+    const regimeValueEl     = document.getElementById('mp-regime-value');
+    const regimeFillEl      = document.getElementById('mp-regime-fill');
+    const alertDotEl        = document.getElementById('mp-alert-indicator');
+
+    if (!chipsEl) return;
+
     try {
         const res = await fetch('/api/macro/events');
-         if (!res.ok) {
-             wrap.classList.remove('hidden');
-             chipsEl.innerHTML = `
-                 <div class="w-full py-12 text-center">
-                     <div class="text-4xl mb-3">⚠️</div>
-                     <div class="text-white font-display font-bold text-lg mb-1">Feed Offline</div>
-                     <p class="text-slate-400 text-sm max-w-md mx-auto">Unable to fetch live macroeconomic events. Check connection.</p>
-                 </div>
-             `;
-             if (countEl) countEl.innerText = "Error";
-             return;
-         }
-        const data = await res.json();
-        const events = (data && data.events) || [];
+
+        if (!res.ok) {
+            _mpRenderError(chipsEl, snapGrid, countEl, '⚠️', 'Feed Offline', 'Unable to fetch live macroeconomic events. Check your connection.');
+            return;
+        }
+
+        const data     = await res.json();
+        const events   = (data && data.events)   || [];
         const snapshot = (data && data.snapshot) || [];
-        wrap.classList.remove('hidden');
+
+        // ── Update stats row ──
+        const actionable = events.filter(e => !e.during_nse_hours).length;
+        if (shockCountEl)      shockCountEl.textContent      = events.length;
+        if (actionableCountEl) actionableCountEl.textContent = actionable;
+        if (instrumentCountEl) instrumentCountEl.textContent = snapshot.length || '—';
+        if (countEl)           countEl.textContent = events.length
+            ? `${events.length} active shock${events.length === 1 ? '' : 's'}`
+            : '0 shocks';
+
+        // ── Update regime card ──
+        _mpUpdateRegime(events, regimeValueEl, regimeFillEl);
+
+        // ── Alert dot ──
+        if (alertDotEl) {
+            if (events.length) {
+                alertDotEl.classList.add('is-active');
+            } else {
+                alertDotEl.classList.remove('is-active');
+            }
+        }
+
+        // ── Render alert cards ──
         if (!events.length) {
             chipsEl.innerHTML = `
-                <div class="w-full py-12 text-center">
-                    <div class="text-3xl mb-3">🟢</div>
-                    <div class="text-white font-display font-bold text-lg mb-1">System Stable</div>
-                    <p class="text-slate-400 text-sm max-w-sm mx-auto">No macroeconomic shock thresholds have been breached in the last 24 hours. Global systems are nominal.</p>
-                </div>
-            `;
-            if (countEl) countEl.innerText = "0 shocks";
+                <div class="mp-alert-empty">
+                    <div class="mp-alert-empty-icon">🟢</div>
+                    <div class="mp-alert-empty-title">All Systems Stable</div>
+                    <p class="mp-alert-empty-sub">No macroeconomic shock thresholds have been breached in the last 24 hours. Global regime is nominal.</p>
+                </div>`;
         } else {
-            if (countEl) countEl.innerText = `${events.length} active shock${events.length === 1 ? '' : 's'}`;
-            chipsEl.innerHTML = events.map(ev => {
-                const pct = parseFloat(ev.change_pct_1d || 0);
-                const dirClass = pct >= 0 ? 'up' : 'down';
-                const arrow = pct >= 0
-                    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
-                    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
-                const levelClass = (ev.shock_level || '').toLowerCase() === 'major' ? 'major' : 'significant';
-                const isActionable = !ev.during_nse_hours;
-                const actionBadge = isActionable
-                    ? '<span class="macro-chip-action actionable" title="NSE was closed when detected — positioning window for next open">⚡ Actionable</span>'
-                    : '<span class="macro-chip-action info" title="NSE was open when detected — likely already in price">ⓘ Info</span>';
-                return `
-                    <button class="macro-chip ${isActionable ? 'is-actionable' : 'is-info'}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open macro shock ripple">
-                        <span class="macro-chip-arrow ${dirClass === 'up' ? 'text-emerald-400' : 'text-rose-400'}">${arrow}</span>
-                        <span class="macro-chip-label">${escapeHtml(ev.instrument_label || ev.symbol || ev.instrument_key)}</span>
-                        <span class="macro-chip-pct ${dirClass}">${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%</span>
-                        <span class="macro-chip-level ${levelClass}">${escapeHtml(ev.shock_level || '')}</span>
-                        ${actionBadge}
-                    </button>
-                `;
-            }).join('');
-            // Wire click → openMacroRipple
+            chipsEl.innerHTML = events.map(ev => _mpRenderAlertCard(ev)).join('');
             chipsEl.querySelectorAll('[data-macro-event-id]').forEach(btn => {
                 btn.addEventListener('click', () => {
                     openMacroRipple(parseInt(btn.getAttribute('data-macro-event-id'), 10));
@@ -3172,47 +3172,155 @@ async function fetchMacroPulse() {
             });
         }
 
-        // Render live snapshot grid — always shown regardless of shocks
-        if (snapGrid && snapshot.length) {
-            snapGrid.innerHTML = snapshot.map(item => {
-                const pct = parseFloat(item.change_pct_1d || 0);
-                const isUp = pct >= 0;
-                const pctFmt = `${isUp ? '+' : ''}${pct.toFixed(2)}%`;
-                const pctColor = isUp ? '#34d399' : '#fb7185';
-                const pctBg = isUp ? 'rgba(16,185,129,0.10)' : 'rgba(244,63,94,0.10)';
-                const pctBorder = isUp ? 'rgba(16,185,129,0.25)' : 'rgba(244,63,94,0.25)';
-                const arrow = isUp
-                    ? '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
-                    : '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
-                // snapshot uses: item.label, item.key, item.last (not instrument_label/last_price)
-                const label = item.label || item.instrument_label || item.key || item.instrument_key || '';
-                const lastPx = (item.last != null ? item.last : item.last_price) != null
-                    ? parseFloat(item.last != null ? item.last : item.last_price).toLocaleString(undefined, {maximumFractionDigits: 4})
-                    : '—';
-                const isShock = item.is_shock_3pct || item.is_shock_5pct;
-                return `
-                    <div class="macro-snap-card${isShock ? ' is-shock' : ''}">
-                        <div class="macro-snap-label">${escapeHtml(label)}${isShock ? ' <span style="color:#fb7185;font-size:9px;">⚡</span>' : ''}</div>
-                        <div class="macro-snap-price">${lastPx}</div>
-                        <div class="macro-snap-pct" style="color:${pctColor};background:${pctBg};border:1px solid ${pctBorder};">
-                            <span style="display:inline-flex;align-items:center;gap:3px;color:${pctColor}">${arrow}${pctFmt}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-        } else if (snapGrid) {
-            snapGrid.innerHTML = '';
-        }
+        // ── Render instrument table ──
+        _mpRenderSnapshotTable(snapGrid, snapshot, events);
+
     } catch (err) {
         console.error('[MacroPulse] fetch error:', err);
-        wrap.classList.remove('hidden');
-        chipsEl.innerHTML = `
-            <div class="w-full py-8 text-center">
-                <div class="text-3xl mb-2">⚠️</div>
-                <div class="text-slate-300 text-sm">Could not load macro data. Will retry shortly.</div>
-            </div>
-        `;
+        _mpRenderError(chipsEl, snapGrid, countEl, '⚠️', 'Connection Error', 'Could not load macro data. Will retry automatically in 90s.');
     }
+}
+
+/** Determine and render the macro regime indicator */
+function _mpUpdateRegime(events, valueEl, fillEl) {
+    if (!valueEl || !fillEl) return;
+    const majorCount = events.filter(e => (e.shock_level || '').toLowerCase() === 'major').length;
+    const sigCount   = events.filter(e => (e.shock_level || '').toLowerCase() === 'significant').length;
+    let label, cls, fillPct;
+    if (majorCount >= 2) {
+        label = 'SHOCK REGIME'; cls = 'regime-shock'; fillPct = 90;
+    } else if (majorCount === 1 || sigCount >= 3) {
+        label = 'ELEVATED RISK'; cls = 'regime-caution'; fillPct = 60;
+    } else if (sigCount >= 1 || events.length > 0) {
+        label = 'CAUTION'; cls = 'regime-caution'; fillPct = 40;
+    } else {
+        label = 'STABLE'; cls = 'regime-stable'; fillPct = 15;
+    }
+    valueEl.textContent = label;
+    valueEl.className = `mp-regime-value ${cls}`;
+    fillEl.style.width = fillPct + '%';
+    // Colour the fill based on regime
+    if (cls === 'regime-shock')   fillEl.style.background = 'linear-gradient(90deg,#f43f5e,#fb7185)';
+    else if (cls === 'regime-caution') fillEl.style.background = 'linear-gradient(90deg,#f59e0b,#fbbf24)';
+    else fillEl.style.background = 'linear-gradient(90deg,#10b981,#34d399)';
+}
+
+/** Render a single premium alert card */
+function _mpRenderAlertCard(ev) {
+    const pct         = parseFloat(ev.change_pct_1d || 0);
+    const isUp        = pct >= 0;
+    const pctFmt      = `${isUp ? '+' : ''}${pct.toFixed(2)}%`;
+    const levelRaw    = (ev.shock_level || '').toLowerCase();
+    const levelCls    = levelRaw === 'major' ? 'major' : 'significant';
+    const isActionable = !ev.during_nse_hours;
+    const label       = escapeHtml(ev.instrument_label || ev.symbol || ev.instrument_key || '—');
+    const lastPx      = ev.last_price != null
+        ? parseFloat(ev.last_price).toLocaleString(undefined, { maximumFractionDigits: 4 })
+        : '—';
+    const detectedAt  = ev.detected_at ? new Date(ev.detected_at + (ev.detected_at.includes('Z') ? '' : 'Z')).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+
+    const arrowSvg = isUp
+        ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
+        : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>`;
+
+    return `
+        <button class="mp-alert-card shock-${levelCls}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open shock ripple for ${label}">
+            <div class="mp-alert-row1">
+                <div>
+                    <div class="mp-alert-ticker">${label}</div>
+                    <div class="mp-alert-last-price">Last: ${lastPx}</div>
+                </div>
+                <div style="text-align:right">
+                    <div class="mp-alert-pct ${isUp ? 'up' : 'down'}" style="display:inline-flex;align-items:center;gap:5px;">${arrowSvg}${pctFmt}</div>
+                </div>
+            </div>
+            <div class="mp-alert-row2">
+                <span class="mp-alert-level-badge ${levelCls}">${escapeHtml(ev.shock_level || '')}</span>
+                <span class="mp-alert-action-badge ${isActionable ? 'actionable' : 'info'}">
+                    ${isActionable ? '⚡ Actionable' : 'ⓘ Info'}
+                </span>
+            </div>
+            <div class="mp-alert-divider"></div>
+            <div class="mp-alert-footer">
+                <span class="mp-alert-detected">Detected ${detectedAt} IST</span>
+                ${ev.has_ripple ? `<span class="mp-alert-ripple-cta">
+                    <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
+                    View Ripple
+                </span>` : ''}
+            </div>
+        </button>`;
+}
+
+/** Render the live snapshot as a professional table */
+function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
+    if (!tbodyEl) return;
+    if (!snapshot || !snapshot.length) {
+        tbodyEl.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:32px;color:#475569;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.10em;">NO LIVE DATA AVAILABLE</td></tr>`;
+        return;
+    }
+    // Build a set of shocked instrument keys for badge display
+    const shockedKeys = new Set(events.map(e => e.instrument_key || ''));
+
+    tbodyEl.innerHTML = snapshot.map(item => {
+        const pct    = parseFloat(item.change_pct_1d || 0);
+        const isUp   = pct >= 0;
+        const pctFmt = `${isUp ? '+' : ''}${pct.toFixed(2)}%`;
+        const label  = item.label || item.instrument_label || item.key || item.instrument_key || '';
+        const key    = item.key || item.instrument_key || '';
+        const lastPx = (item.last != null ? item.last : item.last_price) != null
+            ? parseFloat(item.last != null ? item.last : item.last_price).toLocaleString(undefined, { maximumFractionDigits: 4 })
+            : '—';
+        const isShock = item.is_shock_3pct || item.is_shock_5pct || shockedKeys.has(key);
+        // Momentum bar: cap at 5% for 100% fill
+        const momPct  = Math.min(Math.abs(pct) / 5 * 100, 100);
+        const dirCls  = isUp ? 'up' : 'down';
+        const arrowSvg = isUp
+            ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
+            : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>`;
+
+        return `
+            <tr class="${isShock ? 'is-shock-row' : ''}">
+                <td>
+                    <div class="mp-td-instrument">
+                        <div>
+                            <div class="mp-td-instrument-label">${escapeHtml(label)}${isShock ? ' <span class="mp-td-shock-badge">⚡ SHOCK</span>' : ''}</div>
+                            ${key && key !== label ? `<div class="mp-td-instrument-key">${escapeHtml(key)}</div>` : ''}
+                        </div>
+                    </div>
+                </td>
+                <td class="text-right">
+                    <span class="mp-td-price">${lastPx}</span>
+                </td>
+                <td class="text-right">
+                    <span class="mp-td-pct ${dirCls}" style="display:inline-flex;align-items:center;gap:4px;">${arrowSvg}${pctFmt}</span>
+                </td>
+                <td class="text-center">
+                    <div class="mp-momentum-wrap">
+                        <div class="mp-momentum-track">
+                            <div class="mp-momentum-fill ${dirCls}" style="width:${momPct.toFixed(1)}%"></div>
+                        </div>
+                        <span class="mp-momentum-val" style="color:${isUp ? '#34d399' : '#fb7185'}">${pctFmt}</span>
+                    </div>
+                </td>
+                <td class="text-center">
+                    <span class="mp-status-badge ${isShock ? 'shock' : 'normal'}">
+                        ${isShock ? '⚡ SHOCK' : '● Normal'}
+                    </span>
+                </td>
+            </tr>`;
+    }).join('');
+}
+
+/** Render an error state into both alert and table areas */
+function _mpRenderError(chipsEl, snapGrid, countEl, icon, title, sub) {
+    if (chipsEl) chipsEl.innerHTML = `
+        <div class="mp-alert-empty" style="border-color:rgba(244,63,94,0.20);background:rgba(244,63,94,0.03);">
+            <div class="mp-alert-empty-icon">${icon}</div>
+            <div class="mp-alert-empty-title">${title}</div>
+            <p class="mp-alert-empty-sub">${sub}</p>
+        </div>`;
+    if (snapGrid) snapGrid.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:32px;color:#475569;font-family:'JetBrains Mono',monospace;font-size:11px;">FEED UNAVAILABLE</td></tr>`;
+    if (countEl) countEl.textContent = 'Error';
 }
 
 
