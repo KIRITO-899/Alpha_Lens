@@ -6826,22 +6826,7 @@ def get_all_news():
             attach_market_change_percentages(stocks, market_open=mkt_open, quote_cache=quote_cache)
             ni['affected_stocks'] = stocks
 
-        response_data = {"market_open": mkt_open, "news": news_items, "limit": limit, "offset": offset}
-        res = jsonify(response_data)
-        
-        import hashlib
-        etag = f'W/"{hashlib.md5(res.get_data()).hexdigest()}"'
-        res.headers['ETag'] = etag
-        res.headers['Cache-Control'] = 'public, max-age=55'
-        
-        if_none_match = request.headers.get('If-None-Match')
-        if if_none_match and if_none_match == etag:
-            res304 = app.response_class(status=304)
-            res304.headers['ETag'] = etag
-            res304.headers['Cache-Control'] = 'public, max-age=55'
-            return res304
-            
-        return res
+        return jsonify({"market_open": mkt_open, "news": news_items, "limit": limit, "offset": offset})
     except Exception as e:
         print("Error fetching all news", e)
         import traceback; traceback.print_exc()
