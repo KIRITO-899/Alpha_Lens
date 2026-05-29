@@ -127,7 +127,7 @@
       // Fire the two heaviest first-paint fetches as soon as <head> parses.
       // window.__alphaWarmFetches resolves with both responses ready.
       window.__alphaWarmFetches = {
-        news:    fetch('/api/news/all?limit=7500&lite=1').then(r => r.ok ? r.json() : null).catch(() => null),
+        news:    fetch('/api/news/all?limit=500&lite=1').then(r => r.ok ? r.json() : null).catch(() => null), // OPT-F1: 500 covers 7 days at normal ingestion rates
         indices: fetch('/api/indices').then(r => r.ok ? r.json() : null).catch(() => null),
       };
 

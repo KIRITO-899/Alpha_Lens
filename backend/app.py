@@ -797,6 +797,9 @@ def init_news_db():
     # Default 'screened' so any pre-existing rows are not treated as pending.
     run_query_safe("ALTER TABLE news ADD COLUMN ai_status TEXT DEFAULT 'screened'")
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_ai_status ON news(ai_status)")
+    # OPT-B2: Index on created_at DESC covers the WHERE + ORDER BY in /api/news/all,
+    # turning a full table scan into an index seek. Critical on large tables.
+    run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_created_at ON news(created_at DESC)")
 
     # ── "The Ripple" — propagation graphs for macro-grade big news ──
     # Stored separately so we can drop/regenerate without touching the

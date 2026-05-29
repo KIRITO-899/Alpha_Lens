@@ -445,7 +445,7 @@
                     window.__alphaWarmFetches.news = null;  // consume once
                 }
                 if (!payload) {
-                    const response = await fetch('/api/news/all?limit=7500&lite=1');
+                    const response = await fetch('/api/news/all?limit=500&lite=1'); // OPT-F1: 500 covers 7 days at normal ingestion rates
                     payload = await response.json();
                 }
                 // Handle both old array format and new {market_open, news} format
@@ -1698,25 +1698,16 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             } catch (e) { console.error('Indices fetch failed', e); }
         }
 
-        // Market-aware polling: faster during open hours, slower when closed
+        // Market-aware polling: faster during open hours, slower when closed.
+        // scheduleNewsPolling and scheduleIndexPolling are self-rescheduling —
+        // they each call themselves inside their own setTimeout callback so only
+        // one loop per resource runs at a time. (OPT-F3: removed the dead
+        // schedulePolling() wrapper that would have launched a second copy of
+        // each loop if ever called.)
         function startSmartPolling() {
             // Initial fetch
             fetchLiveNews();
             fetchIndices();
-
-            function schedulePolling() {
-                // Re-check market status every tick
-                const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
-                const day = nowIST.getDay(); // 0=Sun, 6=Sat
-                const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
-                const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930; // 9:15–15:30
-
-                const newsInterval = isOpen ? 30000 : 300000;  // 30s open, 5 min closed
-                const indexInterval = isOpen ? 30000 : 600000;  // 30s open, 10 min closed
-
-                setTimeout(() => { fetchLiveNews(); scheduleNewsPolling(); }, newsInterval);
-                setTimeout(() => { fetchIndices(); scheduleIndexPolling(); }, indexInterval);
-            }
 
             function scheduleNewsPolling() {
                 const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
@@ -1734,7 +1725,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 setTimeout(() => { fetchIndices(); updateWatchlistPrices(); scheduleIndexPolling(); }, isOpen ? 30000 : 60000);
             }
 
-            // Kick off independent polling loops
+            // Kick off the two independent self-rescheduling loops
             scheduleNewsPolling();
             scheduleIndexPolling();
         }
