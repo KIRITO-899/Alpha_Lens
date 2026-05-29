@@ -1714,7 +1714,12 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 const day = nowIST.getDay();
                 const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
                 const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-                setTimeout(() => { fetchLiveNews(); scheduleNewsPolling(); }, isOpen ? 30000 : 120000);
+                setTimeout(() => { 
+                    if (!document.hidden) {
+                        fetchLiveNews(); 
+                    }
+                    scheduleNewsPolling(); 
+                }, isOpen ? 30000 : 120000);
             }
 
             function scheduleIndexPolling() {
@@ -1722,12 +1727,37 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 const day = nowIST.getDay();
                 const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
                 const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-                setTimeout(() => { fetchIndices(); updateWatchlistPrices(); scheduleIndexPolling(); }, isOpen ? 30000 : 60000);
+                setTimeout(() => { 
+                    if (!document.hidden) {
+                        fetchIndices(); 
+                        updateWatchlistPrices();
+                    }
+                    scheduleIndexPolling(); 
+                }, isOpen ? 30000 : 60000);
             }
 
             // Kick off the two independent self-rescheduling loops
             scheduleNewsPolling();
             scheduleIndexPolling();
+
+            // OPT-F5: Immediately fetch fresh data when user returns to backgrounded tab
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) {
+                    const macroView = document.getElementById('view-macro-pulse');
+                    const calendarView = document.getElementById('view-calendar');
+                    if (macroView && !macroView.classList.contains('hidden')) {
+                        if (typeof fetchMacroPulse === 'function') fetchMacroPulse();
+                    } else if (calendarView && !calendarView.classList.contains('hidden')) {
+                        if (typeof fetchCalendar === 'function') fetchCalendar();
+                    } else {
+                        fetchLiveNews();
+                        fetchIndices();
+                        updateWatchlistPrices();
+                    }
+                    if (typeof updateTickerBar === 'function') updateTickerBar();
+                    if (typeof pollSignalNotifications === 'function') pollSignalNotifications();
+                }
+            });
         }
 
         window.onload = () => {
@@ -1757,9 +1787,9 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
 
         function initPremiumFeatures() {
             updateTickerBar();
-            setInterval(updateTickerBar, 30000);
+            setInterval(() => { if (!document.hidden) updateTickerBar(); }, 30000);
             pollSignalNotifications();
-            setInterval(pollSignalNotifications, 30000);
+            setInterval(() => { if (!document.hidden) pollSignalNotifications(); }, 30000);
             initPremiumInteractions();
             // v2 premium UI features (#9 trail, #11 parallax, #19 live-pulse intensity)
             initCursorTrail();
@@ -1894,7 +1924,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 } catch (e) {/* swallow — non-critical */}
             }
             tick();
-            setInterval(tick, 30000);
+            setInterval(() => { if (!document.hidden) tick(); }, 30000);
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -3505,7 +3535,7 @@ if (document.readyState === 'loading') {
 } else {
     fetchMacroPulse();
 }
-setInterval(() => { fetchMacroPulse(); }, 90 * 1000);
+setInterval(() => { if (!document.hidden && !document.getElementById('view-macro-pulse').classList.contains('hidden')) fetchMacroPulse(); }, 90 * 1000);
 
 window.openMacroRipple = openMacroRipple;
 window.fetchMacroPulse = fetchMacroPulse;
@@ -3807,7 +3837,10 @@ function _calStartCountdown() {
         if (clockEl) clockEl.innerText = label;
     };
     tick();
-    _calCountdownTimer = setInterval(tick, 1000);
+    const hasReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (!hasReducedMotion) {
+        _calCountdownTimer = setInterval(tick, 1000);
+    }
 }
 
 async function fetchCalendar() {
@@ -3832,7 +3865,11 @@ if (typeof _origSwitchTabCal === 'function') {
         if (tab === 'calendar' && !_calBooted) {
             _calBooted = true;
             fetchCalendar();
-            setInterval(fetchCalendar, 5 * 60 * 1000);
+            setInterval(() => {
+                if (!document.hidden && !document.getElementById('view-calendar').classList.contains('hidden')) {
+                    fetchCalendar();
+                }
+            }, 5 * 60 * 1000);
         }
     };
 }

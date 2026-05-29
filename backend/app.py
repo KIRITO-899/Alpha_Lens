@@ -360,10 +360,19 @@ def route_cache(ttl_seconds: int):
             with _ROUTE_CACHE_LOCK:
                 entry = _ROUTE_CACHE.get(key)
                 if entry and (now - entry['ts']) < ttl_seconds:
-                    # Return a NEW Flask Response so any after_request hooks
-                    # (Cache-Control, gzip via flask-compress) still apply.
+                    # Check ETag conditional requests
+                    etag = entry.get('headers', {}).get('ETag')
+                    if etag and request.headers.get('If-None-Match') == etag:
+                        res304 = app.response_class(status=304)
+                        for k, v in entry.get('headers', {}).items():
+                            res304.headers[k] = v
+                        return res304
+                    
                     body, mimetype, status = entry['body'], entry['mimetype'], entry['status']
-                    return app.response_class(body, status=status, mimetype=mimetype)
+                    res = app.response_class(body, status=status, mimetype=mimetype)
+                    for k, v in entry.get('headers', {}).items():
+                        res.headers[k] = v
+                    return res
             # Cache miss — compute, memoize, return.
             result = fn(*args, **kwargs)
             try:
@@ -375,15 +384,18 @@ def route_cache(ttl_seconds: int):
                     body_obj, status = result, 200
                 if hasattr(body_obj, 'get_data'):
                     body, mimetype = body_obj.get_data(), body_obj.mimetype
+                    headers = dict(body_obj.headers)
                 else:
                     # Fallback — shouldn't normally happen
                     body, mimetype = str(body_obj).encode('utf-8'), 'application/json'
+                    headers = {}
                 with _ROUTE_CACHE_LOCK:
                     _ROUTE_CACHE[key] = {
                         'ts': now,
                         'body': body,
                         'mimetype': mimetype,
                         'status': status if isinstance(status, int) else 200,
+                        'headers': headers,
                     }
             except Exception:
                 pass
@@ -6665,6 +6677,7 @@ def get_news_ripple(news_id):
 
 
 @app.route('/api/news/all', methods=['GET'])
+@route_cache(ttl_seconds=55)
 def get_all_news():
     """
     Returns recent (last 7 days) news with their affected stock impacts.
@@ -6799,7 +6812,22 @@ def get_all_news():
             attach_market_change_percentages(stocks, market_open=mkt_open, quote_cache=quote_cache)
             ni['affected_stocks'] = stocks
 
-        return jsonify({"market_open": mkt_open, "news": news_items, "limit": limit, "offset": offset})
+        response_data = {"market_open": mkt_open, "news": news_items, "limit": limit, "offset": offset}
+        res = jsonify(response_data)
+        
+        import hashlib
+        etag = f'W/"{hashlib.md5(res.get_data()).hexdigest()}"'
+        res.headers['ETag'] = etag
+        res.headers['Cache-Control'] = 'public, max-age=55'
+        
+        if_none_match = request.headers.get('If-None-Match')
+        if if_none_match and if_none_match == etag:
+            res304 = app.response_class(status=304)
+            res304.headers['ETag'] = etag
+            res304.headers['Cache-Control'] = 'public, max-age=55'
+            return res304
+            
+        return res
     except Exception as e:
         print("Error fetching all news", e)
         import traceback; traceback.print_exc()

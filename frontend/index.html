@@ -61,16 +61,20 @@
          Marked as=style because the @font-face declarations live inside a
          CSS file. -->
     <link rel="preload" as="style" crossorigin
-          href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap">
+          href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=optional">
 
     <!-- T2.12: Three.js removed. The particle background it powered renders into
          #canvas-container which is display:none — the aurora mesh layer (CSS only)
          replaced it visually. ~150 KB and a 60fps animation loop saved per visit. -->
     <!-- GSAP is loaded async — used for the auth-modal unlock animation only. -->
 
-    <link
-        href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=swap"
-        rel="stylesheet">
+    <link rel="stylesheet" crossorigin
+          href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=optional"
+          media="print" onload="this.media='all'">
+    <noscript>
+        <link rel="stylesheet"
+              href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=Space+Grotesk:wght@300;400;500;600;700;900&family=JetBrains+Mono:wght@400;500;700&display=optional">
+    </noscript>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230A0A0C'/%3E%3Ctext x='16' y='21' text-anchor='middle' fill='%23C9A962' font-family='system-ui' font-size='11' font-weight='700'%3EAL%3C/text%3E%3C/svg%3E">
 
     <!-- ── T3.14 PWA manifest + Apple Web App tags ──
@@ -161,7 +165,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v4-2026-05-29-logo-bold-split">
+    <link rel="stylesheet" href="/styles.css?v=al-v6-opt-2026-05-30">
 </head>
 
 <body class="antialiased">
@@ -1180,7 +1184,7 @@
     <!-- Extracted to app.js. `defer` keeps end-of-body execution timing.
          Version query mirrors sw.js CACHE_VERSION so browsers HTTP-cache only
          within a single deploy and fetch fresh on every version bump. -->
-    <script src="/app.js?v=al-v5-2026-05-30-ripple-arrow-flow" defer></script>
+    <script src="/app.js?v=al-v6-opt-2026-05-30" defer></script>
 </body>
 
 </html>

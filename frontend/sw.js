@@ -20,7 +20,7 @@
 // Bump on every deploy that changes static assets. Activate handler purges
 // any cache whose key doesn't start with this version, so stale CSS/JS from
 // the previous deploy are evicted automatically.
-const CACHE_VERSION = 'al-v4-2026-05-29-logo-bold-split';
+const CACHE_VERSION = 'al-v6-opt-2026-05-30';
 const STATIC_CACHE  = `${CACHE_VERSION}-static`;
 const API_CACHE     = `${CACHE_VERSION}-api`;
 const HTML_CACHE    = `${CACHE_VERSION}-html`;
@@ -29,6 +29,8 @@ const HTML_CACHE    = `${CACHE_VERSION}-html`;
 // because T2.7 made it lazy — pre-caching it here would defeat that win.
 const STATIC_PRECACHE = [
   '/manifest.json',
+  '/app.js?v=al-v6-opt-2026-05-30',
+  '/styles.css?v=al-v6-opt-2026-05-30',
 ];
 
 // ── Install: warm the static cache ────────────────────────────────────────
