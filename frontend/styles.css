@@ -1752,10 +1752,136 @@ main.container {
     rgba(0,0,0,0.35);
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 14px;
-  overflow: hidden;
-  min-height: 460px;
+  overflow-x: auto;
+  overflow-y: auto;
+  min-height: 300px;
 }
-#ripple-graph { width: 100%; height: 100%; min-height: 460px; display: block; }
+#ripple-graph { width: 100%; height: 100%; min-height: 300px; display: block; }
+
+/* ── Arrow-Flow Layout (rfl-*) ── */
+.rfl-container {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 0;
+  padding: 28px 20px 24px;
+  min-width: max-content;
+  min-height: 280px;
+}
+.rfl-empty-state {
+  min-width: unset;
+  width: 100%;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+  color: #64748b;
+}
+.rfl-column {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 140px;
+  max-width: 190px;
+}
+.rfl-col-header {
+  text-align: center;
+  margin-bottom: 6px;
+}
+.rfl-col-label {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 800;
+  letter-spacing: 0.20em; text-transform: uppercase;
+}
+.rfl-col-sublabel {
+  display: block;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px; color: #475569;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin-top: 2px;
+}
+.rfl-chips-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.rfl-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  cursor: pointer;
+  transition: all 0.16s ease;
+  min-width: 120px;
+  user-select: none;
+}
+.rfl-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+  filter: brightness(1.12);
+}
+.rfl-chip--active {
+  box-shadow: 0 0 0 2px rgba(168,85,247,0.6), 0 4px 18px rgba(168,85,247,0.20) !important;
+  border-color: rgba(168,85,247,0.55) !important;
+}
+.rfl-chip--trigger {
+  background: rgba(168,85,247,0.12);
+  border-color: rgba(168,85,247,0.35);
+  cursor: default;
+  max-width: 160px;
+  flex-wrap: wrap;
+}
+.rfl-chip--trigger:hover { transform: none; filter: none; box-shadow: none; }
+.rfl-chip-icon { font-size: 14px; flex-shrink: 0; }
+.rfl-chip-ticker {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px; font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #f1f5f9;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 110px;
+}
+.rfl-chip-dir { flex-shrink: 0; display: flex; align-items: center; }
+.rfl-chip-conf {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 9px; font-weight: 700;
+  letter-spacing: 0.06em;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.rfl-arrow-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  align-self: stretch;
+  min-width: 52px;
+  padding-top: 46px;
+}
+.rfl-arrow-svg {
+  width: 48px;
+  height: 24px;
+  flex-shrink: 0;
+  overflow: visible;
+}
+.rfl-arrow-label {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 8px; font-weight: 700;
+  letter-spacing: 0.08em;
+  margin-top: 4px;
+  opacity: 0.7;
+  white-space: nowrap;
+}
 .ripple-loading {
   position: absolute; inset: 0;
   display: flex; flex-direction: column; align-items: center; justify-content: center;

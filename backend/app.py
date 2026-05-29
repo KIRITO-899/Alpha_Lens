@@ -2285,6 +2285,24 @@ def generate_ripple_graph(headline, body, catalyst_type, primary_tickers):
 
     primary_tickers_str = ", ".join(primary_tickers) if primary_tickers else "none yet identified"
     prompt = f"""You are the Chief Macro Strategist at a top Indian hedge fund.
+DOMAIN GUIDANCE FOR ACCURACY:
+To help you make extremely accurate, institutional-grade predictions, here is the official mapping of news categories and systemic triggers to Indian equities:
+- Energy/Oil news (crude, gas):
+  * Rising crude price is BULLISH for upstream (ONGC.NS, OIL.NS, RELIANCE.NS) but BEARISH for downstream/OMCs (BPCL.NS, IOC.NS, HPCL.NS), paints (ASIANPAINT.NS, BERGEPAINT.NS), aviation (INDIGO.NS), and tyres (APOLLOTYRE.NS, MRF.NS).
+  * Falling crude price is BEARISH for upstream (ONGC.NS) but BULLISH for downstream/OMCs (BPCL.NS, HPCL.NS, IOC.NS), paints (ASIANPAINT.NS), aviation (INDIGO.NS), and tyres (APOLLOTYRE.NS).
+- Inflation/Rates/Monetary Policy (RBI/Fed):
+  * Rate cuts / dovish sentiment is BULLISH for interest-rate sensitives: Banks/NBFCs (HDFCBANK.NS, ICICIBANK.NS, SBIN.NS, BAJFINANCE.NS), Real Estate (DLF.NS, OBEROIRLTY.NS), and Autos (MARUTI.NS, TATAMOTORS.NS).
+  * Rate hikes / hawkish sentiment is BEARISH for Banks, Real Estate, and Autos.
+- IT demand / US Economic data / US slow downs:
+  * Positive demand / US growth is BULLISH for IT services exporters (TCS.NS, INFY.NS, HCLTECH.NS, WIPRO.NS, TECHM.NS).
+  * Negative demand / US recession fears is BEARISH for IT services.
+- Geopolitical tensions / safe-havens:
+  * Volatility / rising tension is BULLISH for Defensives: Gold (TITAN.NS), FMCG (ITC.NS, HINDUNILVR.NS), and Pharma (SUNPHARMA.NS, CIPLA.NS).
+- Capital expenditures/Infrastructure/Budget:
+  * Increased public spending is BULLISH for Capital Goods & Infrastructure: L&T (LT.NS), SIEMENS.NS, ABB.NS, BHEL.NS.
+- Rural economy/Monsoon:
+  * Good monsoon / rural stimulus is BULLISH for FMCG (HINDUNILVR.NS, DABUR.NS) and Auto/Tractors (M&M.NS, MARUTI.NS, ESCORTS.NS).
+
 A SYSTEMIC news event just hit. Your job: build the propagation graph showing
 HOW this event will ripple across the Indian equity market in 3 tiers.
 
@@ -2413,6 +2431,26 @@ def generate_macro_ripple_graph(instrument):
     direction_word = "up" if pct > 0 else "down"
 
     prompt = f"""You are the Chief Macro Strategist at a top Indian hedge fund.
+DOMAIN GUIDANCE FOR ACCURACY:
+To help you make extremely accurate, institutional-grade predictions, here is the official mapping of systemic shocks to Indian equities:
+- BRENT CRUDE / WTI CRUDE:
+  * If UP (BULLISH for upstream oil & gas: ONGC.NS, OIL.NS, RELIANCE.NS. BEARISH for paint: ASIANPAINT.NS, BERGEPAINT.NS; aviation: INDIGO.NS; OMCs: BPCL.NS, IOC.NS, HPCL.NS; tyre: APOLLOTYRE.NS, MRF.NS).
+  * If DOWN (BEARISH for upstream oil & gas: ONGC.NS, OIL.NS. BULLISH for paint: ASIANPAINT.NS, BERGEPAINT.NS; aviation: INDIGO.NS; OMCs: BPCL.NS, IOC.NS, HPCL.NS; tyre: APOLLOTYRE.NS, MRF.NS).
+- GOLD / SILVER:
+  * If UP (BULLISH for jewellery: TITAN.NS, KALYANKJIL.NS; gold financiers: MUTHOOTFIN.NS, MANAPPURAM.NS).
+  * If DOWN (BEARISH for jewellery: TITAN.NS; gold financiers: MUTHOOTFIN.NS).
+- DXY (Dollar Index) / USD/INR:
+  * If UP/Strong Dollar (BULLISH for export-heavy sectors: IT: TCS.NS, INFY.NS, HCLTECH.NS, WIPRO.NS, TECHM.NS; Pharma: SUNPHARMA.NS, CIPLA.NS, DRREDDY.NS).
+  * If DOWN/Weak Dollar (BEARISH/neutral for IT & Pharma; BULLISH for domestic cyclical/consumers).
+- INDIA VIX / US VIX (Volatility Spike):
+  * If UP (BEARISH for high-beta and financials: HDFCBANK.NS, ICICIBANK.NS, SBIN.NS, DLF.NS. BULLISH/Defensive for IT: TCS.NS, INFY.NS; Pharma: SUNPHARMA.NS; FMCG: ITC.NS, HINDUNILVR.NS).
+- NIFTY 50 / BANK NIFTY:
+  * If UP (BULLISH for heavyweight financials: HDFCBANK.NS, ICICIBANK.NS, SBIN.NS, AXISBANK.NS, and conglomerates: RELIANCE.NS).
+  * If DOWN (BEARISH for high-beta financials and momentum stocks).
+- US 10Y YIELD:
+  * If UP (BEARISH for growth sectors like IT: TCS.NS, INFY.NS and highly-leveraged real estate / infrastructure: DLF.NS, LT.NS).
+  * If DOWN (BULLISH for growth sectors like IT: TCS.NS, INFY.NS and interest-rate sensitives).
+
 A SYSTEMIC market shock just printed in real prices. Build the propagation
 graph showing exactly how this move will cascade across Indian equities in
 3 tiers.
@@ -6173,7 +6211,7 @@ def get_calendar_event(event_id):
                             related_sectors_json, related_tickers_json, status,
                             created_at, updated_at
                      FROM economic_calendar WHERE id = ? LIMIT 1""", (event_id,))
-        cols = [d[0] for d in c.cursor.description]
+        cols = [d[0] for d in c.description]
         row = c.fetchone()
         conn.close()
         if not row:
@@ -6276,7 +6314,7 @@ def list_macro_events():
             ORDER BY detected_at DESC
             LIMIT 50
         """, (datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S'),))
-        cols = [d[0] for d in c.cursor.description]
+        cols = [d[0] for d in c.description]
         rows = [dict(zip(cols, r)) for r in c.fetchall()]
         conn.close()
 
@@ -6288,7 +6326,15 @@ def list_macro_events():
         except Exception:
             snap = []
 
-        return jsonify({"events": rows, "snapshot": snap})
+        seen_keys = set()
+        deduped_rows = []
+        for r in rows:
+            key = r.get('instrument_key')
+            if key not in seen_keys:
+                seen_keys.add(key)
+                deduped_rows.append(r)
+
+        return jsonify({"events": deduped_rows, "snapshot": snap})
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
