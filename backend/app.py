@@ -2350,6 +2350,7 @@ For each ticker also state:
   • confidence:  0-100, honest probability the predicted move plays out
                   in next 1-3 sessions
   • reason:      one-sentence specific causal chain (NOT generic)
+  • parent:      (For Tier 2 and Tier 3 nodes only) The exact ticker of the node in the preceding tier that causes/drives this effect. Tier 2 nodes must specify a Tier 1 ticker parent; Tier 3 nodes must specify a Tier 2 ticker parent. If driven purely by the general trigger, set to null. Set parent to null for all Tier 1 nodes.
 
 Return STRICT valid JSON, no markdown fences:
 
@@ -2359,14 +2360,20 @@ Return STRICT valid JSON, no markdown fences:
     {{ "tier": 1, "label": "Direct Impact",
        "nodes": [
          {{ "ticker": "X.NS", "direction": "BEARISH", "confidence": 85,
-            "reason": "specific reason" }}
+            "reason": "specific reason", "parent": null }}
        ]
     }},
     {{ "tier": 2, "label": "Second-Order (Supply Chain)",
-       "nodes": [ ... ]
+       "nodes": [
+         {{ "ticker": "Y.NS", "direction": "BULLISH", "confidence": 75,
+            "reason": "specific reason", "parent": "X.NS" }}
+       ]
     }},
     {{ "tier": 3, "label": "Macro Transmission",
-       "nodes": [ ... ]
+       "nodes": [
+         {{ "ticker": "Z.NS", "direction": "BULLISH", "confidence": 90,
+            "reason": "specific reason", "parent": "Y.NS" }}
+       ]
     }}
   ]
 }}"""
@@ -2499,6 +2506,7 @@ For each ticker:
   • direction:   BULLISH or BEARISH
   • confidence:  0-100, honest probability of the predicted next-session move
   • reason:      one-sentence specific causal chain (NOT generic)
+  • parent:      (For Tier 2 and Tier 3 nodes only) The exact ticker of the node in the preceding tier that causes/drives this effect. Tier 2 nodes must specify a Tier 1 ticker parent; Tier 3 nodes must specify a Tier 2 ticker parent. If driven purely by the general trigger, set to null. Set parent to null for all Tier 1 nodes.
 
 Return STRICT valid JSON, no markdown fences:
 
@@ -2516,14 +2524,20 @@ Return STRICT valid JSON, no markdown fences:
     {{ "tier": 1, "label": "Direct Impact",
        "nodes": [
          {{ "ticker": "X.NS", "direction": "BEARISH", "confidence": 85,
-            "reason": "specific reason" }}
+            "reason": "specific reason", "parent": null }}
        ]
     }},
     {{ "tier": 2, "label": "Second-Order (Supply Chain)",
-       "nodes": [ ... ]
+       "nodes": [
+         {{ "ticker": "Y.NS", "direction": "BULLISH", "confidence": 75,
+            "reason": "specific reason", "parent": "X.NS" }}
+       ]
     }},
     {{ "tier": 3, "label": "Macro Transmission",
-       "nodes": [ ... ]
+       "nodes": [
+         {{ "ticker": "Z.NS", "direction": "BULLISH", "confidence": 90,
+            "reason": "specific reason", "parent": "Y.NS" }}
+       ]
     }}
   ]
 }}"""

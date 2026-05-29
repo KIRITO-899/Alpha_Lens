@@ -2955,4 +2955,27 @@ main.container {
     border-color: rgba(251,113,133,0.15);
 }
 
+/* ── SVG Arrow Flow Paths (rfl-path) ── */
+.rfl-path {
+  transition: stroke 0.22s ease, stroke-width 0.22s ease, opacity 0.22s ease;
+}
+
+.rfl-path--highlight {
+  stroke-dasharray: 6 3;
+  animation: rfl-dash-flow 25s linear infinite;
+}
+
+@keyframes rfl-dash-flow {
+  to {
+    stroke-dashoffset: -500;
+  }
+}
+
+.rfl-chip {
+  position: relative;
+  z-index: 5;
+  transition: opacity 0.22s ease, filter 0.22s ease, transform 0.16s ease, box-shadow 0.16s ease;
+}
+
+
 

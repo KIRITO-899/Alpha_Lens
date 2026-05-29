@@ -2925,6 +2925,9 @@ function _renderRippleSidePanel(node, container) {
         const el = document.getElementById(`rfl-chip-${node._uid}`);
         if (el) el.classList.add('rfl-chip--active');
     }
+    if (typeof _resetPathHighlight === 'function') {
+        _resetPathHighlight();
+    }
     if (!node) {
         container.innerHTML = `
             <div class="ripple-side-empty">
@@ -2995,7 +2998,9 @@ async function _renderRippleGraph(payload) {
         return;
     }
 
-    let flowHTML = `<div class="rfl-container">`;
+    // Relative container containing our connection SVG background layer
+    let flowHTML = `<div class="rfl-container" style="position:relative;">`;
+    flowHTML += `<svg id="ripple-graph-canvas" style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:0; overflow:visible;"></svg>`;
 
     // ── Trigger block ──
     flowHTML += `
@@ -3004,7 +3009,7 @@ async function _renderRippleGraph(payload) {
                 <span class="rfl-col-label" style="color:#c4b5fd;">TRIGGER</span>
                 <span class="rfl-col-sublabel">Shock Event</span>
             </div>
-            <div class="rfl-chip rfl-chip--trigger">
+            <div class="rfl-chip rfl-chip--trigger" id="rfl-chip-trigger">
                 <span class="rfl-chip-icon">⚡</span>
                 <span class="rfl-chip-ticker">${triggerLabel}</span>
             </div>
@@ -3014,25 +3019,10 @@ async function _renderRippleGraph(payload) {
     resolvedTiers.forEach((td, idx) => {
         if (td.nodes.length === 0) return;
 
-        // Arrow separator
+        // Custom gap column (without drawing static arrows, we'll draw dynamic ones)
         flowHTML += `
-            <div class="rfl-arrow-col">
-                <svg class="rfl-arrow-svg" viewBox="0 0 40 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-                    <defs>
-                        <linearGradient id="rfl-grad-${idx}" x1="0" y1="0" x2="1" y2="0">
-                            <stop offset="0%" stop-color="${idx === 0 ? '#c4b5fd' : tierDefs[idx-1] ? tierDefs[idx-1].color : '#c4b5fd'}" stop-opacity="0.6"/>
-                            <stop offset="100%" stop-color="${td.color}" stop-opacity="0.8"/>
-                        </linearGradient>
-                        <marker id="rfl-arrow-${idx}" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-                            <path d="M0,0 L0,6 L8,3 z" fill="url(#rfl-grad-${idx})"/>
-                        </marker>
-                    </defs>
-                    <line x1="4" y1="60" x2="36" y2="60"
-                        stroke="url(#rfl-grad-${idx})" stroke-width="2"
-                        marker-end="url(#rfl-arrow-${idx})"
-                        stroke-dasharray="5 3" />
-                </svg>
-                <span class="rfl-arrow-label" style="color:${td.color};">${td.nodes.length} stock${td.nodes.length !== 1 ? 's' : ''}</span>
+            <div class="rfl-arrow-col" style="border:none; background:transparent;">
+                <span class="rfl-arrow-label" style="color:${td.color}; margin-top:20px; font-weight:800; opacity:0.85;">${td.nodes.length} stock${td.nodes.length !== 1 ? 's' : ''}</span>
             </div>`;
 
         // Tier column
@@ -3053,9 +3043,14 @@ async function _renderRippleGraph(payload) {
             const arrowIcon = isBull
                 ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
                 : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>`;
+            
+            // Added attributes for easy graph connection calculations
             flowHTML += `
                 <div class="rfl-chip" id="rfl-chip-${n._uid}"
                     data-uid="${n._uid}"
+                    data-tier="${td.num}"
+                    data-ticker="${escapeHtml(n.ticker || '')}"
+                    data-parent="${escapeHtml(n.parent || '')}"
                     style="border-color:${chipBorder};background:${chipBg};"
                     onclick="_rflChipClick(${n._uid})">
                     <span class="rfl-chip-dir" style="color:${chipColor};">${arrowIcon}</span>
@@ -3077,8 +3072,272 @@ async function _renderRippleGraph(payload) {
         td.nodes.forEach(n => { window._rflNodeMap[n._uid] = n; });
     });
 
+    window._rflLastTiers = resolvedTiers;
+
     // Reset side panel
     _renderRippleSidePanel(null, sideEl);
+
+    // Draw connection lines after rendering DOM
+    setTimeout(() => {
+        _drawRippleArrows(resolvedTiers);
+    }, 60);
+}
+
+// ── SVG Arrow drawing, calculations, and interactivity functions ──
+let _rflConnections = [];
+
+function _drawRippleArrows(resolvedTiers) {
+    const canvas = document.getElementById('ripple-graph-canvas');
+    const container = document.querySelector('.rfl-container');
+    if (!canvas || !container) return;
+
+    // Expand canvas width/height to fill scroll width/height
+    const scrollW = container.scrollWidth;
+    const scrollH = container.scrollHeight;
+    canvas.setAttribute('width', scrollW);
+    canvas.setAttribute('height', scrollH);
+    canvas.style.width = scrollW + 'px';
+    canvas.style.height = scrollH + 'px';
+
+    // SVG Marker Definitions
+    canvas.innerHTML = `
+        <defs>
+            <marker id="rfl-arrow-default" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <polygon points="0 0, 6 3, 0 6" fill="rgba(148,163,184,0.4)" />
+            </marker>
+            <marker id="rfl-arrow-active-bull" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <polygon points="0 0, 6 3, 0 6" fill="#34d399" />
+            </marker>
+            <marker id="rfl-arrow-active-bear" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
+                <polygon points="0 0, 6 3, 0 6" fill="#fb7185" />
+            </marker>
+        </defs>
+    `;
+
+    _rflConnections = [];
+    const containerRect = container.getBoundingClientRect();
+
+    const triggerEl = document.getElementById('rfl-chip-trigger');
+    if (!triggerEl) return;
+
+    // Tier 1 direct connections from Trigger
+    const t1Nodes = (resolvedTiers.find(t => t.num === 1) || {}).nodes || [];
+    t1Nodes.forEach(n => {
+        const chip = document.getElementById(`rfl-chip-${n._uid}`);
+        if (chip) {
+            _drawArrowPath(canvas, triggerEl, chip, 'trigger', n._uid, n.direction);
+        }
+    });
+
+    // Tier 2 connections from Tier 1
+    const t2Nodes = (resolvedTiers.find(t => t.num === 2) || {}).nodes || [];
+    t2Nodes.forEach((n, idx) => {
+        const chip = document.getElementById(`rfl-chip-${n._uid}`);
+        if (!chip) return;
+
+        let parentNode = null;
+        if (n.parent) {
+            parentNode = t1Nodes.find(p => p.ticker === n.parent);
+        }
+        if (!parentNode && n.reason) {
+            // Semantic fallback
+            parentNode = t1Nodes.find(p => {
+                const clean = p.ticker.replace('.NS', '').toLowerCase();
+                return n.reason.toLowerCase().includes(clean);
+            });
+        }
+        if (!parentNode) {
+            // Index-distribute fallback to avoid crossing lines
+            parentNode = t1Nodes[idx % t1Nodes.length];
+        }
+
+        if (parentNode) {
+            n._parentUid = parentNode._uid;
+            const parentChip = document.getElementById(`rfl-chip-${parentNode._uid}`);
+            if (parentChip) {
+                _drawArrowPath(canvas, parentChip, chip, parentNode._uid, n._uid, n.direction);
+            }
+        }
+    });
+
+    // Tier 3 connections from Tier 2
+    const t3Nodes = (resolvedTiers.find(t => t.num === 3) || {}).nodes || [];
+    t3Nodes.forEach((n, idx) => {
+        const chip = document.getElementById(`rfl-chip-${n._uid}`);
+        if (!chip) return;
+
+        let parentNode = null;
+        if (n.parent) {
+            parentNode = t2Nodes.find(p => p.ticker === n.parent);
+        }
+        if (!parentNode && n.reason) {
+            parentNode = t2Nodes.find(p => {
+                const clean = p.ticker.replace('.NS', '').toLowerCase();
+                return n.reason.toLowerCase().includes(clean);
+            });
+        }
+        if (!parentNode) {
+            parentNode = t2Nodes[idx % t2Nodes.length];
+        }
+
+        if (parentNode) {
+            n._parentUid = parentNode._uid;
+            const parentChip = document.getElementById(`rfl-chip-${parentNode._uid}`);
+            if (parentChip) {
+                _drawArrowPath(canvas, parentChip, chip, parentNode._uid, n._uid, n.direction);
+            }
+        }
+    });
+
+    // Wire up events on newly created chips
+    document.querySelectorAll('.rfl-chip').forEach(chip => {
+        const uidStr = chip.getAttribute('data-uid');
+        if (uidStr) {
+            const uid = parseInt(uidStr);
+            chip.addEventListener('mouseenter', () => _highlightPath(uid));
+            chip.addEventListener('mouseleave', () => _resetPathHighlight());
+        }
+    });
+}
+
+function _drawArrowPath(canvas, sourceEl, targetEl, sourceUid, targetUid, direction) {
+    const container = document.querySelector('.rfl-container');
+    const containerRect = container.getBoundingClientRect();
+
+    const sRect = sourceEl.getBoundingClientRect();
+    const tRect = targetEl.getBoundingClientRect();
+
+    // Line starts at the middle right edge of source
+    const startX = sRect.right - containerRect.left + 1;
+    const startY = (sRect.top - containerRect.top) + sRect.height / 2;
+
+    // Line ends at the middle left edge of target (with arrowhead compensation offset)
+    const endX = tRect.left - containerRect.left - 5;
+    const endY = (tRect.top - containerRect.top) + tRect.height / 2;
+
+    // Smooth cubic bezier calculation
+    const cp1X = startX + (endX - startX) * 0.45;
+    const cp1Y = startY;
+    const cp2X = startX + (endX - startX) * 0.55;
+    const cp2Y = endY;
+
+    const d = `M ${startX} ${startY} C ${cp1X} ${cp1Y}, ${cp2X} ${cp2Y}, ${endX} ${endY}`;
+
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('class', 'rfl-path');
+    path.setAttribute('stroke', 'rgba(71,85,105,0.22)');
+    path.setAttribute('stroke-width', '1.5');
+    path.setAttribute('fill', 'none');
+    path.setAttribute('marker-end', 'url(#rfl-arrow-default)');
+    canvas.appendChild(path);
+
+    _rflConnections.push({
+        pathEl: path,
+        sourceUid: sourceUid,
+        targetUid: targetUid,
+        direction: direction
+    });
+}
+
+function _highlightPath(hoverUid) {
+    const activeUid = _rippleActiveNode ? _rippleActiveNode._uid : null;
+    const uid = hoverUid || activeUid;
+    if (uid === null || uid === undefined) return;
+
+    // Compute causal nodes in the path
+    const pathUids = new Set([uid]);
+
+    // Trace Upstream
+    let currUid = uid;
+    while (currUid && currUid !== 'trigger') {
+        const node = window._rflNodeMap[currUid];
+        if (node) {
+            pathUids.add(node._uid);
+            if (node._parentUid !== undefined) {
+                currUid = node._parentUid;
+            } else {
+                pathUids.add('trigger');
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    // Trace Downstream
+    let added = true;
+    while (added) {
+        added = false;
+        Object.values(window._rflNodeMap).forEach(n => {
+            if (n._parentUid !== undefined && pathUids.has(n._parentUid) && !pathUids.has(n._uid)) {
+                pathUids.add(n._uid);
+                added = true;
+            }
+        });
+    }
+
+    // Apply Highlights to Paths
+    _rflConnections.forEach(conn => {
+        const isInPath = pathUids.has(conn.sourceUid) && pathUids.has(conn.targetUid);
+        if (isInPath) {
+            conn.pathEl.classList.add('rfl-path--highlight');
+            const isBull = (conn.direction || '').toUpperCase() === 'BULLISH';
+            conn.pathEl.setAttribute('stroke', isBull ? '#34d399' : '#fb7185');
+            conn.pathEl.setAttribute('marker-end', isBull ? 'url(#rfl-arrow-active-bull)' : 'url(#rfl-arrow-active-bear)');
+            conn.pathEl.style.opacity = '1.0';
+        } else {
+            conn.pathEl.classList.remove('rfl-path--highlight');
+            conn.pathEl.setAttribute('stroke', 'rgba(71,85,105,0.06)');
+            conn.pathEl.setAttribute('marker-end', 'url(#rfl-arrow-default)');
+            conn.pathEl.style.opacity = '0.12';
+        }
+    });
+
+    // Dim unrelated chips
+    document.querySelectorAll('.rfl-chip').forEach(chip => {
+        const chipUidStr = chip.getAttribute('data-uid');
+        const isTrigger = chip.classList.contains('rfl-chip--trigger');
+        const chipUid = isTrigger ? 'trigger' : parseInt(chipUidStr);
+
+        if (pathUids.has(chipUid)) {
+            chip.style.opacity = '1.0';
+            chip.style.filter = 'none';
+        } else {
+            chip.style.opacity = '0.3';
+            chip.style.filter = 'grayscale(0.4) blur(0.2px)';
+        }
+    });
+}
+
+function _resetPathHighlight() {
+    const activeUid = _rippleActiveNode ? _rippleActiveNode._uid : null;
+    if (activeUid !== null && activeUid !== undefined) {
+        _highlightPath(activeUid);
+        return;
+    }
+
+    // Reset to default
+    _rflConnections.forEach(conn => {
+        conn.pathEl.classList.remove('rfl-path--highlight');
+        conn.pathEl.setAttribute('stroke', 'rgba(71,85,105,0.22)');
+        conn.pathEl.setAttribute('marker-end', 'url(#rfl-arrow-default)');
+        conn.pathEl.style.opacity = '1.0';
+    });
+
+    document.querySelectorAll('.rfl-chip').forEach(chip => {
+        chip.style.opacity = '1.0';
+        chip.style.filter = 'none';
+    });
+}
+
+// Redraw arrows on screen resize
+window.addEventListener('resize', () => {
+    const canvas = document.getElementById('ripple-graph-canvas');
+    if (canvas && canvas.style.display !== 'none' && window._rflLastTiers) {
+        _drawRippleArrows(window._rflLastTiers);
+    }
+});
 }
 
 window._rflChipClick = function(uid) {
