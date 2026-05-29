@@ -270,50 +270,6 @@
             }
         }
 
-        function initPerformanceMode() {
-            const isPerf = localStorage.getItem('alpha_lens_perf_mode') === 'true';
-            const knob = document.getElementById('perfToggleKnob');
-            const bg = document.getElementById('perfToggleBg');
-            const orb = document.getElementById('cursor-glow');
-            
-            if (isPerf) {
-                document.body.classList.add('perf-mode');
-                if (knob) knob.style.transform = 'translateX(16px)';
-                if (knob) knob.classList.replace('bg-slate-400', 'bg-white');
-                if (bg) bg.classList.replace('bg-slate-800', 'bg-emerald-500');
-                if (orb) orb.style.display = 'none';
-            } else {
-                document.body.classList.remove('perf-mode');
-                if (knob) knob.style.transform = 'translateX(0)';
-                if (knob) knob.classList.replace('bg-white', 'bg-slate-400');
-                if (bg) bg.classList.replace('bg-emerald-500', 'bg-slate-800');
-                if (orb) orb.style.display = '';
-            }
-        }
-
-        function togglePerformanceMode() {
-            const isPerf = document.body.classList.toggle('perf-mode');
-            localStorage.setItem('alpha_lens_perf_mode', isPerf ? 'true' : 'false');
-            
-            const knob = document.getElementById('perfToggleKnob');
-            const bg = document.getElementById('perfToggleBg');
-            const orb = document.getElementById('cursor-glow');
-            
-            if (isPerf) {
-                if (knob) knob.style.transform = 'translateX(16px)';
-                if (knob) knob.classList.replace('bg-slate-400', 'bg-white');
-                if (bg) bg.classList.replace('bg-slate-800', 'bg-emerald-500');
-                if (orb) orb.style.display = 'none';
-            } else {
-                if (knob) knob.style.transform = 'translateX(0)';
-                if (knob) knob.classList.replace('bg-white', 'bg-slate-400');
-                if (bg) bg.classList.replace('bg-emerald-500', 'bg-slate-800');
-                if (orb) orb.style.display = '';
-            }
-        }
-
-        window.initPerformanceMode = initPerformanceMode;
-        window.togglePerformanceMode = togglePerformanceMode;
 
         // ==========================================
         // TAB SWITCHING & UI RENDER LOGIC
@@ -1784,7 +1740,6 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         }
 
         window.onload = () => {
-            initPerformanceMode();          // Disable heavy effects if performance mode is toggled on
             maybeShowOnboarding();          // #3 cinematic onboarding (first session per tab)
             checkAuthStatus();
             startSmartPolling();
@@ -1862,7 +1817,6 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         // so it lags slightly behind (premium "trailing" feel).
         // ══════════════════════════════════════════════════════════════
         function initCursorTrail() {
-            if (document.body.classList.contains('perf-mode')) return;
             const orb = document.getElementById('cursor-glow');
             if (!orb) return;
             if (window.matchMedia('(hover: none)').matches) return;  // mobile/touch — skip
@@ -1899,7 +1853,6 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
         // within the viewport. CSS handles per-card multiplier.
         // ══════════════════════════════════════════════════════════════
         function initKpiParallax() {
-            if (document.body.classList.contains('perf-mode')) return;
             const row = document.getElementById('tr-kpi-row');
             if (!row) return;
             if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
