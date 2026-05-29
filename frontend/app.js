@@ -3280,18 +3280,44 @@ function _mpRenderAlertCard(ev) {
     const lastPx      = ev.last_price != null
         ? parseFloat(ev.last_price).toLocaleString(undefined, { maximumFractionDigits: 4 })
         : '—';
+    const prevPx      = ev.prev_close != null
+        ? parseFloat(ev.prev_close).toLocaleString(undefined, { maximumFractionDigits: 4 })
+        : '—';
     const detectedAt  = ev.detected_at ? new Date(ev.detected_at + (ev.detected_at.includes('Z') ? '' : 'Z')).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
 
     const arrowSvg = isUp
         ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
         : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>`;
 
+    // Generate Systemic Impact Predictor list
+    let effectsHtml = '';
+    if (ev.effects && ev.effects.length) {
+        const effectsList = ev.effects.map(eff => {
+            const isBullish = eff.direction === 'BULLISH';
+            const pillClass = isBullish ? 'bullish' : 'bearish';
+            const sign = isBullish ? '+' : '';
+            return `
+                <div class="mp-effect-item">
+                    <span class="mp-effect-ticker">${escapeHtml(eff.name || eff.ticker)}</span>
+                    <span class="mp-effect-pill ${pillClass}">${sign}${eff.expected_move_pct.toFixed(2)}%</span>
+                </div>`;
+        }).join('');
+        
+        effectsHtml = `
+            <div class="mp-card-effects">
+                <div class="mp-effects-title">Systemic Impact Predictor</div>
+                <div class="mp-effects-list">
+                    ${effectsList}
+                </div>
+            </div>`;
+    }
+
     return `
         <button class="mp-alert-card shock-${levelCls}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open shock ripple for ${label}">
             <div class="mp-alert-row1">
                 <div>
                     <div class="mp-alert-ticker">${label}</div>
-                    <div class="mp-alert-last-price">Last: ${lastPx}</div>
+                    <div class="mp-alert-last-price">Last: ${lastPx} | Prev: ${prevPx}</div>
                 </div>
                 <div style="text-align:right">
                     <div class="mp-alert-pct ${isUp ? 'up' : 'down'}" style="display:inline-flex;align-items:center;gap:5px;">${arrowSvg}${pctFmt}</div>
@@ -3303,6 +3329,7 @@ function _mpRenderAlertCard(ev) {
                     ${isActionable ? '⚡ Actionable' : 'ⓘ Info'}
                 </span>
             </div>
+            ${effectsHtml}
             <div class="mp-alert-divider"></div>
             <div class="mp-alert-footer">
                 <span class="mp-alert-detected">Detected ${detectedAt} IST</span>
@@ -3318,7 +3345,7 @@ function _mpRenderAlertCard(ev) {
 function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
     if (!tbodyEl) return;
     if (!snapshot || !snapshot.length) {
-        tbodyEl.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:32px;color:#475569;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.10em;">NO LIVE DATA AVAILABLE</td></tr>`;
+        tbodyEl.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:32px;color:#475569;font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:0.10em;">NO LIVE DATA AVAILABLE</td></tr>`;
         return;
     }
     // Build a set of shocked instrument keys for badge display
@@ -3339,16 +3366,49 @@ function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
         const pctFmt = `${isUp ? '+' : ''}${pct.toFixed(2)}%`;
         const label  = item.label || item.instrument_label || item.key || item.instrument_key || '';
         const key    = item.key || item.instrument_key || '';
-        const lastPx = (item.last != null ? item.last : item.last_price) != null
-            ? parseFloat(item.last != null ? item.last : item.last_price).toLocaleString(undefined, { maximumFractionDigits: 4 })
+        
+        const lastVal = item.last != null ? item.last : item.last_price;
+        const prevCloseVal = item.prev_close != null ? item.prev_close : (lastVal != null ? (lastVal / (1 + pct / 100)) : null);
+        
+        const lastPx = lastVal != null
+            ? parseFloat(lastVal).toLocaleString(undefined, { maximumFractionDigits: 4 })
             : '—';
+            
+        const prevPx = prevCloseVal != null
+            ? parseFloat(prevCloseVal).toLocaleString(undefined, { maximumFractionDigits: 4 })
+            : '—';
+            
+        // Calculate absolute point change
+        let absDiffFmt = '—';
+        if (lastVal != null && prevCloseVal != null) {
+            const diff = lastVal - prevCloseVal;
+            absDiffFmt = `${diff >= 0 ? '+' : ''}${diff.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+        }
+        
         const isShock = item.is_shock_3pct || item.is_shock_5pct || shockedKeys.has(key);
-        // Momentum bar: cap at 5% for 100% fill
-        const momPct  = Math.min(Math.abs(pct) / 5 * 100, 100);
         const dirCls  = isUp ? 'up' : 'down';
         const arrowSvg = isUp
             ? `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
             : `<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>`;
+
+        // Render mini-tags for Systemic Effects
+        let effectsHtml = '<span style="color:#475569;font-size:10px;">No systemic shock impact</span>';
+        if (item.effects && item.effects.length) {
+            effectsHtml = `
+                <div class="mp-table-effects-container">
+                    ${item.effects.map(eff => {
+                        const isBull = eff.direction === 'BULLISH';
+                        const tagCls = isBull ? 'bullish' : 'bearish';
+                        const sign = isBull ? '+' : '';
+                        return `
+                            <span class="mp-table-effect-tag ${tagCls}">
+                                ${escapeHtml(eff.name || eff.ticker.split('.')[0])} ${sign}${eff.expected_move_pct.toFixed(1)}%
+                            </span>`;
+                    }).join('')}
+                </div>`;
+        } else if (isShock) {
+            effectsHtml = '<span style="color:#94a3b8;font-size:10px;">Evaluating shock impact...</span>';
+        }
 
         return `
             <tr class="${isShock ? 'is-shock-row' : ''}">
@@ -3356,23 +3416,24 @@ function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
                     <div class="mp-td-instrument">
                         <div>
                             <div class="mp-td-instrument-label">${escapeHtml(label)}${isShock ? ' <span class="mp-td-shock-badge">⚡ SHOCK</span>' : ''}</div>
-                            ${key && key !== label ? `<div class="mp-td-instrument-key">${escapeHtml(key)}</div>` : ''}
+                            ${key && key !== label ? `<div class="mp-td-instrument-key">${escapeHtml(key.toUpperCase())}</div>` : ''}
                         </div>
                     </div>
+                </td>
+                <td class="text-right">
+                    <span class="mp-td-price" style="color:#64748b;">${prevPx}</span>
                 </td>
                 <td class="text-right">
                     <span class="mp-td-price">${lastPx}</span>
                 </td>
                 <td class="text-right">
-                    <span class="mp-td-pct ${dirCls}" style="display:inline-flex;align-items:center;gap:4px;">${arrowSvg}${pctFmt}</span>
-                </td>
-                <td class="text-center">
-                    <div class="mp-momentum-wrap">
-                        <div class="mp-momentum-track">
-                            <div class="mp-momentum-fill ${dirCls}" style="width:${momPct.toFixed(1)}%"></div>
-                        </div>
-                        <span class="mp-momentum-val" style="color:${isUp ? '#34d399' : '#fb7185'}">${pctFmt}</span>
+                    <div style="display:flex;flex-direction:column;align-items:flex-end;">
+                        <span class="mp-td-pct ${dirCls}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;font-size:11px;">${arrowSvg}${pctFmt}</span>
+                        <span style="font-size:9px;color:#475569;font-family:'JetBrains Mono',monospace;margin-top:2px;">${absDiffFmt}</span>
                     </div>
+                </td>
+                <td>
+                    ${effectsHtml}
                 </td>
                 <td class="text-center">
                     <span class="mp-status-badge ${isShock ? 'shock' : 'normal'}">
@@ -3391,7 +3452,7 @@ function _mpRenderError(chipsEl, snapGrid, countEl, icon, title, sub) {
             <div class="mp-alert-empty-title">${title}</div>
             <p class="mp-alert-empty-sub">${sub}</p>
         </div>`;
-    if (snapGrid) snapGrid.innerHTML = `<tr><td colspan="5" style="text-align:center;padding:32px;color:#475569;font-family:'JetBrains Mono',monospace;font-size:11px;">FEED UNAVAILABLE</td></tr>`;
+    if (snapGrid) snapGrid.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:32px;color:#475569;font-family:'JetBrains Mono',monospace;font-size:11px;">FEED UNAVAILABLE</td></tr>`;
     if (countEl) countEl.textContent = 'Error';
 }
 

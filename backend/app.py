@@ -6295,6 +6295,145 @@ def admin_calendar_upsert():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+def compute_macro_effects(key, pct):
+    if not key or pct is None:
+        return []
+    try:
+        pct = float(pct)
+    except ValueError:
+        return []
+    is_up = pct > 0
+    k = key.lower()
+    
+    effects = []
+    
+    if k in ('brent', 'wti'):
+        if is_up:
+            effects = [
+                {"ticker": "ONGC.NS", "name": "ONGC", "direction": "BULLISH", "expected_move_pct": 2.5, "reason": "Direct Upstream margin expansion"},
+                {"ticker": "OIL.NS", "name": "Oil India", "direction": "BULLISH", "expected_move_pct": 2.8, "reason": "Direct Upstream margin expansion"},
+                {"ticker": "INDIGO.NS", "name": "InterGlobe Aviation", "direction": "BEARISH", "expected_move_pct": -3.5, "reason": "Aviation fuel cost inflation"},
+                {"ticker": "ASIANPAINT.NS", "name": "Asian Paints", "direction": "BEARISH", "expected_move_pct": -2.2, "reason": "Crude derivative input cost inflation"}
+            ]
+        else:
+            effects = [
+                {"ticker": "BPCL.NS", "name": "BPCL", "direction": "BULLISH", "expected_move_pct": 3.2, "reason": "Marketing margin expansion"},
+                {"ticker": "INDIGO.NS", "name": "InterGlobe Aviation", "direction": "BULLISH", "expected_move_pct": 3.8, "reason": "Lower ATF fuel expense"},
+                {"ticker": "ASIANPAINT.NS", "name": "Asian Paints", "direction": "BULLISH", "expected_move_pct": 2.2, "reason": "Raw material input cost relief"},
+                {"ticker": "ONGC.NS", "name": "ONGC", "direction": "BEARISH", "expected_move_pct": -2.2, "reason": "Realization prices compression"}
+            ]
+    elif k in ('gold', 'silver'):
+        if is_up:
+            effects = [
+                {"ticker": "TITAN.NS", "name": "Titan Company", "direction": "BULLISH", "expected_move_pct": 1.8, "reason": "Inventory gains on jewellery stock"},
+                {"ticker": "MUTHOOTFIN.NS", "name": "Muthoot Finance", "direction": "BULLISH", "expected_move_pct": 2.0, "reason": "Higher LTV collateral value"},
+                {"ticker": "KALYANKJIL.NS", "name": "Kalyan Jewellers", "direction": "BULLISH", "expected_move_pct": 2.5, "reason": "Jewellery inventory value gains"}
+            ]
+        else:
+            effects = [
+                {"ticker": "TITAN.NS", "name": "Titan Company", "direction": "BEARISH", "expected_move_pct": -1.5, "reason": "Inventory valuation markdowns"},
+                {"ticker": "MUTHOOTFIN.NS", "name": "Muthoot Finance", "direction": "BEARISH", "expected_move_pct": -1.8, "reason": "Risk of collateral value drop"}
+            ]
+    elif k == 'natgas':
+        if is_up:
+            effects = [
+                {"ticker": "ONGC.NS", "name": "ONGC", "direction": "BULLISH", "expected_move_pct": 1.5, "reason": "Realized price increase on gas sales"},
+                {"ticker": "IGL.NS", "name": "Indraprastha Gas", "direction": "BEARISH", "expected_move_pct": -2.0, "reason": "Compressed margins on sourcing"},
+                {"ticker": "MGL.NS", "name": "Mahanagar Gas", "direction": "BEARISH", "expected_move_pct": -2.2, "reason": "High input LNG costs"}
+            ]
+        else:
+            effects = [
+                {"ticker": "IGL.NS", "name": "Indraprastha Gas", "direction": "BULLISH", "expected_move_pct": 2.5, "reason": "Sourcing gas cost relief"},
+                {"ticker": "MGL.NS", "name": "Mahanagar Gas", "direction": "BULLISH", "expected_move_pct": 2.8, "reason": "Margins expansion"}
+            ]
+    elif k in ('dxy', 'usdinr'):
+        if is_up:
+            effects = [
+                {"ticker": "INFY.NS", "name": "Infosys", "direction": "BULLISH", "expected_move_pct": 1.8, "reason": "Export revenue translation gains"},
+                {"ticker": "TCS.NS", "name": "TCS", "direction": "BULLISH", "expected_move_pct": 1.5, "reason": "Stronger USD billing translations"},
+                {"ticker": "SUNPHARMA.NS", "name": "Sun Pharma", "direction": "BULLISH", "expected_move_pct": 1.2, "reason": "US generic revenue benefit"},
+                {"ticker": "BPCL.NS", "name": "BPCL", "direction": "BEARISH", "expected_move_pct": -1.5, "reason": "Rising crude import cost in INR"}
+            ]
+        else:
+            effects = [
+                {"ticker": "TCS.NS", "name": "TCS", "direction": "BEARISH", "expected_move_pct": -1.2, "reason": "Translation margin compression"},
+                {"ticker": "L&T.NS", "name": "L&T", "direction": "BULLISH", "expected_move_pct": 1.2, "reason": "Domestic infrastructure cycle boost"},
+                {"ticker": "ICICIBANK.NS", "name": "ICICI Bank", "direction": "BULLISH", "expected_move_pct": 1.0, "reason": "Rupee strength improves capital flows"}
+            ]
+    elif k in ('vix_us', 'vix_in'):
+        if is_up:
+            effects = [
+                {"ticker": "ITC.NS", "name": "ITC Limited", "direction": "BULLISH", "expected_move_pct": 1.2, "reason": "Defensive low-beta rotation"},
+                {"ticker": "TCS.NS", "name": "TCS", "direction": "BULLISH", "expected_move_pct": 0.8, "reason": "Defensive earnings profile"},
+                {"ticker": "HDFCBANK.NS", "name": "HDFC Bank", "direction": "BEARISH", "expected_move_pct": -1.8, "reason": "Risk-off equity liquidation"},
+                {"ticker": "ICICIBANK.NS", "name": "ICICI Bank", "direction": "BEARISH", "expected_move_pct": -2.0, "reason": "FII volatility outflow risk"}
+            ]
+        else:
+            effects = [
+                {"ticker": "ICICIBANK.NS", "name": "ICICI Bank", "direction": "BULLISH", "expected_move_pct": 1.5, "reason": "Risk-on credit buying"},
+                {"ticker": "DLF.NS", "name": "DLF Limited", "direction": "BULLISH", "expected_move_pct": 2.2, "reason": "High beta recovery rally"}
+            ]
+    elif k in ('nifty', 'banknifty'):
+        if is_up:
+            effects = [
+                {"ticker": "HDFCBANK.NS", "name": "HDFC Bank", "direction": "BULLISH", "expected_move_pct": 1.5, "reason": "Heavyweight index tracker"},
+                {"ticker": "ICICIBANK.NS", "name": "ICICI Bank", "direction": "BULLISH", "expected_move_pct": 1.8, "reason": "Momentum credit buying"},
+                {"ticker": "RELIANCE.NS", "name": "Reliance Industries", "direction": "BULLISH", "expected_move_pct": 1.2, "reason": "Index-weight matching rally"}
+            ]
+        else:
+            effects = [
+                {"ticker": "HDFCBANK.NS", "name": "HDFC Bank", "direction": "BEARISH", "expected_move_pct": -1.5, "reason": "Index heavyweight drag"},
+                {"ticker": "ICICIBANK.NS", "name": "ICICI Bank", "direction": "BEARISH", "expected_move_pct": -1.8, "reason": "Financial sector selloff"}
+            ]
+    elif k == 'us10y':
+        if is_up:
+            effects = [
+                {"ticker": "TCS.NS", "name": "TCS", "direction": "BEARISH", "expected_move_pct": -1.5, "reason": "DCF discount rate re-rating pressure"},
+                {"ticker": "DLF.NS", "name": "DLF Limited", "direction": "BEARISH", "expected_move_pct": -2.0, "reason": "High interest cost real estate pressure"},
+                {"ticker": "L&T.NS", "name": "L&T", "direction": "BEARISH", "expected_move_pct": -1.2, "reason": "Leveraged infra capex headwind"}
+            ]
+        else:
+            effects = [
+                {"ticker": "TCS.NS", "name": "TCS", "direction": "BULLISH", "expected_move_pct": 1.2, "reason": "DCF multiple re-rating support"},
+                {"ticker": "DLF.NS", "name": "DLF Limited", "direction": "BULLISH", "expected_move_pct": 1.8, "reason": "Borrowing cost relief expectation"},
+                {"ticker": "HDFCBANK.NS", "name": "HDFC Bank", "direction": "BULLISH", "expected_move_pct": 1.4, "reason": "Yield decline supportive of credit growth"}
+            ]
+    elif k == 'copper':
+        if is_up:
+            effects = [
+                {"ticker": "HINDALCO.NS", "name": "Hindalco", "direction": "BULLISH", "expected_move_pct": 2.0, "reason": "Base metal LME price tailwind"},
+                {"ticker": "VEDL.NS", "name": "Vedanta", "direction": "BULLISH", "expected_move_pct": 2.2, "reason": "Base metal LME price tailwind"},
+                {"ticker": "HAVELLS.NS", "name": "Havells", "direction": "BEARISH", "expected_move_pct": -1.5, "reason": "Rising input wire rod costs"}
+            ]
+        else:
+            effects = [
+                {"ticker": "HINDALCO.NS", "name": "Hindalco", "direction": "BEARISH", "expected_move_pct": -1.8, "reason": "Metal realization price drop"},
+                {"ticker": "HAVELLS.NS", "name": "Havells", "direction": "BULLISH", "expected_move_pct": 1.2, "reason": "Input wiring cost relief"}
+            ]
+
+    scale_mult = 1.0
+    if k in ('brent', 'wti', 'natgas', 'silver', 'copper'):
+        scale_mult = min(max(abs(pct) / 3.0, 0.5), 2.5)
+    elif k in ('gold',):
+        scale_mult = min(max(abs(pct) / 1.5, 0.5), 2.5)
+    elif k in ('dxy', 'usdinr'):
+        scale_mult = min(max(abs(pct) / 0.8, 0.5), 2.5)
+    elif k in ('vix_us', 'vix_in'):
+        scale_mult = min(max(abs(pct) / 10.0, 0.5), 2.5)
+    elif k in ('nifty', 'banknifty'):
+        scale_mult = min(max(abs(pct) / 1.5, 0.5), 2.5)
+    elif k == 'us10y':
+        scale_mult = min(max(abs(pct) / 5.0, 0.5), 2.5)
+
+    scaled_effects = []
+    for eff in effects:
+        item = dict(eff)
+        base_move = item["expected_move_pct"]
+        item["expected_move_pct"] = round(base_move * scale_mult, 2)
+        scaled_effects.append(item)
+    return scaled_effects
+
+
 @app.route('/api/macro/events', methods=['GET'])
 def list_macro_events():
     """
@@ -6333,6 +6472,13 @@ def list_macro_events():
             if key not in seen_keys:
                 seen_keys.add(key)
                 deduped_rows.append(r)
+
+        # Enrich with systemic causal effects
+        for r in deduped_rows:
+            r['effects'] = compute_macro_effects(r.get('instrument_key'), r.get('change_pct_1d'))
+
+        for s in snap:
+            s['effects'] = compute_macro_effects(s.get('key'), s.get('change_pct_1d'))
 
         return jsonify({"events": deduped_rows, "snapshot": snap})
     except Exception as e:

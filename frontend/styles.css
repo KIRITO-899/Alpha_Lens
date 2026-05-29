@@ -2872,3 +2872,87 @@ main.container {
     background: rgba(139, 92, 246, 0.5);
 }
 
+/* Card Systemic Effects styling */
+.mp-card-effects {
+    margin-top: 14px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 10px 12px;
+    text-align: left;
+}
+.mp-effects-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8px;
+    font-weight: 700;
+    color: #64748b;
+    letter-spacing: 0.12em;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+.mp-effects-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.mp-effect-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.mp-effect-ticker {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    color: #cbd5e1;
+}
+.mp-effect-pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 99px;
+    line-height: 1;
+}
+.mp-effect-pill.bullish {
+    color: #34d399;
+    background: rgba(52,211,153,0.12);
+    border: 1px solid rgba(52,211,153,0.20);
+}
+.mp-effect-pill.bearish {
+    color: #fb7185;
+    background: rgba(251,113,133,0.12);
+    border: 1px solid rgba(251,113,133,0.20);
+}
+
+/* Table Causal Effects tag styles */
+.mp-table-effects-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 280px;
+}
+.mp-table-effect-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 9px;
+    font-weight: 700;
+    padding: 3px 8px;
+    border-radius: 6px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.06);
+    color: #94a3b8;
+}
+.mp-table-effect-tag.bullish {
+    color: #34d399;
+    background: rgba(52,211,153,0.08);
+    border-color: rgba(52,211,153,0.15);
+}
+.mp-table-effect-tag.bearish {
+    color: #fb7185;
+    background: rgba(251,113,133,0.08);
+    border-color: rgba(251,113,133,0.15);
+}
+
