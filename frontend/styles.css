@@ -2956,3 +2956,52 @@ main.container {
     border-color: rgba(251,113,133,0.15);
 }
 
+/* Performance Mode Overrides (Low-End PC optimization) */
+body.perf-mode * {
+    /* Disable backdrop filters which are extremely heavy on GPU */
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    
+    /* Simplify transitions and animations to prevent layout/framerate stuttering */
+    transition-duration: 0.05s !important;
+    animation-duration: 0.01s !important;
+    animation-iteration-count: 1 !important;
+}
+
+body.perf-mode .glass-panel,
+body.perf-mode .mp-alert-card,
+body.perf-mode .mp-regime-card,
+body.perf-mode .rfl-chip,
+body.perf-mode .news-card,
+body.perf-mode .auth-modal-content,
+body.perf-mode .modal-content,
+body.perf-mode .slide-modal,
+body.perf-mode .detail-modal-wrap,
+body.perf-mode .tr-kpi-card,
+body.perf-mode .tr-chart-container,
+body.perf-mode .portfolio-card,
+body.perf-mode .assistant-pill,
+body.perf-mode #auth-modal-content,
+body.perf-mode #premium-ticker-bar {
+    /* Replace blurry translucent backdrop panels with highly optimized opaque dark slate background */
+    background: rgba(15, 23, 42, 0.98) !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5) !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+body.perf-mode .btn-glow,
+body.perf-mode .mp-alert-card:hover,
+body.perf-mode .news-card:hover,
+body.perf-mode .tr-kpi-card:hover,
+body.perf-mode .portfolio-card:hover,
+body.perf-mode .btn-glow:hover {
+    /* Remove glowing drop-shadows and pulse glowing animations */
+    box-shadow: none !important;
+    text-shadow: none !important;
+    filter: none !important;
+}
+
+body.perf-mode #cursor-glow {
+    display: none !important;
+}
+

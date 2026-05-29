@@ -364,8 +364,21 @@
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Track Record</a>
             </div>
 
-            <!-- Non-Stock Mode and Access Terminal / Logout re-ordered -->
-            <div class="flex items-center gap-6 xl:gap-10 ml-auto">
+            <!-- Non-Stock Mode, Performance Mode and Access Terminal / Logout re-ordered -->
+            <div class="flex items-center gap-4 xl:gap-6 ml-auto">
+                <button id="perfToggle"
+                    class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/40 border border-white/5 hover:border-emerald-500/30 transition cursor-pointer group shadow-sm"
+                    onclick="togglePerformanceMode()">
+                    <div id="perfToggleBg"
+                        class="w-8 h-4 bg-slate-800 rounded-full relative transition-colors duration-300 shadow-inner">
+                        <div id="perfToggleKnob"
+                            class="absolute left-0.5 top-0.5 w-3 h-3 bg-slate-400 rounded-full transition-transform duration-300 ease-in-out">
+                        </div>
+                    </div>
+                    <span
+                        class="text-[10px] font-bold text-slate-400 uppercase tracking-widest group-hover:text-slate-200 transition-colors">Performance Mode</span>
+                </button>
+
                 <button id="modeToggle"
                     class="flex items-center gap-2 px-3 py-1.5 rounded-full bg-black/40 border border-white/5 hover:border-violet-500/30 transition cursor-pointer group shadow-sm"
                     onclick="toggleNonStockMode()">
@@ -376,8 +389,7 @@
                         </div>
                     </div>
                     <span
-                        class="text-[10px] font-bold text-slate-400 uppercase tracking-widest group-hover:text-slate-200 transition-colors">Non-Stock
-                        Mode</span>
+                        class="text-[10px] font-bold text-slate-400 uppercase tracking-widest group-hover:text-slate-200 transition-colors">Non-Stock Mode</span>
                 </button>
 
                 <div id="auth-section">
