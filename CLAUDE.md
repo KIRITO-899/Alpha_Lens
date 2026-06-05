@@ -92,7 +92,9 @@ Installs Flask, google-genai, yfinance, sendgrid, feedparser, etc.
 ```
 Alpha_Lens/
 ├── backend/
-│   ├── app.py                   # Flask server + AI news engine + yfinance worker
+│   ├── app.py                   # Flask server + AI news engine + yfinance worker (being decomposed)
+│   ├── market_calendar.py       # Pure NSE calendar/market-hours helpers (extracted from app.py)
+│   ├── news_rules.py            # Pure rule-based news classification + STOCK_KEYWORD_MAP (extracted from app.py)
 │   ├── prediction_models.py     # Multi-model ensemble (Sentiment, Historical Similarity, Sector Momentum, Event Pattern)
 │   ├── technical_analysis.py    # RSI, SMA, Bollinger Bands, market regime detection
 │   ├── backtest.py              # Historical backtesting harness
@@ -143,6 +145,8 @@ Alpha_Lens/
 | File | Purpose |
 |------|---------|
 | `app.py` | Flask routes, API endpoints, RSS fetch loop, AI analysis dispatch, background threads |
+| `market_calendar.py` | Pure NSE calendar helpers — holidays, `is_market_open`, `has_market_traded_since` (extracted from app.py) |
+| `news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` (extracted from app.py) |
 | `prediction_models.py` | 5-model ensemble predictor — sentiment, historical, sector, event, aggregation |
 | `technical_analysis.py` | RSI, SMA, Bollinger Bands, volume analysis, market regime detection |
 | `backtest.py` | Bulk historical replay — news vs candle data, win/loss stats |
@@ -243,6 +247,12 @@ git commit -m "Add feature X and document in CLAUDE.md"
 - **Background threads** (all started by `start_background_workers`, unless `--workers-only` mode): AI news engine, yfinance price worker, `archival_worker` (90-day reversible archive), `news_prune_worker` (800/5-day feed prune), plus macro warmer/shock workers. Retention is owned by these workers — there is **no** per-cycle hard-delete anymore.
 - **Market hours**: yfinance returns last available price outside NSE/BSE hours (9:15 AM – 3:30 PM IST). Live signals are most accurate during market hours.
 - **Fuzzy dedup**: Incoming headlines are compared (75% similarity threshold) against the 50 most recent entries to prevent near-duplicate signals.
+- **Decomposing app.py**: `app.py` is large and being split incrementally into pure modules (`market_calendar.py`, `news_rules.py`, …), each imported back so call sites are unchanged. **Verify any app.py change without spawning workers/network** with:
+  ```bash
+  cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
+    "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
+  ```
+  This catches circular imports / `NameError`s that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **37 routes**.
 
 ## Context7 MCP — Library Documentation
 
