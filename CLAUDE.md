@@ -19,7 +19,7 @@ After adding or modifying features, update CLAUDE.md if the change affects:
 
 ### Automatic Reminder Hook
 
-A hook in `.claude/settings.json` (PostToolUse on Write|Edit) will remind you to update this file whenever you modify files in the project. **Heed the reminder** — it catches cases where documentation gets out of sync.
+A hook in `.claude/settings.json` (PostToolUse on `Bash`) emits a CLAUDE.md-update reminder **after every `git commit`** (filtered by `.claude/hooks/post_commit_reminder.py` — silent on `--dry-run` and on every non-commit Bash call). It used to fire on every Write/Edit, which got noisy during multi-file changes; the post-commit timing means you're reminded once, when a commit has actually landed and the change is concrete enough to document. **Heed the reminder** if the commit affected commands, architecture, backend modules/APIs, configuration, dependencies, or project structure.
 
 ### How to Update
 
@@ -243,6 +243,17 @@ curl -X POST "http://127.0.0.1:5000/api/admin/reset-all-news?confirm=YES_WIPE_EV
   -H "X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>"
 ```
 Wipes `stock_impact`, `news`, both `*_archive` tables, and `historical_patterns`, and clears the in-memory dedup/bias caches so the worker restarts blank. Requires the `?confirm=YES_WIPE_EVERYTHING` guard.
+
+## Health & worker liveness
+
+Two endpoints expose background-worker state:
+
+| Endpoint | Use it for |
+|----------|-----------|
+| `GET /api/health` | One-glance "is anything broken right now?". Returns `overall: "ok"\|"degraded"\|"down"` + a per-worker state (`ok`/`not_started`/`running`/`silent`/`stalled`) judged against a per-worker stall budget, plus Gemini-key counts and a DB probe. HTTP **503** when `overall=down` so uptime monitors can latch on the status. Use this for cron monitors and quick eyeball checks. |
+| `GET /api/debug-worker-status` | Full per-worker dump — raw heartbeat fields, last cycle metrics (`last_scrape_count`, `last_save_count`, `last_news_moved`, `last_pruned_count`, etc.), last error + age. Use this when `/api/health` says something's wrong and you need the detail. |
+
+Both read from the in-process `WORKER_HEARTBEAT` dict in `app.py`, populated by each worker per cycle (`_heartbeat(name, **fields)`). All five workers — `ai_news`, `yfinance`, `macro_shock`, `archival`, `news_prune` — write their start/finish/error timestamps. Per-worker stall budgets live in `_WORKER_STALL_BUDGET_SECS` and are tuned to each worker's natural cadence (e.g. archival's budget is 36h because it runs every 24h).
 
 ## Development Workflow
 
