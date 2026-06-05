@@ -97,8 +97,6 @@ services:
         sync: false
       - key: GOOGLE_OAUTH_CLIENT_ID
         sync: false
-      - key: CONTEXT7_API_KEY
-        sync: false
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: SM_GEMINI_MODEL
