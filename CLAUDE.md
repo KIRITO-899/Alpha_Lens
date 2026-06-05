@@ -37,7 +37,7 @@ Always push to the `harthik` remote (`github.com/harthik200620/Alpha_Lens.git`),
 
 **Backend (Flask):** `C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe backend/app.py` — serves on port 5000
 
-**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS (`frontend/app.js`, `frontend/stocks.js`). No build step. Flask serves these from `static_folder='../frontend'`.
+**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **9 ordered chunks** (`app-core.js` → `app-calendar.js`, see below) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
 
 Open `http://127.0.0.1:5000` in your browser.
 
@@ -126,8 +126,17 @@ Alpha_Lens/
 │   └── [serve_app.py, _diag.py, win_rate_check.py — dev/utility scripts]
 ├── frontend/
 │   ├── index.html               # Main dashboard (stocks ticker, news cards, signals)
-│   ├── app.js                   # Frontend logic, API calls
-│   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries)
+│   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/9)
+│   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive (2/9)
+│   ├── app-stocks.js            # Watchlist search, portfolio assistant (3/9)
+│   ├── app-market.js            # Major stocks, indices, smart polling (4/9)
+│   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/9)
+│   ├── app-terminal.js          # Stock drawer, signal terminal, backtest, notifications (6/9)
+│   ├── app-ripple.js            # Ripple graph render (7/9)
+│   ├── app-macro.js             # Macro Pulse view (8/9)
+│   ├── app-calendar.js          # Economic-events calendar (9/9)
+│   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries, lazy-loaded)
+│   ├── sw.js                    # PWA service worker (cache-first static, network-first HTML/API)
 │   └── styles.css               # Dashboard styling
 ├── scratch/                     # Dev utilities (diagnostics, one-off scripts)
 ├── .mcp.json                    # Context7 MCP server + inline key (gitignored, local-only)
@@ -264,7 +273,8 @@ git commit -m "Add feature X and document in CLAUDE.md"
 
 ### Development Notes
 
-- **Frontend**: No build step. Edit `frontend/index.html`, `frontend/app.js`, `frontend/styles.css` directly. Flask serves via `static_folder`. Browser refresh fetches latest.
+- **Frontend**: No build step. Edit `frontend/index.html`, the `frontend/app-*.js` chunks, `frontend/styles.css` directly. Flask serves via `static_folder`. Browser refresh fetches latest.
+  - **app.js chunk split**: `app.js` was split into 9 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).
 - **Database**: SQLite files (`news_cache.db`, `users.db`) are created on first run. Delete to reset.
 - **API keys**: Always use environment variables (`.env`). Never hardcode in source.

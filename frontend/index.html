@@ -1179,10 +1179,22 @@
         </div>
     </div>
 
-    <!-- Extracted to app.js. `defer` keeps end-of-body execution timing.
-         Version query mirrors sw.js CACHE_VERSION so browsers HTTP-cache only
-         within a single deploy and fetch fresh on every version bump. -->
-    <script src="/app.js?v=al-v5-2026-05-30-ripple-arrow-flow" defer></script>
+    <!-- app.js was split into ordered chunks (see frontend/*.js). All are
+         classic scripts sharing one global scope; `defer` runs them in document
+         order after parse, so concatenating them top-to-bottom reproduces the
+         original single-file app.js exactly. Keep this order — chunk N may call
+         functions declared in any chunk, but module-level state must load in the
+         original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
+         HTTP-cache only within a deploy and fetch fresh on every version bump. -->
+    <script src="/app-core.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-news.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-stocks.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-market.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-premium.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-terminal.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-ripple.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-macro.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-calendar.js?v=al-v6-2026-06-05-js-split" defer></script>
 </body>
 
 </html>

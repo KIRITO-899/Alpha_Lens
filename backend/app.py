@@ -156,6 +156,8 @@ _CACHE_RULES = (
     # Use no-cache so browsers ALWAYS revalidate — avoids stale JS/CSS after
     # deploys. The server returns 304 Not Modified quickly when unchanged.
     ("/app.js",                      "no-cache, must-revalidate"),
+    # app.js was split into ordered app-*.js chunks; same revalidate policy.
+    ("/app-",                        "no-cache, must-revalidate"),
     ("/styles.css",                  "no-cache, must-revalidate"),
     # ── Macro Pulse — refresh moderately fast for live shock view ──
     ("/api/macro/events",            "public, max-age=60, stale-while-revalidate=120"),
