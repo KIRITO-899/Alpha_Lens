@@ -103,6 +103,10 @@ Alpha_Lens/
 │   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries)
 │   └── styles.css               # Dashboard styling
 ├── scratch/                     # Dev utilities (diagnostics, one-off scripts)
+├── .mcp.json                    # Context7 MCP server registration (Claude Code dev tool)
+├── .claude/
+│   ├── settings.json            # Shared Claude Code config (hooks, team permissions)
+│   └── settings.local.json      # Personal config + CONTEXT7_API_KEY (gitignored)
 ├── .env                         # API keys (Gemini, SendGrid, Google OAuth)
 ├── requirements.txt             # Python dependencies
 └── README.md                    # Full feature docs
@@ -209,18 +213,29 @@ Alpha_Lens now includes **Context7 MCP**, which provides real-time, version-spec
 - pandas, numpy
 - And all other Python dependencies
 
-### Setup
+### How it's wired
+
+The MCP server itself is registered in **`.mcp.json`** (committed) — a remote HTTP
+server pointing at `https://mcp.context7.com/mcp`. The API key is injected via the
+`${CONTEXT7_API_KEY}` placeholder, which Claude Code expands from the environment.
+
+| File | Role | Committed? |
+|------|------|-----------|
+| `.mcp.json` | Server registration (URL + auth header) | ✅ Yes (no secret — uses `${CONTEXT7_API_KEY}`) |
+| `.claude/settings.local.json` | Holds the real `CONTEXT7_API_KEY` in `env`, plus `enabledMcpjsonServers: ["context7"]` to trust the server | ❌ No (gitignored — personal/secret) |
+
+### Setup (one-time, per machine)
 
 1. **Get a free API key** at [context7.com/dashboard](https://context7.com/dashboard)
-2. **Set environment variable** in your Claude Code environment:
-   ```bash
-   CONTEXT7_API_KEY=your_api_key_here
-   ```
-   Or add to `.env`:
-   ```
-   CONTEXT7_API_KEY=your_api_key
-   ```
-3. **Tools are automatically available** — Context7 is configured in `.claude/settings.local.json`
+2. **Paste it** into `.claude/settings.local.json` → `env.CONTEXT7_API_KEY`
+   (replace the `PASTE_YOUR_CONTEXT7_API_KEY_HERE` placeholder). This file is
+   gitignored, so the key never reaches git.
+3. **Restart Claude Code** (or run `/mcp` and reconnect) so it picks up `.mcp.json`.
+   Verify with `/mcp` — `context7` should show as **connected**.
+
+> Note: adding `CONTEXT7_API_KEY` to the project `.env` only helps the Flask app /
+> Render — it does **not** feed Claude Code's MCP connection. The key must be in
+> `settings.local.json` `env` (or your shell environment) for the MCP to authenticate.
 
 ### Usage in Claude Code
 

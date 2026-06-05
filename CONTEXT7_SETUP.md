@@ -36,10 +36,42 @@ The `CONTEXT7_API_KEY` has been added to `render.yaml`:
 ```
 You've already set this value in Render's environment dashboard. The deployment will automatically use it.
 
-### Step 3: Verify Installation
-The MCP tools are already configured in `.claude/settings.local.json`:
-- ✅ `mcp__context7__resolve-library-id`
-- ✅ `mcp__context7__query-docs`
+### Step 3: Put the key where Claude Code can read it
+
+> ⚠️ **Important:** Render's env only powers the Flask app. Claude Code's MCP
+> connection does **not** read the project `.env` or Render. The key must live in
+> your **local** Claude Code environment.
+
+Paste your key into `.claude/settings.local.json` (gitignored — safe for secrets):
+```json
+{
+  "env": {
+    "CONTEXT7_API_KEY": "your_real_key_here"
+  },
+  "enabledMcpjsonServers": ["context7"]
+}
+```
+`.mcp.json` (committed) references it via `${CONTEXT7_API_KEY}`, so no secret is ever
+committed.
+
+### Step 4: Verify Installation
+
+The MCP **server** is registered in `.mcp.json`:
+```json
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp",
+      "headers": { "CONTEXT7_API_KEY": "${CONTEXT7_API_KEY}" }
+    }
+  }
+}
+```
+
+Restart Claude Code, then run `/mcp`. You should see **context7 — connected**, exposing:
+- ✅ `resolve-library-id`
+- ✅ `query-docs`
 
 ## What You Get
 
@@ -90,27 +122,19 @@ Claude: "Here's the exact API for SendGrid Mail..."
 ## Verification Steps
 
 ### ✅ Check Local Setup
-1. Verify `.env` file has the key:
+1. Verify the MCP server is registered:
    ```bash
-   grep CONTEXT7_API_KEY .env
+   grep -A6 context7 .mcp.json
    ```
-   Should output: `CONTEXT7_API_KEY=your_api_key_here`
+   Should show the `https://mcp.context7.com/mcp` HTTP server.
 
-2. Verify settings.local.json has Context7 tools:
+2. Verify your key is set locally (NOT the placeholder):
    ```bash
-   grep context7 .claude/settings.local.json
+   grep CONTEXT7_API_KEY .claude/settings.local.json
    ```
-   Should output:
-   ```
-   "mcp__context7__resolve-library-id",
-   "mcp__context7__query-docs",
-   ```
+   Should show your real key, not `PASTE_YOUR_CONTEXT7_API_KEY_HERE`.
 
-### ✅ Check Render Deployment
-1. Visit your Render dashboard: https://dashboard.render.com
-2. Go to **alpha-lens** service → **Environment**
-3. Verify `CONTEXT7_API_KEY` is listed
-4. Check that it matches the value from context7.com/dashboard
+3. Run `/mcp` in Claude Code — `context7` should be **connected**.
 
 ### ✅ Test Context7 in Claude Code
 Ask Claude Code:
@@ -128,8 +152,8 @@ If Context7 is working, Claude should fetch real, version-specific documentation
 
 ### API Key Not Working
 - Verify the key is copied correctly from [context7.com/dashboard](https://context7.com/dashboard)
-- Check that `CONTEXT7_API_KEY` environment variable is set
-- If using `.env`, restart Claude Code for changes to take effect
+- Confirm it's in `.claude/settings.local.json` → `env.CONTEXT7_API_KEY` (the project `.env`/Render do NOT feed the MCP)
+- Restart Claude Code after changing the key so the MCP reconnects
 
 ### Context7 Tool Not Found
 - Verify `.claude/settings.local.json` contains:

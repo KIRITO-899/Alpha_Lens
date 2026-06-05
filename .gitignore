@@ -23,3 +23,8 @@ C:\Users\vella\OneDrive\Desktop\New folder (2)\Alpha_Lens\news_cache.db
 .env
 .vscode/
 *.backup
+
+# Claude Code personal/local config — holds API keys (e.g. CONTEXT7_API_KEY)
+# and personal permission allowlists. Keep out of git. Shared config (hooks,
+# team permissions) lives in .claude/settings.json instead.
+.claude/settings.local.json
