@@ -406,6 +406,12 @@ TRADE_STOP_PCT = 1.0
 # and excluded from hit-rate stats. Tunable via env var for ops without redeploy.
 SIGNAL_EXPIRY_HOURS = int(os.environ.get("SIGNAL_EXPIRY_HOURS", "96"))
 
+# Signals (and the news they reference) are kept in the hot tables for at least
+# this many days so the track record + signal terminal show a full 90-day
+# history. After this window archival_worker MOVES rows to the *_archive tables
+# (reversible) — nothing is hard-deleted. Keep aligned with ARCHIVE_AFTER_DAYS.
+SIGNAL_RETENTION_DAYS = int(os.environ.get("SIGNAL_RETENTION_DAYS", "90"))
+
 import performance_report
 
 # In-memory store for OTPs
@@ -4894,15 +4900,13 @@ Return ONLY valid JSON matching this shape:
             #  prior to the 'remove Phase 2 background' commit, or set the env var
             #  and re-enable in a future commit.)
 
-        # Clean up old news (older than 7 days)
-        try:
-            seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
-            def _cleanup(conn, c):
-                c.execute("DELETE FROM stock_impact WHERE news_id IN (SELECT id FROM news WHERE created_at < ?)", (seven_days_ago,))
-                c.execute("DELETE FROM news WHERE created_at < ?", (seven_days_ago,))
-            db_write(_cleanup)
-        except Exception as e:
-            print("DB Cleanup Error:", e)
+        # NOTE: the old per-cycle "DELETE news + stock_impact older than 7 days"
+        # was REMOVED — it was destroying signals long before the intended
+        # 90-day window (this is why the track record / signal terminal kept
+        # losing history). Retention is now owned exclusively by archival_worker,
+        # which every 24h MOVES rows older than SIGNAL_RETENTION_DAYS (90) into
+        # the *_archive tables (reversible insert+delete), so signals persist for
+        # a full 90 days and are never hard-deleted on the hot path.
             
         # Performance report
         try:
@@ -8246,7 +8250,15 @@ def get_signal_terminal():
         conn = connect_news_db()
         conn.row_factory = sqlite3.Row
         c = conn.cursor()
-        cutoff = (datetime.now(timezone.utc) - timedelta(days=5)).strftime('%Y-%m-%d %H:%M:%S')
+        # 90-day window (was 5 days) so the terminal keeps a full quarter of
+        # signal history. The live re-pricing loop below only fires for Active
+        # signals, so returning more rows stays cheap — closed/expired signals
+        # use their stored final price.
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=SIGNAL_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+        # ~6 signals/day in practice, so 90 days ≈ ~550 rows; 1500 gives ~3x
+        # headroom without truncating, and the table renders once on tab-open
+        # (not polled). Raise SIGNAL_TERMINAL_MAX if signal volume grows.
+        term_limit = int(os.environ.get("SIGNAL_TERMINAL_MAX", "1500"))
         c.execute("""
             SELECT si.id, si.ticker, si.impact, si.confidence_score,
                    si.base_price, si.current_price, si.estimated_change_percent,
@@ -8256,8 +8268,8 @@ def get_signal_terminal():
             LEFT JOIN news n ON si.news_id = n.id
             WHERE si.created_at >= ?
             ORDER BY si.confidence_score DESC, si.created_at DESC
-            LIMIT 200
-        """, (cutoff,))
+            LIMIT ?
+        """, (cutoff, term_limit))
         rows = c.fetchall()
         conn.close()
 
@@ -8274,7 +8286,11 @@ def get_signal_terminal():
 
             quote_price = None
             quote_ticker = normalize_ticker(d.get('ticker')) or d.get('ticker')
-            if quote_ticker:
+            # Only re-price signals that are still Active — closed/expired signals
+            # (Hit/Stop/Reacted/Expired) have a frozen outcome, so we reuse their
+            # stored current_price. This keeps the 90-day terminal cheap by
+            # limiting live quote fetches to the handful of still-open signals.
+            if quote_ticker and status == 'Active View':
                 try:
                     if quote_ticker not in market_quote_cache:
                         market_quote_cache[quote_ticker] = get_stock_market_change_quote(

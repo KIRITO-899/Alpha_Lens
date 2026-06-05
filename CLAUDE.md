@@ -164,6 +164,34 @@ GEMINI_MODEL=gemini-2.5-flash
 
 The backend rotates through multiple Gemini keys to avoid rate limits.
 
+### Signal lifecycle / retention env vars
+
+| Var | Default | Meaning |
+|-----|---------|---------|
+| `SIGNAL_EXPIRY_HOURS` | `96` | A signal not hitting target/stop within this window is marked **Expired** (excluded from hit-rate). |
+| `SIGNAL_RETENTION_DAYS` | `90` | Signals + their news stay in the **hot tables** at least this long. Keep aligned with `ARCHIVE_AFTER_DAYS`. |
+| `ARCHIVE_AFTER_DAYS` | `90` | `archival_worker` MOVES rows older than this into `*_archive` tables (reversible) every `ARCHIVE_RUN_EVERY_HOURS`. |
+| `SIGNAL_TERMINAL_MAX` | `1500` | Max rows `/api/signal-terminal` returns over the 90-day window (~6 signals/day in practice). |
+
+## Signal retention & lifecycle
+
+Signals live in `stock_impact` (hot table) and are **retained for at least 90 days**:
+
+1. **Created** by the AI news engine → `stock_impact` with `status='Active View'`.
+2. **Monitored** by the yfinance worker → status resolves to `Predicted Target Hit` / `Stop Loss Hit` / `Reacted Against Prediction`, or **Expired** after `SIGNAL_EXPIRY_HOURS`.
+3. **Retained** in the hot tables for `SIGNAL_RETENTION_DAYS` (90). The **only** thing that removes them is `archival_worker`, which **moves** rows older than `ARCHIVE_AFTER_DAYS` into `stock_impact_archive` / `news_archive` (reversible insert+delete) — nothing is hard-deleted on the hot path.
+   - ⚠️ There used to be a per-cycle `DELETE ... older than 7 days` in `ai_news_worker` that destroyed signals early. It was **removed** — `archival_worker` is now the sole retention authority.
+4. **Surfaced** by `/api/signal-terminal` (90-day window; live re-pricing only for `Active View` signals, closed ones use stored price) and the track record via `/api/backtest-stats?range=90d|all`.
+
+### Reset (start tracking from zero)
+
+To wipe **all** signals + news and begin counting from 0 (e.g. after a model/prompt change):
+```bash
+curl -X POST "http://127.0.0.1:5000/api/admin/reset-all-news?confirm=YES_WIPE_EVERYTHING" \
+  -H "X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>"
+```
+Wipes `stock_impact`, `news`, both `*_archive` tables, and `historical_patterns`, and clears the in-memory dedup/bias caches so the worker restarts blank. Requires the `?confirm=YES_WIPE_EVERYTHING` guard.
+
 ## Development Workflow
 
 When you add or modify features in Alpha_Lens, follow this workflow:
