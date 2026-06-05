@@ -6141,39 +6141,12 @@ def known_ticker_bases():
         pass
     return bases
 
-COMMON_EXTERNAL_STOCK_ALIASES = {
-    "tesla": "TSLA",
-    "tsla": "TSLA",
-    "apple": "AAPL",
-    "aapl": "AAPL",
-    "microsoft": "MSFT",
-    "msft": "MSFT",
-    "google": "GOOGL",
-    "alphabet": "GOOGL",
-    "googl": "GOOGL",
-    "meta": "META",
-    "facebook": "META",
-    "nvidia": "NVDA",
-    "nvda": "NVDA",
-    "amazon": "AMZN",
-    "amzn": "AMZN",
-    "bitcoin": "BTC",
-    "btc": "BTC",
-    "ethereum": "ETH",
-    "eth": "ETH",
-}
-
-GENERIC_STOCK_NAME_WORDS = {
-    "limited", "ltd", "industries", "industry", "india", "indian", "company",
-    "corporation", "corp", "bank", "finance", "financial", "services",
-    "service", "group", "holdings", "holding", "enterprise", "enterprises",
-}
-
-OUT_OF_SCOPE_TOPIC_WORDS = {
-    "weather", "rain", "temperature", "cricket", "football", "movie",
-    "movies", "song", "songs", "recipe", "travel", "hotel", "politics",
-    "election", "celebrity", "astrology", "horoscope",
-}
+# Portfolio-assistant ticker-detection lookup tables were extracted to
+# portfolio_data.py. Imported back so clean_stock_name() etc. resolve them.
+from portfolio_data import (
+    COMMON_EXTERNAL_STOCK_ALIASES, GENERIC_STOCK_NAME_WORDS,
+    OUT_OF_SCOPE_TOPIC_WORDS,
+)
 
 def clean_stock_name(value):
     return re.sub(r'[^a-z0-9&\-\s]+', ' ', str(value or '').lower()).strip()
