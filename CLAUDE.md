@@ -63,11 +63,17 @@ python backend/backtest.py
 ```
 Replays headlines from `news_dataset.csv` against historical candle data. Evaluates at T+24h and T+48h with +1.5% target, -3.0% stop-loss. Outputs win/loss stats.
 
-### Backfill existing headlines through ensemble
+### Backfill pending headlines through the ensemble
+Backfill is exposed as a **one-time, manual admin API endpoint** (not a standalone
+script — the old `backfill_stocks.py` no longer exists). It runs the same prediction
+pipeline over headlines with `ai_status='pending'`:
 ```bash
-python backend/backfill_stocks.py
+curl -X POST "http://127.0.0.1:5000/api/admin/backfill-pending-predictions" \
+  -H "X-Alpha-Lens-Token: <admin_token>" -H "Content-Type: application/json" \
+  -d '{"limit": 64}'
 ```
-Reprocesses all headlines already in `news_cache.db` through the updated ensemble engine, regenerating `stock_impact` entries. Run once after upgrades to v4.0+.
+Implemented by `_run_backfill_pending()` / `backfill_pending_predictions()` in `app.py`.
+Poll the same endpoint with `GET` (and the admin token) to watch progress.
 
 ### Performance reporting
 ```bash
@@ -90,13 +96,15 @@ Alpha_Lens/
 │   ├── prediction_models.py     # Multi-model ensemble (Sentiment, Historical Similarity, Sector Momentum, Event Pattern)
 │   ├── technical_analysis.py    # RSI, SMA, Bollinger Bands, market regime detection
 │   ├── backtest.py              # Historical backtesting harness
-│   ├── backfill_stocks.py       # Regenerates stock_impact via ensemble for existing headlines
 │   ├── performance_report.py    # Win rate, confidence stats, trade status breakdown
 │   ├── database.py              # OTP auth, OAuth, session management (SQLite)
 │   ├── news_cache.db            # SQLite: headlines, AI analysis, stock impacts
 │   ├── users.db                 # SQLite: user accounts, sessions
-│   ├── angelone_shim.py         # yfinance wrapper (Angel One integration)
-│   └── [other utility modules]
+│   ├── angelone_shim.py         # yfinance-compatible shim (Angel One data, imported as `yf`)
+│   ├── yfinance_twelvedata_shim.py  # Alt yfinance-compatible shim (Twelve Data)
+│   ├── oi_data.py               # Open-interest data fetch
+│   ├── whatsapp_sender.py       # WhatsApp alert sender
+│   └── [serve_app.py, _diag.py, win_rate_check.py — dev/utility scripts]
 ├── frontend/
 │   ├── index.html               # Main dashboard (stocks ticker, news cards, signals)
 │   ├── app.js                   # Frontend logic, API calls
@@ -136,7 +144,6 @@ Alpha_Lens/
 | `prediction_models.py` | 5-model ensemble predictor — sentiment, historical, sector, event, aggregation |
 | `technical_analysis.py` | RSI, SMA, Bollinger Bands, volume analysis, market regime detection |
 | `backtest.py` | Bulk historical replay — news vs candle data, win/loss stats |
-| `backfill_stocks.py` | Regenerate stock_impact for all existing headlines via ensemble |
 | `performance_report.py` | Terminal-based performance stats |
 | `database.py` | SQLite user auth, OTP, OAuth 2.0, session management |
 
