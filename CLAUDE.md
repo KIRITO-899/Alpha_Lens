@@ -2,6 +2,33 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Maintenance Policy
+
+**CRITICAL: Update this file whenever features are added.** This file is the primary knowledge source for future Claude instances. Keep it synchronized with the codebase.
+
+### What to Document
+
+After adding or modifying features, update CLAUDE.md if the change affects:
+
+- **New commands or workflows** — Common tasks or commands users should know
+- **Architecture or system design** — Changes to how systems interact (backend threads, databases, APIs)
+- **New backend modules or APIs** — New Python files, Flask endpoints, or utility modules
+- **Configuration or setup steps** — New environment variables, setup requirements, build steps
+- **Dependencies** — New packages in requirements.txt, version changes that affect usage
+- **Project structure** — New directories, file organization changes, or critical file locations
+
+### Automatic Reminder Hook
+
+A hook in `.claude/settings.json` (PostToolUse on Write|Edit) will remind you to update this file whenever you modify files in the project. **Heed the reminder** — it catches cases where documentation gets out of sync.
+
+### How to Update
+
+1. **Be specific** — Don't just list changes; explain the "why" and "how"
+2. **Keep it concise** — Use tables, bullet points, and clear sections
+3. **Stay accurate** — Stale documentation is worse than no documentation
+4. **Cross-reference** — Link to critical files or commands mentioned
+5. **Test your changes** — Verify instructions work before documenting them
+
 ## Git push target
 
 Always push to the `harthik` remote (`github.com/harthik200620/Alpha_Lens.git`), NOT `origin` (KIRITO-899). The `main` branch is already configured to track `harthik/main`, so a plain `git push` will go to the right place — do not pass `origin` explicitly.
@@ -126,7 +153,40 @@ GEMINI_MODEL=gemini-2.5-flash
 
 The backend rotates through multiple Gemini keys to avoid rate limits.
 
-## Development notes
+## Development Workflow
+
+When you add or modify features in Alpha_Lens, follow this workflow:
+
+### 1. Implement the Feature
+- Write code, add files, modify backend/frontend
+- Test locally to ensure it works
+
+### 2. Update CLAUDE.md (Before Committing)
+Claude Code will remind you after file modifications. **Do not skip this step.**
+
+Update one of these sections based on what changed:
+
+| Section | When to Update |
+|---------|---|
+| **Quick start** | Changed how to run the app or added new startup requirements |
+| **Common commands** | Added new utility scripts or management commands |
+| **Project structure** | Reorganized directories or added new modules |
+| **Architecture** | Changed how components interact (backend threads, data flow) |
+| **Key modules** | Added new `.py` files in backend, changed existing module responsibilities |
+| **Environment variables** | Added new required `.env` variables |
+
+Example update for a new backend module:
+```markdown
+| `new_feature.py` | New module for X functionality — imported by `app.py` |
+```
+
+### 3. Commit Together
+```bash
+git add CLAUDE.md <your-changed-files>
+git commit -m "Add feature X and document in CLAUDE.md"
+```
+
+### Development Notes
 
 - **Frontend**: No build step. Edit `frontend/index.html`, `frontend/app.js`, `frontend/styles.css` directly. Flask serves via `static_folder`. Browser refresh fetches latest.
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).

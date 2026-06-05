@@ -5,10 +5,8 @@
         "matcher": "Write|Edit",
         "hooks": [
           {
-            "type": "command",
-            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | grep -E 'backend/.*\\.py$' > /dev/null && echo '{\"systemMessage\": \"📝 Reminder: Backend feature(s) added. Don't forget to update CLAUDE.md with:\\n  - New command(s) or functionality\\n  - Architecture changes\\n  - New modules or imports\\n  - API endpoint changes\\n  - See CLAUDE.md for structure.\"}'  || true",
-            "statusMessage": "Checking if CLAUDE.md needs updating...",
-            "shell": "bash"
+            "type": "prompt",
+            "prompt": "A file was just modified. Ask the user: should they update CLAUDE.md with documentation about this change? Suggest they document it if this affects: new commands/workflows, architecture changes, new backend modules/APIs, configuration steps, dependencies, or project structure. Be brief and friendly."
           }
         ]
       }
