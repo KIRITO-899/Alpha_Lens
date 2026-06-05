@@ -12,13 +12,13 @@ Context7 is now installed in the Alpha_Lens Claude Code environment. Follow thes
 
 ### Step 2: Set Environment Variable (Choose One)
 
-#### Option A: In `.env` file (Recommended)
+#### Option A: For Local Development (`.env` file)
 Add to `C:\Project rohan\Alpha_Lens\.env`:
 ```
 CONTEXT7_API_KEY=your_api_key_here
 ```
 
-#### Option B: In Claude Code Environment
+#### Option B: For Claude Code Environment
 Set via environment (OS level or Claude settings):
 ```bash
 # Windows
@@ -27,6 +27,14 @@ set CONTEXT7_API_KEY=your_api_key_here
 # Or in PowerShell
 $env:CONTEXT7_API_KEY='your_api_key_here'
 ```
+
+#### Option C: For Render Deployment (Production) ✅ DONE
+The `CONTEXT7_API_KEY` has been added to `render.yaml`:
+```yaml
+- key: CONTEXT7_API_KEY
+  sync: false
+```
+You've already set this value in Render's environment dashboard. The deployment will automatically use it.
 
 ### Step 3: Verify Installation
 The MCP tools are already configured in `.claude/settings.local.json`:
@@ -78,6 +86,43 @@ Claude: "Here's the exact API for SendGrid Mail..."
 | **Authentication** | google-auth, python-dateutil |
 | **Database** | SQLite3 (built-in), psycopg2 |
 | **Utilities** | python-dotenv, logzero |
+
+## Verification Steps
+
+### ✅ Check Local Setup
+1. Verify `.env` file has the key:
+   ```bash
+   grep CONTEXT7_API_KEY .env
+   ```
+   Should output: `CONTEXT7_API_KEY=your_api_key_here`
+
+2. Verify settings.local.json has Context7 tools:
+   ```bash
+   grep context7 .claude/settings.local.json
+   ```
+   Should output:
+   ```
+   "mcp__context7__resolve-library-id",
+   "mcp__context7__query-docs",
+   ```
+
+### ✅ Check Render Deployment
+1. Visit your Render dashboard: https://dashboard.render.com
+2. Go to **alpha-lens** service → **Environment**
+3. Verify `CONTEXT7_API_KEY` is listed
+4. Check that it matches the value from context7.com/dashboard
+
+### ✅ Test Context7 in Claude Code
+Ask Claude Code:
+```
+"Look up Flask documentation using Context7"
+```
+Or:
+```
+"Show me the Gemini API documentation via Context7"
+```
+
+If Context7 is working, Claude should fetch real, version-specific documentation.
 
 ## Troubleshooting
 
