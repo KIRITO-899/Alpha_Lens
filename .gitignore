@@ -31,3 +31,7 @@ C:\Users\vella\OneDrive\Desktop\New folder (2)\Alpha_Lens\news_cache.db
 
 # Context7 MCP server config holds the real CONTEXT7_API_KEY inline. Keep local.
 .mcp.json
+
+# Stray notebooks / one-off artifacts / binders — keep out of git.
+*.ipynb
+Alpha_Lens_Pro_Desk_Features.pdf
