@@ -20,15 +20,20 @@
 // Bump on every deploy that changes static assets. Activate handler purges
 // any cache whose key doesn't start with this version, so stale CSS/JS from
 // the previous deploy are evicted automatically.
-const CACHE_VERSION = 'al-v6-2026-06-05-js-split';
+const CACHE_VERSION = 'al-v7-2026-06-06-precache-bootstrap';
 const STATIC_CACHE  = `${CACHE_VERSION}-static`;
 const API_CACHE     = `${CACHE_VERSION}-api`;
 const HTML_CACHE    = `${CACHE_VERSION}-html`;
 
 // Assets we want available offline. /stocks.js intentionally NOT pre-cached
 // because T2.7 made it lazy — pre-caching it here would defeat that win.
+// app-core.js (chunk 1/9) IS pre-cached: it's tiny, runs on every page load,
+// and pre-caching it means repeat visits skip the network for the bootstrap
+// chunk entirely. The other 8 chunks fall back to cache-first via
+// isStaticAsset() so they still get cached on first visit, just not eagerly.
 const STATIC_PRECACHE = [
   '/manifest.json',
+  '/app-core.js',
 ];
 
 // ── Install: warm the static cache ────────────────────────────────────────

@@ -50,7 +50,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="preconnect" href="https://cdnjs.cloudflare.com">
-    <link rel="dns-prefetch" href="https://accounts.google.com">
+    <!-- OAuth script loads on every page (auth modal is universally reachable);
+         upgrade from dns-prefetch to preconnect so DNS+TCP+TLS overlap with HTML
+         parse, not just DNS. crossorigin is required because gsi/client is a
+         CORS-relevant fetch. -->
+    <link rel="preconnect" href="https://accounts.google.com" crossorigin>
 
     <!-- ── T3.15 Resource preload hints ──
          Render's free tier doesn't expose HTTP/2 server-push or 103 Early
@@ -1186,15 +1190,15 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-news.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-stocks.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-market.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-premium.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-terminal.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-ripple.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-macro.js?v=al-v6-2026-06-05-js-split" defer></script>
-    <script src="/app-calendar.js?v=al-v6-2026-06-05-js-split" defer></script>
+    <script src="/app-core.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-news.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-stocks.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-market.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-premium.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-terminal.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-ripple.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-macro.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
+    <script src="/app-calendar.js?v=al-v7-2026-06-06-precache-bootstrap" defer></script>
 </body>
 
 </html>

@@ -7,7 +7,28 @@
 
             document.getElementById('sd-ticker').textContent = base;
             document.getElementById('sd-name').textContent = 'Loading…';
-            document.getElementById('sd-body').innerHTML = '<div class="sd-empty">Loading…</div>';
+            // Skeleton placeholder while the live-price fetch is in flight.
+            // Mirrors the eventual layout (Live Quote → AI Verdict → Signals)
+            // so the swap doesn't reflow the drawer. ARIA so screen readers
+            // announce loading state rather than dead silence.
+            document.getElementById('sd-body').innerHTML = (
+                '<div class="sd-section" aria-busy="true" aria-label="Loading stock details">'
+              +   '<div class="sd-section-label">Live Quote</div>'
+              +   '<div class="sd-price-row">'
+              +     '<span class="skel skel-num lg" style="width:140px"></span>'
+              +     '<span class="skel skel-pill" style="margin-left:10px"></span>'
+              +   '</div>'
+              + '</div>'
+              + '<div class="sd-section">'
+              +   '<div class="sd-section-label">AI Signals (recent)</div>'
+              +   Array.from({length: 3}).map(() =>
+                    '<div class="sd-news-item">'
+                  +   '<div class="h"><span class="skel skel-line med"></span></div>'
+                  +   '<div class="m"><span class="skel skel-line tiny"></span></div>'
+                  + '</div>'
+                  ).join('')
+              + '</div>'
+            );
 
             drawer.classList.add('show');
             drawer.setAttribute('aria-hidden', 'false');
@@ -150,6 +171,18 @@
         // ── SIGNAL TERMINAL ──
         async function fetchTerminalData() {
             try {
+                // Show skeleton rows while the fetch is in flight, but ONLY on
+                // first load (when _terminalData is still empty). On a refresh
+                // we already have rows on screen — flashing skeletons over them
+                // would be a regression, not an improvement.
+                const tbody = document.getElementById('terminal-body');
+                if (tbody && !_terminalData.length) {
+                    const COLS = 10;  // matches the terminal-table thead column count
+                    const skelCell = '<td><span class="skel skel-cell" style="display:block;width:80%"></span></td>';
+                    tbody.innerHTML = Array.from({length: 8})
+                        .map(() => '<tr class="skel-row">' + skelCell.repeat(COLS) + '</tr>')
+                        .join('');
+                }
                 const res = await fetch('/api/signal-terminal');
                 const data = await res.json();
                 _terminalData = data.signals || [];
