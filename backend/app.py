@@ -412,6 +412,15 @@ SIGNAL_EXPIRY_HOURS = int(os.environ.get("SIGNAL_EXPIRY_HOURS", "96"))
 # (reversible) — nothing is hard-deleted. Keep aligned with ARCHIVE_AFTER_DAYS.
 SIGNAL_RETENTION_DAYS = int(os.environ.get("SIGNAL_RETENTION_DAYS", "90"))
 
+# News FEED retention — separate from signal retention. The "All News" tab is
+# kept bounded to the newest NEWS_FEED_MAX_ROWS rows AND the last
+# NEWS_FEED_RETENTION_DAYS days so the browser never chokes. IMPORTANT: news that
+# a signal references is EXEMPT from this prune — it is retained alongside the
+# signal and archival_worker moves both into *_archive together at 90 days, so
+# the signal terminal can still resolve the headline for the full 90-day window.
+NEWS_FEED_RETENTION_DAYS = int(os.environ.get("NEWS_MAX_AGE_DAYS", "5"))
+NEWS_FEED_MAX_ROWS       = int(os.environ.get("NEWS_MAX_ROWS", "800"))
+
 import performance_report
 
 # In-memory store for OTPs
@@ -6693,12 +6702,12 @@ def get_all_news():
 
         conn = connect_news_db()
         c    = conn.cursor()
-        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%d %H:%M:%S')
+        feed_cutoff = (datetime.now(timezone.utc) - timedelta(days=NEWS_FEED_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
 
-        # ── Query 1: news rows ──
+        # ── Query 1: news rows (feed shows the last NEWS_FEED_RETENTION_DAYS days) ──
         c.execute(
             "SELECT * FROM news WHERE created_at >= ? ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (seven_days_ago, limit, offset)
+            (feed_cutoff, limit, offset)
         )
         news_rows = c.fetchall()
         news_cols = [desc[0] for desc in c.cursor.description]
@@ -9966,58 +9975,62 @@ def archival_worker():
 
 def prune_low_value_news():
     """
-    Aggressive prune of the hot `news` table so /api/news/all stays snappy and
-    the "All News" tab doesn't choke the browser rendering 7000+ cards.
+    Keeps the hot `news` table bounded so /api/news/all stays snappy and the
+    "All News" tab doesn't choke the browser.
 
-    Two passes, both targeting the OLDEST rows (lowest created_at):
+    Deletes a news row when it has NO stock_impact (signal-less) AND is not
+    pending AND is EITHER older than NEWS_FEED_RETENTION_DAYS (5d) OR beyond the
+    newest NEWS_FEED_MAX_ROWS (800) signal-less rows. So the feed is capped on
+    both age and count.
 
-      Pass 1 — "Dead headlines": of the oldest 3000 news, delete those that
-               have ZERO stock_impact rows. The AI worker tried but never
-               produced a usable signal — pure noise to the user.
+    News referenced by a signal is EXEMPT and never deleted here — it is kept
+    with the signal so the signal terminal can show its headline for the full
+    90-day window, and archival_worker later MOVES both into *_archive together.
 
-      Pass 2 — "Stale signals": of the oldest 4000 news, delete those whose
-               stock_impact rows are ALL non-Active (target hit / stop-loss /
-               expired / reacted-against). The user can't trade them anymore,
-               so they're just bloat. The corresponding closed predictions are
-               deleted along with the news row.
-
-    NOT REVERSIBLE — these rows are dropped, not archived. The archival worker
-    (`archival_worker`) handles the reversible 90-day move to *_archive. This
-    routine exists to keep the hot table well under the size the frontend can
-    render without jank.
+    NOT REVERSIBLE for the signal-less rows it drops (pure noise the AI never
+    turned into a signal). The reversible 90-day move to *_archive is handled by
+    archival_worker.
 
     Returns (deleted_news_count, deleted_impact_count).
     """
-    PRUNE_NO_PRED_LIMIT      = int(os.environ.get("PRUNE_NO_PRED_LIMIT", "3000"))
-    PRUNE_NO_ACTIVE_LIMIT    = int(os.environ.get("PRUNE_NO_ACTIVE_LIMIT", "4000"))
-    PRUNE_NO_PRED_RETAIN     = int(os.environ.get("PRUNE_NO_PRED_RETAIN", "750"))
+    # Per-pass safety cap so a large backlog clears over a few hourly passes
+    # rather than one giant transaction.
+    PRUNE_BATCH_LIMIT = int(os.environ.get("PRUNE_BATCH_LIMIT", "5000"))
+    age_cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=NEWS_FEED_RETENTION_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
 
     def _prune(conn, c):
         deleted_news = 0
         deleted_impacts = 0
 
-        # ── Pass 1: oldest N news with NO stock_impact rows at all (retaining the most recent N) ──
-        # IMPORTANT: rows with ai_status='pending' are exempt — those were
-        # saved during AI downtime and are still waiting for the rescreen
-        # pass to attach predictions. Nuking them would lose news the user
-        # already saw on the UI before it got analyzed.
+        # Prune signal-less, non-pending news that is EITHER older than
+        # NEWS_FEED_RETENTION_DAYS (5d) *or* beyond the newest NEWS_FEED_MAX_ROWS
+        # (800) rows — so the "All News" feed stays bounded on both age and count.
+        # News referenced by a stock_impact (signal) is EXEMPT (outer NOT EXISTS),
+        # so we never blank out a signal's headline; archival_worker later moves
+        # those news+signal rows to *_archive together at 90 days.
+        # Pending news (saved during AI downtime, awaiting rescreen) is also exempt.
         c.execute("""
             SELECT n.id FROM news n
             WHERE NOT EXISTS (
                 SELECT 1 FROM stock_impact si WHERE si.news_id = n.id
             )
               AND (n.ai_status IS NULL OR n.ai_status != 'pending')
-              AND n.id NOT IN (
-                  SELECT id FROM news
-                  WHERE NOT EXISTS (
-                      SELECT 1 FROM stock_impact si WHERE si.news_id = news.id
-                  )
-                  ORDER BY created_at DESC
-                  LIMIT ?
+              AND (
+                    n.created_at < ?
+                    OR n.id NOT IN (
+                        SELECT id FROM news
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM stock_impact si WHERE si.news_id = news.id
+                        )
+                          AND (ai_status IS NULL OR ai_status != 'pending')
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    )
               )
             ORDER BY n.created_at ASC
             LIMIT ?
-        """, (PRUNE_NO_PRED_RETAIN, PRUNE_NO_PRED_LIMIT))
+        """, (age_cutoff, NEWS_FEED_MAX_ROWS, PRUNE_BATCH_LIMIT))
         ids_p1 = [r[0] for r in c.fetchall()]
         if ids_p1:
             placeholders = ','.join(['?'] * len(ids_p1))

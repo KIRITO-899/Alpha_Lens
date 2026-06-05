@@ -172,6 +172,13 @@ The backend rotates through multiple Gemini keys to avoid rate limits.
 | `SIGNAL_RETENTION_DAYS` | `90` | Signals + their news stay in the **hot tables** at least this long. Keep aligned with `ARCHIVE_AFTER_DAYS`. |
 | `ARCHIVE_AFTER_DAYS` | `90` | `archival_worker` MOVES rows older than this into `*_archive` tables (reversible) every `ARCHIVE_RUN_EVERY_HOURS`. |
 | `SIGNAL_TERMINAL_MAX` | `1500` | Max rows `/api/signal-terminal` returns over the 90-day window (~6 signals/day in practice). |
+| `NEWS_MAX_AGE_DAYS` | `5` | **News feed** window — "All News" shows the last N days; the prune deletes signal-less news older than this. |
+| `NEWS_MAX_ROWS` | `800` | **News feed** row cap — `prune_low_value_news` deletes signal-less news beyond the newest N. |
+
+> **News feed vs signals are two different retention windows.** The *news feed*
+> is bounded to 800 rows / 5 days. *Signals* persist 90 days. News that a signal
+> references is **exempt** from the news prune — it's kept with the signal (so the
+> signal terminal can show its headline) and archived alongside it at 90 days.
 
 ## Signal retention & lifecycle
 
