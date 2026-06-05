@@ -81,6 +81,16 @@ python backend/performance_report.py
 ```
 Reads `news_cache.db` and generates terminal-based stats: total articles, unique signals, breakdown by trade status (Active/Hit Target/Stopped Out/Expired), win rate, avg confidence.
 
+### Running the test suite
+```bash
+cd backend && "../.alpha-venv/Scripts/python.exe" -m unittest discover -s tests
+```
+Stdlib `unittest` (pytest is **not** in the venv). `backend/tests/` covers the
+pure modules extracted from `app.py` during decomposition — `market_calendar`,
+`ticker_utils`, `news_rules`, `news_data`. `tests/__init__.py` puts `backend/`
+on `sys.path` so the sibling modules import regardless of CWD. Tests are pure
+(no network/DB/threads), so they run in well under a second.
+
 ### Installing dependencies
 ```bash
 pip install -r requirements.txt
