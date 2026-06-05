@@ -134,7 +134,9 @@ Alpha_Lens/
    - EnsemblePredictor — aggregates scores, applies dual gate: **score ≥70 AND 3+ models agree**
 4. **Technical Confirmation** (`technical_analysis.py`): RSI (14-period), SMA (20/50), Bollinger Bands, volume trends, market regime
 5. **yfinance Worker** (background thread): Monitors open positions, resolves trades vs target/stop-loss every 10s
-6. **SQLite DBs**: `news_cache.db` (headlines, signals), `users.db` (accounts, sessions)
+6. **Archival Worker** (`archival_worker`, every 24h): the **sole retention authority** — MOVES news + signals older than `ARCHIVE_AFTER_DAYS` (90) into `*_archive` tables (reversible insert+delete). Nothing is hard-deleted on the hot path.
+7. **News Prune Worker** (`news_prune_worker` → `prune_low_value_news`, hourly): bounds the "All News" feed to `NEWS_MAX_ROWS` (800) / `NEWS_MAX_AGE_DAYS` (5) by deleting **signal-less** news. News referenced by a signal is exempt (kept 90 days with the signal).
+8. **SQLite DBs**: `news_cache.db` (headlines, signals), `users.db` (accounts, sessions). Production uses PostgreSQL via `DATABASE_URL`.
 
 ## Key modules
 
@@ -238,7 +240,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).
 - **Database**: SQLite files (`news_cache.db`, `users.db`) are created on first run. Delete to reset.
 - **API keys**: Always use environment variables (`.env`). Never hardcode in source.
-- **Background threads**: Both the AI news engine and yfinance worker start automatically with the Flask app (unless `--workers-only` mode).
+- **Background threads** (all started by `start_background_workers`, unless `--workers-only` mode): AI news engine, yfinance price worker, `archival_worker` (90-day reversible archive), `news_prune_worker` (800/5-day feed prune), plus macro warmer/shock workers. Retention is owned by these workers — there is **no** per-cycle hard-delete anymore.
 - **Market hours**: yfinance returns last available price outside NSE/BSE hours (9:15 AM – 3:30 PM IST). Live signals are most accurate during market hours.
 - **Fuzzy dedup**: Incoming headlines are compared (75% similarity threshold) against the 50 most recent entries to prevent near-duplicate signals.
 
