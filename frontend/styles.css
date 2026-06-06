@@ -87,6 +87,16 @@
     --space-7:          48px;
     --space-8:          64px;
 
+    /* ── Type scale — canonical step sizes; adopt these for new UI ── */
+    --text-2xs:         9px;
+    --text-xs:          11px;
+    --text-sm:          13px;
+    --text-base:        15px;
+    --text-lg:          18px;
+    --text-xl:          24px;
+    --text-2xl:         32px;
+    --text-3xl:         44px;
+
     /* ── Accessibility focus ring (champagne, offset from the surface) ── */
     --focus-ring:       0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent);
 }
@@ -428,7 +438,7 @@ nav.glass-panel { z-index: 10001 !important; }
     display:inline-flex;align-items:center;
     font-family:'Space Grotesk',sans-serif;
     font-size:9px;font-weight:800;letter-spacing:0.22em;
-    padding:3px 9px;border-radius:99px;
+    padding:3px 9px;border-radius:var(--radius-pill);
     background:linear-gradient(135deg, var(--accent) 0%, var(--accent-bright) 100%);
     color:#0b0a08;
     box-shadow:0 0 14px rgba(201,169,98,0.35), 0 1px 0 rgba(255,255,255,0.3) inset;
@@ -443,7 +453,7 @@ nav.glass-panel { z-index: 10001 !important; }
 .tr-range-btn{
     font-family:'JetBrains Mono',monospace;
     font-size:11px;font-weight:700;letter-spacing:0.08em;
-    padding:7px 14px;border-radius:8px;
+    padding:7px 14px;border-radius:var(--radius-md);
     background:rgba(255,255,255,0.02);
     border:1px solid var(--border);
     color:var(--text-tertiary);
@@ -458,7 +468,7 @@ nav.glass-panel { z-index: 10001 !important; }
     box-shadow:0 0 16px var(--accent-glow), 0 1px 0 rgba(255,255,255,0.25) inset;
 }
 .tr-kpi{
-    position:relative;padding:20px 22px;border-radius:16px;
+    position:relative;padding:20px 22px;border-radius:var(--radius-xl);
     background:linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
     border:1px solid var(--border);
     overflow:hidden;
@@ -524,12 +534,12 @@ nav.glass-panel { z-index: 10001 !important; }
 .tr-neg{color:var(--red)}
 .tr-muted{color:var(--text-tertiary)}
 .tr-bar-track{
-    position:relative;height:6px;border-radius:99px;
+    position:relative;height:6px;border-radius:var(--radius-pill);
     background:rgba(255,255,255,0.04);
     overflow:hidden;
 }
 .tr-bar-fill{
-    position:absolute;left:0;top:0;bottom:0;border-radius:99px;
+    position:absolute;left:0;top:0;bottom:0;border-radius:var(--radius-pill);
     background:linear-gradient(90deg, var(--accent-muted) 0%, var(--accent) 60%, var(--accent-bright) 100%);
     box-shadow:0 0 12px var(--accent-glow);
     transition:width 0.6s var(--ease-out);
@@ -537,7 +547,7 @@ nav.glass-panel { z-index: 10001 !important; }
 
 /* direction cards */
 .tr-dir-card{
-    padding:22px 24px;border-radius:16px;position:relative;overflow:hidden;
+    padding:22px 24px;border-radius:var(--radius-xl);position:relative;overflow:hidden;
     background:linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
     border:1px solid var(--border);
 }
@@ -558,7 +568,7 @@ nav.glass-panel { z-index: 10001 !important; }
     display:inline-flex;align-items:center;gap:6px;
     font-family:'JetBrains Mono',monospace;
     font-size:10px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
-    padding:3px 9px;border-radius:6px;
+    padding:3px 9px;border-radius:var(--radius-sm);
     border:1px solid;
 }
 .tr-outcome.hit{color:var(--green);border-color:var(--green-border);background:var(--green-dim)}
@@ -600,7 +610,7 @@ nav.glass-panel { z-index: 10001 !important; }
     );
     background-size: 200% 100%;
     animation: skel-shimmer 1.6s linear infinite;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     display: inline-block;
     vertical-align: middle;
     color: transparent !important;
@@ -611,14 +621,14 @@ nav.glass-panel { z-index: 10001 !important; }
 .skel-line.short { width: 40%; }
 .skel-line.med   { width: 65%; }
 .skel-line.tiny  { width: 22%; }
-.skel-num   { height: 32px; width: 60%; border-radius: 6px; display: block; margin: 4px 0 8px; }
+.skel-num   { height: 32px; width: 60%; border-radius: var(--radius-sm); display: block; margin: 4px 0 8px; }
 .skel-num.lg{ height: 40px; }
-.skel-pill  { height: 18px; width: 70px; border-radius: 6px; display: inline-block; }
+.skel-pill  { height: 18px; width: 70px; border-radius: var(--radius-sm); display: inline-block; }
 .skel-row td { padding: 16px 14px; }
 .skel-cell  { height: 14px; border-radius: 4px; }
 /* Container for a skeleton "card" — matches glass-panel padding */
 .skel-kpi-card {
-    position: relative; padding: 20px 22px; border-radius: 16px;
+    position: relative; padding: 20px 22px; border-radius: var(--radius-xl);
     background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
     border: 1px solid var(--border);
     overflow: hidden;
@@ -629,7 +639,7 @@ nav.glass-panel { z-index: 10001 !important; }
     opacity: 0.4;
 }
 .skel-dir-card {
-    position: relative; padding: 22px 24px; border-radius: 16px;
+    position: relative; padding: 22px 24px; border-radius: var(--radius-xl);
     background: linear-gradient(180deg, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0.005) 100%);
     border: 1px solid var(--border);
 }
@@ -725,7 +735,7 @@ nav.glass-panel { z-index: 10001 !important; }
     border: 1px solid var(--border);
     background: rgba(255,255,255,0.02);
     padding: 8px 14px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     transition: all 0.2s var(--ease-out);
 }
@@ -1108,7 +1118,7 @@ nav.glass-panel { z-index: 10001 !important; }
     padding: 14px 16px;
     background: linear-gradient(180deg, rgba(20,20,24,0.98), rgba(14,14,18,0.98));
     border: 1px solid var(--accent-border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     box-shadow: 0 18px 48px rgba(0,0,0,0.6), 0 0 0 1px rgba(201,169,98,0.08) inset, var(--shadow-accent);
     opacity: 0;
     transform: translateY(6px) scale(0.96);
@@ -1193,7 +1203,7 @@ nav.glass-panel { z-index: 10001 !important; }
 #stock-drawer .sd-close {
     font-family: 'JetBrains Mono', monospace; font-size: 11px;
     font-weight: 700; color: var(--text-tertiary);
-    cursor: pointer; padding: 6px 10px; border-radius: 6px;
+    cursor: pointer; padding: 6px 10px; border-radius: var(--radius-sm);
     border: 1px solid var(--border); transition: all 0.18s;
 }
 #stock-drawer .sd-close:hover { color: var(--text-primary); border-color: var(--border-bright); }
@@ -1261,7 +1271,7 @@ nav.glass-panel { z-index: 10001 !important; }
 
 /* ── SECTOR PILLS ── */
 .sector-pill{
-    padding:4px 14px;border-radius:99px;
+    padding:4px 14px;border-radius:var(--radius-pill);
     font-size:9px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
     cursor:pointer;border:1px solid;transition:all 0.15s ease;
 }
@@ -1275,7 +1285,7 @@ nav.glass-panel { z-index: 10001 !important; }
     width:320px;
     background:linear-gradient(180deg,#1E1E1E 0%,#161616 100%);
     border:1px solid var(--border-medium);
-    border-radius:16px;padding:16px 18px;
+    border-radius:var(--radius-xl);padding:16px 18px;
     display:flex;flex-direction:column;gap:9px;
     pointer-events:all;
     box-shadow:
@@ -1304,7 +1314,7 @@ nav.glass-panel { z-index: 10001 !important; }
 .toast-progress-fill{height:100%;border-radius:1.5px;animation:toast-shrink 8s linear forwards}
 
 /* ── FILTER BUTTONS ── */
-.archive-filter-btn{background:transparent;border:1px solid var(--border);color:var(--text-tertiary);border-radius:99px;transition:all .15s;cursor:pointer}
+.archive-filter-btn{background:transparent;border:1px solid var(--border);color:var(--text-tertiary);border-radius:var(--radius-pill);transition:all .15s;cursor:pointer}
 .archive-filter-btn:hover{border-color:var(--accent-border);color:var(--accent-soft);background:var(--accent-dim)}
 .archive-filter-btn.active-filter{background:var(--accent-dim);border-color:var(--accent-border);color:var(--accent-bright);font-weight:700;box-shadow:0 0 12px var(--accent-glow)}
 
@@ -1384,7 +1394,7 @@ nav.glass-panel { z-index: 10001 !important; }
     background: linear-gradient(90deg, rgba(255,255,255,0.04) 25%, rgba(255,255,255,0.08) 50%, rgba(255,255,255,0.04) 75%);
     background-size: 800px 100%;
     animation: skeleton-shimmer 1.6s infinite;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
 }
 
 /* ── PRICE NUMBERS ── */
@@ -1508,7 +1518,7 @@ main.container {
     min-height: 28px;
     padding: 0 10px;
     border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background: rgba(255,255,255,0.035);
     color: var(--accent-soft);
     font-size: 10px;
@@ -1531,7 +1541,7 @@ main.container {
     min-height: 112px;
     padding: 16px;
     border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background:
         linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.018)),
         rgba(0,0,0,0.28);
@@ -1566,7 +1576,7 @@ main.container {
 
 .insight-tile {
     border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 8px;
+    border-radius: var(--radius-md);
     background:
         linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015)),
         rgba(8,8,12,0.72);
@@ -1601,7 +1611,7 @@ main.container {
 .impact-step {
     position: relative;
     min-height: 96px;
-    border-radius: 8px !important;
+    border-radius: var(--radius-md) !important;
     border-color: rgba(255,255,255,0.08) !important;
     background:
         linear-gradient(180deg, rgba(255,255,255,0.048), rgba(255,255,255,0.016)),
@@ -1747,7 +1757,7 @@ main.container {
   border: 1px solid rgba(255,255,255,0.10);
   color: #cbd5e1;
   width: 38px; height: 38px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: all .15s ease;
@@ -1969,7 +1979,7 @@ main.container {
 }
 .ripple-side-direction {
   display: inline-flex; align-items: center; gap: 6px;
-  padding: 4px 10px; border-radius: 99px;
+  padding: 4px 10px; border-radius: var(--radius-pill);
   font-size: 10px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
 }
 .ripple-side-direction.bullish { color: #34d399; background: rgba(16,185,129,0.10); border: 1px solid rgba(16,185,129,0.30); }
@@ -2045,7 +2055,7 @@ main.container {
 .ripple-cta {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 5px 10px;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   font-family: 'JetBrains Mono', monospace;
   font-size: 9px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
   color: #fff;
@@ -2070,7 +2080,7 @@ main.container {
 .ripple-cta-score {
   display: inline-block;
   padding: 1px 6px;
-  border-radius: 99px;
+  border-radius: var(--radius-pill);
   background: rgba(168,85,247,0.30);
   color: #f3e8ff;
   font-weight: 800;
@@ -2121,7 +2131,7 @@ main.container {
     padding: 5px 12px;
     background: rgba(168,85,247,0.10);
     border: 1px solid rgba(168,85,247,0.30);
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
 }
 .mp-live-dot {
     width: 7px; height: 7px; border-radius: 50%;
@@ -2183,10 +2193,10 @@ main.container {
 .mp-regime-value.regime-caution  { color: #fbbf24; }
 .mp-regime-value.regime-stable   { color: #34d399; }
 .mp-regime-bar {
-    height: 4px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden;
+    height: 4px; background: rgba(255,255,255,0.07); border-radius: var(--radius-pill); overflow: hidden;
 }
 .mp-regime-fill {
-    height: 100%; border-radius: 99px;
+    height: 100%; border-radius: var(--radius-pill);
     background: linear-gradient(90deg, #a855f7, #34d399);
     transition: width 0.6s cubic-bezier(0.4,0,0.2,1);
     width: 20%;
@@ -2197,7 +2207,7 @@ main.container {
     display: flex; align-items: stretch;
     background: rgba(0,0,0,0.30);
     border: 1px solid rgba(255,255,255,0.07);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
 }
 .mp-stat-cell {
@@ -2241,7 +2251,7 @@ main.container {
     color: #64748b;
     background: rgba(255,255,255,0.04);
     border: 1px solid rgba(255,255,255,0.08);
-    padding: 4px 10px; border-radius: 99px;
+    padding: 4px 10px; border-radius: var(--radius-pill);
 }
 .mp-alert-dot {
     display: inline-block;
@@ -2265,7 +2275,7 @@ main.container {
     position: relative;
     background: rgba(0,0,0,0.38);
     border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     padding: 18px 20px;
     cursor: pointer;
     transition: all 0.18s ease;
@@ -2275,7 +2285,7 @@ main.container {
     content: '';
     position: absolute; top: 0; left: 0; right: 0;
     height: 2px;
-    border-radius: 16px 16px 0 0;
+    border-radius: var(--radius-xl) 16px 0 0;
     background: rgba(255,255,255,0.08);
     transition: background 0.18s ease;
 }
@@ -2294,7 +2304,7 @@ main.container {
     height: 130px;
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(255,255,255,0.06);
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     animation: mpSkeletonPulse 1.8s ease-in-out infinite;
 }
 @keyframes mpSkeletonPulse {
@@ -2306,7 +2316,7 @@ main.container {
     text-align: center;
     padding: 56px 24px;
     border: 1px dashed rgba(16,185,129,0.25);
-    border-radius: 16px;
+    border-radius: var(--radius-xl);
     background: rgba(16,185,129,0.03);
 }
 .mp-alert-empty-icon { font-size: 40px; margin-bottom: 12px; opacity: 0.8; }
@@ -2337,7 +2347,7 @@ main.container {
     font-family: 'JetBrains Mono', monospace;
     font-size: 8px; font-weight: 800;
     letter-spacing: 0.16em; text-transform: uppercase;
-    padding: 3px 8px; border-radius: 99px;
+    padding: 3px 8px; border-radius: var(--radius-pill);
 }
 .mp-alert-level-badge.major { color: #fb7185; background: rgba(244,63,94,0.14); border: 1px solid rgba(244,63,94,0.35); box-shadow: 0 0 12px rgba(244,63,94,0.20); }
 .mp-alert-level-badge.significant { color: #fbbf24; background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.30); }
@@ -2347,7 +2357,7 @@ main.container {
     font-family: 'JetBrains Mono', monospace;
     font-size: 8px; font-weight: 800;
     letter-spacing: 0.14em; text-transform: uppercase;
-    padding: 3px 8px; border-radius: 99px;
+    padding: 3px 8px; border-radius: var(--radius-pill);
 }
 .mp-alert-action-badge.actionable {
     color: #f3e8ff;
@@ -2371,7 +2381,7 @@ main.container {
     color: #c4b5fd;
     background: rgba(168,85,247,0.12);
     border: 1px solid rgba(168,85,247,0.35);
-    padding: 4px 9px; border-radius: 99px;
+    padding: 4px 9px; border-radius: var(--radius-pill);
     transition: all 0.15s ease;
 }
 .mp-alert-ripple-cta:hover { background: rgba(168,85,247,0.22); border-color: rgba(168,85,247,0.6); color: #fff; }
@@ -2456,7 +2466,7 @@ main.container {
 .mp-td-pct {
     display: inline-flex; align-items: center; gap: 4px;
     font-size: 12px; font-weight: 800;
-    padding: 4px 10px; border-radius: 99px;
+    padding: 4px 10px; border-radius: var(--radius-pill);
     font-variant-numeric: tabular-nums;
 }
 .mp-td-pct.up   { color: #34d399; background: rgba(16,185,129,0.10); border: 1px solid rgba(16,185,129,0.25); }
@@ -2465,10 +2475,10 @@ main.container {
 /* Table cell: momentum bar */
 .mp-momentum-wrap { display: flex; align-items: center; gap: 6px; justify-content: center; min-width: 100px; }
 .mp-momentum-track {
-    flex: 1; height: 4px; background: rgba(255,255,255,0.07); border-radius: 99px; overflow: hidden;
+    flex: 1; height: 4px; background: rgba(255,255,255,0.07); border-radius: var(--radius-pill); overflow: hidden;
     max-width: 80px;
 }
-.mp-momentum-fill { height: 100%; border-radius: 99px; transition: width 0.5s ease; min-width: 2px; }
+.mp-momentum-fill { height: 100%; border-radius: var(--radius-pill); transition: width 0.5s ease; min-width: 2px; }
 .mp-momentum-fill.up   { background: linear-gradient(90deg, #10b981, #34d399); }
 .mp-momentum-fill.down { background: linear-gradient(90deg, #f43f5e, #fb7185); }
 .mp-momentum-val { font-size: 10px; font-weight: 700; min-width: 32px; }
@@ -2477,7 +2487,7 @@ main.container {
 .mp-status-badge {
     display: inline-flex; align-items: center; gap: 5px;
     font-size: 9px; font-weight: 800; letter-spacing: 0.12em; text-transform: uppercase;
-    padding: 4px 10px; border-radius: 99px;
+    padding: 4px 10px; border-radius: var(--radius-pill);
     white-space: nowrap;
 }
 .mp-status-badge.shock { color: #fb7185; background: rgba(244,63,94,0.12); border: 1px solid rgba(244,63,94,0.30); }
@@ -2486,7 +2496,7 @@ main.container {
 /* Table skeleton rows */
 .mp-row-skeleton td { padding: 14px 18px; }
 .mp-row-skel-bar {
-    height: 16px; border-radius: 6px;
+    height: 16px; border-radius: var(--radius-sm);
     background: rgba(255,255,255,0.06);
 }
 
@@ -2547,7 +2557,7 @@ main.container {
 .cal-countdown-wrap {
   background: rgba(0,0,0,0.32);
   border: 1px solid rgba(251,191,36,0.30);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   padding: 14px 18px;
   min-width: 220px;
   text-align: right;
@@ -2578,7 +2588,7 @@ main.container {
   position: relative;
   background: linear-gradient(180deg, rgba(15,15,20,0.55), rgba(8,8,12,0.65));
   border: 1px solid rgba(255,255,255,0.06);
-  border-radius: 16px;
+  border-radius: var(--radius-xl);
   padding: 18px 20px;
 }
 .cal-day-header {
@@ -2606,7 +2616,7 @@ main.container {
 }
 .cal-day-today {
   display: inline-block;
-  padding: 2px 8px; border-radius: 99px;
+  padding: 2px 8px; border-radius: var(--radius-pill);
   background: rgba(168,85,247,0.20);
   border: 1px solid rgba(168,85,247,0.40);
   color: #c4b5fd;
@@ -2622,7 +2632,7 @@ main.container {
   gap: 14px;
   align-items: start;
   padding: 14px 16px;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   border: 1px solid rgba(255,255,255,0.05);
   background: rgba(0,0,0,0.30);
   cursor: pointer;
@@ -2662,7 +2672,7 @@ main.container {
 .cal-flag {
   font-family: 'JetBrains Mono', monospace;
   font-size: 8px; font-weight: 800;
-  padding: 2px 7px; border-radius: 99px;
+  padding: 2px 7px; border-radius: var(--radius-pill);
   letter-spacing: 0.14em; text-transform: uppercase;
   border: 1px solid rgba(255,255,255,0.10);
   background: rgba(255,255,255,0.04);
@@ -2675,7 +2685,7 @@ main.container {
   display: inline-flex; align-items: center; gap: 5px;
   font-family: 'JetBrains Mono', monospace;
   font-size: 8px; font-weight: 800; letter-spacing: 0.14em; text-transform: uppercase;
-  padding: 2px 8px; border-radius: 99px;
+  padding: 2px 8px; border-radius: var(--radius-pill);
 }
 .cal-importance.HIGH   { color: #fb7185; background: rgba(244,63,94,0.12); border: 1px solid rgba(244,63,94,0.40); box-shadow: 0 0 10px rgba(244,63,94,0.20); }
 .cal-importance.MEDIUM { color: #fbbf24; background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.30); }
@@ -2754,7 +2764,7 @@ main.container {
   background: rgba(255,255,255,0.04);
   border: 1px solid rgba(255,255,255,0.10);
   color: #cbd5e1;
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   display: inline-flex; align-items: center; justify-content: center;
   cursor: pointer;
   transition: all .15s ease;
@@ -2848,7 +2858,7 @@ main.container {
   font-size: 10px; color: #cbd5e1;
   background: rgba(255,255,255,0.05);
   border: 1px solid rgba(255,255,255,0.08);
-  padding: 2px 8px; border-radius: 99px;
+  padding: 2px 8px; border-radius: var(--radius-pill);
 }
 .cal-scenario-threshold {
   font-family: 'JetBrains Mono', monospace;
@@ -2876,7 +2886,7 @@ main.container {
 }
 .cal-chip {
   display: inline-flex; align-items: center;
-  padding: 4px 9px; border-radius: 99px;
+  padding: 4px 9px; border-radius: var(--radius-pill);
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px; letter-spacing: 0.04em;
   background: rgba(168,85,247,0.08);
@@ -2911,7 +2921,7 @@ main.container {
 }
 .portfolio-left-scroll::-webkit-scrollbar-thumb {
     background: rgba(139, 92, 246, 0.25);
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     transition: background 0.2s ease;
 }
 .portfolio-left-scroll::-webkit-scrollbar-thumb:hover {
@@ -2957,7 +2967,7 @@ main.container {
     font-size: 10px;
     font-weight: 700;
     padding: 2px 8px;
-    border-radius: 99px;
+    border-radius: var(--radius-pill);
     line-height: 1;
 }
 .mp-effect-pill.bullish {
@@ -2986,7 +2996,7 @@ main.container {
     font-size: 9px;
     font-weight: 700;
     padding: 3px 8px;
-    border-radius: 6px;
+    border-radius: var(--radius-sm);
     background: rgba(255,255,255,0.03);
     border: 1px solid rgba(255,255,255,0.06);
     color: #94a3b8;
