@@ -1113,6 +1113,69 @@ def fetch_bse_announcements(lookback_days=1, cap=60):
         _feed_stat("bse_announcements", "fail", err=e)
         return []
 
+# ── GDELT global near-real-time news (free, no-auth, ~15-min index) ──
+# Supplements the RSS feeds with broad Indian-market coverage. GDELT rate-limits
+# hard (HTTP 429), so this is called once per cycle and backs off for
+# GDELT_BACKOFF_SECS after a 429. artlist mode returns title+url+domain only —
+# the existing scraper fetches the body downstream. Defensive: returns [] on any
+# failure. Toggle GDELT_ENABLED; tune GDELT_QUERY / GDELT_TIMESPAN.
+_GDELT_DEFAULT_QUERY = '(Nifty OR Sensex OR "Indian stock" OR "India shares" OR NSE OR BSE OR SEBI)'
+_GDELT_BACKOFF_UNTIL = 0.0  # epoch seconds; set after a 429
+
+def fetch_gdelt_news(maxrecords=75):
+    global _GDELT_BACKOFF_UNTIL
+    if os.environ.get("GDELT_ENABLED", "1").lower() not in ("1", "true", "yes"):
+        return []
+    if time.time() < _GDELT_BACKOFF_UNTIL:
+        return []  # backing off after a recent 429
+    try:
+        q = os.environ.get("GDELT_QUERY", _GDELT_DEFAULT_QUERY)
+        ts = os.environ.get("GDELT_TIMESPAN", "1h")
+        url = ("https://api.gdeltproject.org/api/v2/doc/doc?query="
+               + requests.utils.quote(q)
+               + f"&mode=artlist&format=json&maxrecords={maxrecords}&timespan={ts}&sort=datedesc")
+        resp = HTTP_SESSION.get(url, headers={"User-Agent": _ua()}, timeout=15)
+        if resp.status_code == 429:
+            _GDELT_BACKOFF_UNTIL = time.time() + int(os.environ.get("GDELT_BACKOFF_SECS", "900"))
+            _feed_stat("gdelt", "fail", err="429 rate-limited (backing off)")
+            return []
+        if resp.status_code != 200:
+            _feed_stat("gdelt", "fail", err=f"HTTP {resp.status_code}")
+            return []
+        try:
+            data = resp.json()
+        except Exception:
+            _feed_stat("gdelt", "fail", err="non-json")
+            return []
+        arts = data.get("articles", []) if isinstance(data, dict) else []
+        out = []
+        for a in arts:
+            title = str(a.get("title") or "").strip()
+            link = str(a.get("url") or "").strip()
+            if not title or not link:
+                continue
+            # GDELT seendate "20260605T201500Z" -> RFC2822 so downstream parses it
+            _t_str = ""
+            _sd = str(a.get("seendate") or "").strip()
+            if _sd:
+                try:
+                    _dt = datetime.strptime(_sd, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+                    _t_str = _dt.strftime("%a, %d %b %Y %H:%M:%S +0000")
+                except Exception:
+                    _t_str = ""
+            out.append({
+                "headline": title[:300],
+                "time": _t_str,
+                "url": link,
+                "summary": "",
+                "source": f"GDELT/{a.get('domain', '')}",
+            })
+        _feed_stat("gdelt", "ok", n_articles=len(out))
+        return out
+    except Exception as e:
+        _feed_stat("gdelt", "fail", err=e)
+        return []
+
 # NOTE: SM_GEMINI_CLIENT (aimlapi.com) removed — key expired.
 # quant_ai_screener now uses the google-genai 'client' (same as Phase 2)
 # with pure rule-based fallback when no Gemini keys are available.
@@ -2542,6 +2605,15 @@ def ai_news_worker():
                 print(f"   [BSE] +{len(_bse)} filing announcements (pledge/ratings/board).")
         except Exception as _be:
             print(f"   [BSE] fetch failed (non-fatal): {_be}")
+
+        # ── GDELT global near-real-time news (free; rate-limited -> auto backoff) ──
+        try:
+            _gd = fetch_gdelt_news()
+            if _gd:
+                raw_articles.extend(_gd)
+                print(f"   [GDELT] +{len(_gd)} articles.")
+        except Exception as _gde:
+            print(f"   [GDELT] fetch failed (non-fatal): {_gde}")
         
         print(f"[SCRAPE] Got {len(raw_articles)} headlines from all sources")
         sys.stdout.flush()
