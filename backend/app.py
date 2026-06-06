@@ -913,6 +913,27 @@ RSS_SOURCES = [
     "https://news.google.com/rss/search?q=ASM+GSM+surveillance+measure+stock+NSE+BSE+when:2d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=block+deal+bulk+deal+stake+sale+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
     "https://news.google.com/rss/search?q=credit+rating+downgrade+india+company+when:2d&hl=en-IN&gl=IN&ceid=IN:en",
+    # ── EXPANDED COVERAGE — sector + catalyst slices (added to widen the candidate
+    # pool). All Google-News-scoped on purpose: they reach Render's datacenter IP
+    # reliably even when direct publisher RSS (BS / FE / Moneycontrol) 403/503s it.
+    # Sector slices ──
+    "https://news.google.com/rss/search?q=PSU+bank+private+bank+NBFC+india+results+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=IT+services+TCS+Infosys+Wipro+HCLTech+deal+guidance+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=pharma+USFDA+approval+warning+letter+india+when:2d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=auto+sales+EV+Maruti+Tata+Motors+Mahindra+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=metals+steel+JSW+Tata+Steel+Hindalco+Vedanta+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=power+energy+renewable+Adani+NTPC+Tata+Power+india+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=real+estate+infrastructure+DLF+LT+india+order+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=defence+aerospace+HAL+BEL+Mazagon+order+india+when:2d&hl=en-IN&gl=IN&ceid=IN:en",
+    # Catalyst / corporate-action slices ──
+    "https://news.google.com/rss/search?q=order+win+contract+bagged+crore+india+company+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=capex+expansion+new+plant+investment+india+company+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=QIP+fundraise+rights+issue+preferential+allotment+india+when:2d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=buyback+dividend+bonus+stock+split+india+when:2d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=brokerage+upgrade+downgrade+target+price+india+stock+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    # Global macro additions ──
+    "https://news.google.com/rss/search?q=gold+silver+bullion+price+MCX+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
+    "https://news.google.com/rss/search?q=US+jobs+payrolls+CPI+treasury+yield+when:1d&hl=en-IN&gl=IN&ceid=IN:en",
     # ── DIRECT regulator RSS (source-of-truth, no Google aggregation lag — probed
     # reachable from the server; NSE's own API blocks datacenter IPs so it's not
     # here. BSE announcements (pledge/ratings) need a custom JSON fetcher). ──
