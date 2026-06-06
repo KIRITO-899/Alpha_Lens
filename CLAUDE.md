@@ -495,3 +495,33 @@ The `render.yaml` file configures a Render web service:
 - **Plan**: Free tier (512 MB RAM)
 
 Database: PostgreSQL (optional, configured via DATABASE_URL env var).
+
+**Live URL:** `https://alpha-lens-qvxw.onrender.com` (Render appends a random
+suffix to the service name).
+
+### ⚠️ Free-tier spin-down throttles signal generation
+
+The free web plan **sleeps the instance after ~15 min with no inbound HTTP
+traffic**, and the AI-news/signal workers live *inside* that web process — so
+while it's asleep, **no signals are generated**, and each wake-up is a cold start
+that **wipes all in-memory state** (dedup cache, `SELECTION_FUNNEL` counters,
+`RECENT_SIGNALS`). Symptom: very few signals over a day + `ai_news.cycles_completed`
+stuck low in `/api/debug-worker-status` (a continuously-up instance would show
+hundreds). This is the dominant cause of "barely any signals on production", NOT
+the selection filters.
+
+**Mitigation in use — market-hours keep-alive (free).** An external cron
+(cron-job.org) GETs **`/api/health`** (lightweight, spends no Gemini keys) every
+10 min, **only Mon–Fri 09:00–15:50 IST** (`*/10 9-15 * * 1-5`, timezone
+`Asia/Kolkata`). This keeps the dyno awake across the NSE session (warm before the
+9:15 open, alive through the 15:30 close) so workers run when signals matter, and
+lets it sleep off-hours so Gemini keys aren't burned 24/7. The first ~09:00 ping
+each day returns 503 during cold start (expected — disable that job's failure
+alerts). **Do not delete this pinger** without a replacement, or production goes
+back to near-zero signals. Durable alternatives (cost money): run workers as a
+dedicated Render **Background Worker** (`app.py --workers-only`), or upgrade the
+web service off free.
+
+> Note: production env vars are set in the Render dashboard, NOT from the local
+> `.env`. The local key-saving flags (`ALPHA_LENS_SKIP_WORKERS`,
+> `ALPHA_LENS_SKIP_AUTO_REPAIR`) do **not** apply on Render — workers run there.
