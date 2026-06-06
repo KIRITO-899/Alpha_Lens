@@ -33,6 +33,18 @@ A hook in `.claude/settings.json` (PostToolUse on `Bash`) emits a CLAUDE.md-upda
 
 Always push to the `harthik` remote (`github.com/harthik200620/Alpha_Lens.git`), NOT `origin` (KIRITO-899). The `main` branch is already configured to track `harthik/main`, so a plain `git push` will go to the right place — do not pass `origin` explicitly.
 
+## ⚠️ Do NOT start the Flask server without asking
+
+**Never run `python backend/app.py` (or otherwise boot the server) without explicit
+user confirmation first.** The user runs it themselves and starting it can consume
+Gemini API keys. Background workers are deliberately **paused** for key-saving via
+`.env` (`ALPHA_LENS_SKIP_WORKERS=1`, `ALPHA_LENS_SKIP_AUTO_REPAIR=1`) — do not start
+workers or remove those flags either. To verify code changes without booting the
+app/workers, use the import check (`ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 python -c "import app; ..."`)
+and the unit tests — see the verification one-liner under Development Notes. If a
+running server is genuinely needed, **ask the user to start it** (or ask permission
+first), and stop any server you were told to start when done.
+
 ## Quick start
 
 **Backend (Flask):** `C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe backend/app.py` — serves on port 5000

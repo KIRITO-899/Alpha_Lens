@@ -9164,10 +9164,11 @@ def news_prune_worker():
     time.sleep(45)
     try:
         _heartbeat("news_prune", last_cycle_started_at=time.time())
-        _r = prune_low_value_news()
+        _r = prune_low_value_news() or (0, 0)
+        _dn, _di = (_r if isinstance(_r, tuple) else (0, 0))
         _heartbeat("news_prune",
                    last_cycle_finished_at=time.time(),
-                   last_pruned_count=int((_r or {}).get("deleted", 0)),
+                   last_pruned_count=int(_dn) + int(_di),
                    cycles_completed=WORKER_HEARTBEAT["news_prune"].get("cycles_completed", 0) + 1)
     except Exception as e:
         print(f"[PRUNE] Startup pass failed: {e}", flush=True)
