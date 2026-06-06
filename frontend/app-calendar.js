@@ -290,7 +290,8 @@ function _calStartCountdown() {
 
 async function fetchCalendar() {
     try {
-        const r = await fetch('/api/calendar?days=14&past=1');
+        // Done events are dropped server-side, so only forward catalysts return.
+        const r = await fetch('/api/calendar?days=14&past=0');
         if (!r.ok) throw new Error('HTTP ' + r.status);
         _calData = await r.json();
         _renderCalendar();

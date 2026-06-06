@@ -1368,18 +1368,52 @@ def _macro_data_warmer():
 # ──────────────────────────────────────────────────────────────────────────
 # THE CALENDAR — forward-looking macro event schedule
 #
-# Manually curated; updated weekly. The seed below covers the week of
-# June 1-7, 2026. To refresh next week:
+# Curated weekly. The seed (calendar_seed.py) currently covers
+# 2026-06-08 → 2026-06-17. To refresh for the next week:
 #   • Edit CALENDAR_EVENTS_SEED (preferred), OR
 #   • POST to /api/admin/calendar/upsert with new payloads.
 #
 # Each event carries AI-style scenario analysis (upside / expected /
 # downside) so traders can pre-position. Historical analogues add the
-# statistical grounding.
+# statistical grounding. Concluded events drop off automatically:
+# seed_calendar_events() skips already-done entries, /api/calendar hides
+# them on read, and calendar_worker releases + purges them.
 # ──────────────────────────────────────────────────────────────────────────
 # The macro/economic calendar seed (a large static list of event dicts) was
 # extracted to calendar_seed.py. seed_calendar_events() below imports it back.
 from newsproc.calendar_seed import CALENDAR_EVENTS_SEED
+
+
+def _calendar_event_is_done(event_date, event_time_ist, grace_min=None):
+    """
+    True once an event's scheduled IST datetime has passed — i.e. the event is
+    'done' and should drop off the forward calendar.
+
+    Times that aren't a clock value ('Morning', 'All Day', 'TBD', '') resolve to
+    end-of-day so the event stays visible through its whole scheduled day.
+    `grace_min` (env CALENDAR_DONE_GRACE_MIN, default 0) optionally keeps an
+    event up for a few extra minutes past its time. Defensive: any parse failure
+    returns False (fail-open → never hide an event we can't reason about).
+    """
+    if grace_min is None:
+        try:
+            grace_min = int(os.environ.get("CALENDAR_DONE_GRACE_MIN", "0"))
+        except Exception:
+            grace_min = 0
+    try:
+        ist = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist)
+        m = re.match(r'^\s*(\d{1,2}):(\d{2})', str(event_time_ist or ''))
+        if m:
+            hh, mm = int(m.group(1)), int(m.group(2))
+        else:
+            hh, mm = 23, 59  # non-clock time → keep until end of the event's day
+        parts = str(event_date).split('-')
+        y, mo, d = int(parts[0]), int(parts[1]), int(parts[2])
+        ev_dt = datetime(y, mo, d, hh, mm, tzinfo=ist) + timedelta(minutes=grace_min)
+        return now_ist >= ev_dt
+    except Exception:
+        return False
 
 
 def seed_calendar_events(force=False):
@@ -1389,9 +1423,17 @@ def seed_calendar_events(force=False):
     this is safe to call on every startup. Pass force=True to overwrite
     existing rows with the latest seed payload (useful when you edit
     descriptions/scenarios mid-week).
+
+    Already-concluded seed entries are skipped (unless force=True) so the
+    forward calendar stays clean across restarts and the weekly seed list
+    rotates naturally as its events age out.
     """
     try:
+        seeded = 0
         for ev in CALENDAR_EVENTS_SEED:
+            if not force and _calendar_event_is_done(ev.get("event_date"), ev.get("event_time_ist")):
+                continue
+            seeded += 1
             scenarios_json = json.dumps(ev.get("scenarios") or {})
             analogues_json = json.dumps(ev.get("historical_analogues") or [])
             sectors_json   = json.dumps(ev.get("related_sectors") or [])
@@ -1418,7 +1460,8 @@ def seed_calendar_events(force=False):
                     _sj, _aj, _secj, _tj, "upcoming",
                 ))
             db_write(_ins)
-        print(f"[CALENDAR] Seeded {len(CALENDAR_EVENTS_SEED)} events.", flush=True)
+        print(f"[CALENDAR] Seeded {seeded}/{len(CALENDAR_EVENTS_SEED)} events "
+              f"(skipped already-concluded).", flush=True)
     except Exception as e:
         print(f"[CALENDAR] Seed error: {e}", flush=True)
 
@@ -5055,6 +5098,13 @@ def get_calendar():
         cols = [d[0] for d in c.cursor.description]
         rows = [dict(zip(cols, r)) for r in c.fetchall()]
         conn.close()
+        # Drop events that are already 'done' (their IST time has passed) so the
+        # forward calendar only ever shows what's still ahead. Opt back in with
+        # ?include_done=1 for an admin/history view.
+        include_done = str(request.args.get('include_done', '0')).lower() in ('1', 'true', 'yes')
+        if not include_done:
+            rows = [r for r in rows
+                    if not _calendar_event_is_done(r.get('event_date'), r.get('event_time_ist'))]
         # Parse JSON fields
         for r in rows:
             for k in ('scenarios_json', 'historical_analogues_json',
@@ -7620,6 +7670,7 @@ _WORKER_STALL_BUDGET_SECS = {
     "archival":    36 * 3600,  # runs every 24h; 36h budget
     "news_prune":  3 * 3600,   # runs hourly; 3h budget
     "eval_labeler": 9 * 3600,  # runs every 6h; 9h budget
+    "calendar":     3 * 3600,  # runs every 30m; 3h budget
 }
 
 
@@ -9111,6 +9162,81 @@ def api_label_eval():
         return jsonify({"error": str(e)}), 500
 
 
+def _calendar_maintenance(purge_after_days=2):
+    """
+    One maintenance pass over economic_calendar:
+      • flip status → 'released' for every event whose IST time has passed
+      • hard-delete events older than `purge_after_days` so the table self-cleans
+        week-over-week (the forward calendar is ephemeral curated data; the
+        on-read filter already hides done events — this just stops unbounded
+        growth and removes the stale rows after a short grace).
+    Returns (released_count, purged_count).
+    """
+    released = 0
+    purged = 0
+    # 1) transition concluded events to 'released'
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("SELECT id, event_date, event_time_ist FROM economic_calendar "
+                  "WHERE status IS NULL OR status != 'released'")
+        rows = c.fetchall()
+        conn.close()
+        done_ids = [r[0] for r in rows if _calendar_event_is_done(r[1], r[2])]
+        if done_ids:
+            ph = ",".join("?" * len(done_ids))
+            def _rel(conn, c, _ids=done_ids, _ph=ph):
+                c.execute(f"UPDATE economic_calendar SET status='released', "
+                          f"updated_at=CURRENT_TIMESTAMP WHERE id IN ({_ph})", _ids)
+                return c.rowcount
+            released = db_write(_rel) or 0
+    except Exception as e:
+        print(f"[CALENDAR] release-transition failed: {e}", flush=True)
+    # 2) purge events older than the retention window
+    try:
+        ist = timezone(timedelta(hours=5, minutes=30))
+        cutoff = (datetime.now(ist).date() - timedelta(days=max(0, purge_after_days))).strftime('%Y-%m-%d')
+        def _purge(conn, c, _cut=cutoff):
+            c.execute("DELETE FROM economic_calendar WHERE event_date < ?", (_cut,))
+            return c.rowcount
+        purged = db_write(_purge) or 0
+    except Exception as e:
+        print(f"[CALENDAR] purge failed: {e}", flush=True)
+    return released, purged
+
+
+def calendar_worker():
+    """
+    Calendar maintenance loop — keeps the forward economic calendar tidy so a
+    'done' event drops off automatically. Each cycle marks concluded events
+    'released' and purges events older than CALENDAR_PURGE_AFTER_DAYS (default 2).
+    Runs every CALENDAR_RUN_EVERY_MIN (default 30). Disable via CALENDAR_WORKER_DISABLED.
+    """
+    if os.environ.get("CALENDAR_WORKER_DISABLED", "").lower() in ("1", "true", "yes"):
+        print("[CALENDAR] Maintenance worker disabled via CALENDAR_WORKER_DISABLED.", flush=True)
+        return
+    RUN_EVERY_MIN = int(os.environ.get("CALENDAR_RUN_EVERY_MIN", "30"))
+    PURGE_DAYS = int(os.environ.get("CALENDAR_PURGE_AFTER_DAYS", "2"))
+    print(f"[CALENDAR] Maintenance worker started — runs every {RUN_EVERY_MIN}m "
+          f"(purge after {PURGE_DAYS}d).", flush=True)
+    time.sleep(60)  # warm-up so the startup seed lands first
+    while True:
+        try:
+            _heartbeat("calendar", last_cycle_started_at=time.time())
+            released, purged = _calendar_maintenance(PURGE_DAYS)
+            _heartbeat("calendar",
+                       last_cycle_finished_at=time.time(),
+                       last_released_count=released,
+                       last_purged_count=purged,
+                       cycles_completed=WORKER_HEARTBEAT.get("calendar", {}).get("cycles_completed", 0) + 1)
+            if released or purged:
+                print(f"[CALENDAR] Maintenance: released={released}, purged={purged}.", flush=True)
+        except Exception as e:
+            print(f"[CALENDAR] Maintenance pass failed: {e}", flush=True)
+            _heartbeat("calendar", last_error=str(e)[:200], last_error_at=time.time())
+        time.sleep(RUN_EVERY_MIN * 60)
+
+
 def start_background_workers():
     engine_thread = threading.Thread(target=ai_news_worker, daemon=True)
     engine_thread.start()
@@ -9131,6 +9257,11 @@ def start_background_workers():
     # filter/weight becomes measurable. Append-only (never deletes).
     eval_thread = threading.Thread(target=eval_labeler_worker, name="EvalLabeler", daemon=True)
     eval_thread.start()
+
+    # Calendar maintenance — auto-releases concluded events + purges old ones so
+    # the forward calendar stays clean (an event drops off after it's done).
+    cal_thread = threading.Thread(target=calendar_worker, name="CalendarWorker", daemon=True)
+    cal_thread.start()
 
     # MacroDataTracker warm-up + quantitative shock detector.
     macro_warm = threading.Thread(target=_macro_data_warmer, name="MacroWarmer", daemon=True)
