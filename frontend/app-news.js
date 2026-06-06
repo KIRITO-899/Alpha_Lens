@@ -242,12 +242,73 @@
                     </div>
                     <span class="cc-card-dir ${dirCls}">${arrow} ${s.direction || ''}</span>
                     <div class="cc-card-px">${entry} <span class="arrow">&rarr;</span> ${cur} <span class="cc-card-chg ${chgCls}">${chg}</span></div>
+                    <div class="cc-card-spark" data-spark-ticker="${escapeHtml(s.ticker || '')}"></div>
                     <div class="cc-card-foot">
                         <div class="progress-track"><div class="progress-fill" style="width:${progW}%;background:${progColor}"></div></div>
                         <span class="cc-card-prog-lbl" style="color:${progColor}">${progW.toFixed(0)}% ${prog >= 0 ? 'Tgt' : 'Stop'}</span>
                     </div>
                 </button>`;
             }).join('');
+
+            // Enhance cards with sparklines (async, additive — cards already
+            // rendered above, so a slow/failed sparkline fetch never blocks them).
+            enhanceCommandBarSparklines(top.map(s => s.ticker).filter(Boolean));
+        }
+
+        // ── Sparklines for the Command Center cards ──────────────────────────
+        // Pulls a recent close series per ticker from /api/sparklines (server-
+        // cached) and paints a tiny inline SVG. Frontend-cached 10 min so the
+        // 30s dashboard poll doesn't refetch unchanged series.
+        let _ccSparks = {};
+        const _CC_SPARK_TTL = 600000; // 10 min
+
+        function _sparkSVG(series, up) {
+            if (!Array.isArray(series) || series.length < 2) return '';
+            const w = 104, h = 26, pad = 3;
+            const min = Math.min(...series), max = Math.max(...series);
+            const range = (max - min) || 1, n = series.length;
+            const pts = series.map((v, i) => [
+                pad + (i / (n - 1)) * (w - 2 * pad),
+                pad + (1 - (v - min) / range) * (h - 2 * pad),
+            ]);
+            const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' ');
+            const last = pts[n - 1];
+            const area = line + ` L${last[0].toFixed(1)},${h - pad} L${pts[0][0].toFixed(1)},${h - pad} Z`;
+            const col = up ? 'var(--green)' : 'var(--red)';
+            return `<svg class="cc-spark-svg" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" width="100%" height="26" aria-hidden="true">
+                <path d="${area}" fill="${col}" fill-opacity="0.10"/>
+                <path d="${line}" fill="none" stroke="${col}" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
+                <circle cx="${last[0].toFixed(1)}" cy="${last[1].toFixed(1)}" r="1.7" fill="${col}"/>
+            </svg>`;
+        }
+
+        function _paintSparks(tickers) {
+            tickers.forEach(t => {
+                const slot = document.querySelector(`.cc-card-spark[data-spark-ticker="${t}"]`);
+                if (!slot) return;
+                const c = _ccSparks[t];
+                if (!c || !Array.isArray(c.series) || c.series.length < 2) return;
+                const up = c.series[c.series.length - 1] >= c.series[0];
+                slot.innerHTML = _sparkSVG(c.series, up);
+            });
+        }
+
+        async function enhanceCommandBarSparklines(tickers) {
+            if (!Array.isArray(tickers) || !tickers.length) return;
+            const now = Date.now();
+            _paintSparks(tickers); // paint anything already cached first
+            const need = tickers.filter(t => {
+                const c = _ccSparks[t];
+                return !c || (now - c.ts) > _CC_SPARK_TTL;
+            });
+            if (!need.length) return;
+            try {
+                const res = await fetch('/api/sparklines?tickers=' + encodeURIComponent(need.join(',')));
+                if (!res.ok) return;
+                const data = await res.json();
+                Object.keys(data).forEach(t => { _ccSparks[t] = { series: data[t] || [], ts: now }; });
+                _paintSparks(tickers);
+            } catch (e) { /* silent — cards are fine without sparklines */ }
         }
 
         function getImpactColorClasses(impact) {

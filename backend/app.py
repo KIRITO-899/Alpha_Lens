@@ -7333,6 +7333,51 @@ def get_stock_price(ticker):
 
 
 # ══════════════════════════════════════════════════════════════
+# SPARKLINES — recent close series for a batch of tickers, used by the
+# dashboard Command Center cards. Backed by the shim's daily candles
+# (yf.get_ohlc) with an aggressive server-side cache so the 30s dashboard
+# poll never hammers the data API. Defensive: returns {} / [] on any failure,
+# so the frontend simply renders cards without a sparkline.
+# ══════════════════════════════════════════════════════════════
+_SPARKLINE_CACHE = {}
+_SPARKLINE_TTL = int(os.environ.get("SPARKLINE_TTL_SECS", "900"))      # 15 min
+_SPARKLINE_DAYS = int(os.environ.get("SPARKLINE_DAYS", "15"))
+_SPARKLINE_MAX_TICKERS = int(os.environ.get("SPARKLINE_MAX_TICKERS", "10"))
+
+@app.route('/api/sparklines', methods=['GET'])
+def get_sparklines():
+    raw = (request.args.get('tickers') or '').strip()
+    if not raw:
+        return jsonify({})
+    tickers = [t.strip() for t in raw.split(',') if t.strip()][:_SPARKLINE_MAX_TICKERS]
+    out = {}
+    now = time.time()
+    for t in tickers:
+        key = normalize_ticker(t) or t
+        cached = _SPARKLINE_CACHE.get(key)
+        if cached and (now - cached['ts']) < _SPARKLINE_TTL:
+            out[t] = cached['series']
+            continue
+        series = []
+        try:
+            rows = yf.get_ohlc(key, days=_SPARKLINE_DAYS) or []
+            # rows: list of (dt_utc, high, low, close) — take closes, last ~20 pts
+            for r in rows:
+                try:
+                    cl = float(r[3])
+                    if cl > 0:
+                        series.append(round(cl, 2))
+                except Exception:
+                    continue
+            series = series[-20:]
+        except Exception:
+            series = []
+        _SPARKLINE_CACHE[key] = {'series': series, 'ts': now}
+        out[t] = series
+    return jsonify(out)
+
+
+# ══════════════════════════════════════════════════════════════
 # PREMIUM API: ALPHA SIGNAL SCREENER TERMINAL
 # Returns all active/recent signals formatted for the terminal
 # ══════════════════════════════════════════════════════════════

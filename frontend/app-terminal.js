@@ -267,18 +267,18 @@
                 const rowBg = isHigh ? 'background:rgba(245,158,11,0.03);' : '';
                 const staggerI = Math.min(idx, 12);
                 return `<tr data-stagger-i="${idx}" style="${rowBg}--i:${staggerI};">
-                    <td><span class="ticker-hover-target font-display font-bold text-white text-sm" data-ticker="${escapeHtml(s.ticker || ticker)}">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction"><svg viewBox="0 0 24 24" width="11" height="11" fill="var(--amber)" style="vertical-align:-1px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg></span>':''}</td>
-                    <td><span class="${dirCls} text-xs">${dirIcon} ${s.direction}</span></td>
-                    <td><div class="conf-ring ${confCls}">${s.confidence}</div></td>
-                    <td class="text-slate-300 font-mono text-xs">₹${s.entry.toLocaleString('en-IN')}</td>
-                    <td class="text-white font-mono text-xs">₹${s.current.toLocaleString('en-IN')}</td>
-                    <td class="font-mono text-xs whitespace-nowrap" title="ATR-based target and stop">
+                    <td data-label="Asset"><span class="ticker-hover-target font-display font-bold text-white text-sm" data-ticker="${escapeHtml(s.ticker || ticker)}">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction"><svg viewBox="0 0 24 24" width="11" height="11" fill="var(--amber)" style="vertical-align:-1px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg></span>':''}</td>
+                    <td data-label="Direction"><span class="${dirCls} text-xs">${dirIcon} ${s.direction}</span></td>
+                    <td data-label="Conviction"><div class="conf-ring ${confCls}">${s.confidence}</div></td>
+                    <td data-label="Entry" class="text-slate-300 font-mono text-xs">₹${s.entry.toLocaleString('en-IN')}</td>
+                    <td data-label="Current" class="text-white font-mono text-xs">₹${s.current.toLocaleString('en-IN')}</td>
+                    <td data-label="Target / Stop" class="font-mono text-xs whitespace-nowrap" title="ATR-based target and stop">
                         <span class="dir-bull">+${(s.target_pct ?? 0).toFixed(1)}%</span>
                         <span class="text-slate-600">/</span>
                         <span class="dir-bear">-${(s.stop_pct ?? 0).toFixed(1)}%</span>
                     </td>
-                    <td class="${pctCls} font-mono font-bold text-xs">${pctStr}</td>
-                    <td>
+                    <td data-label="Change" class="${pctCls} font-mono font-bold text-xs">${pctStr}</td>
+                    <td data-label="Progress">
                         <div class="flex items-center gap-2">
                             <div class="progress-track" style="margin-bottom:0; flex-shrink:0;">
                                 <div class="progress-fill" style="width:${progW}%;background:${progColor}"></div>
@@ -288,8 +288,8 @@
                             </span>
                         </div>
                     </td>
-                    <td><span class="${stCls} text-xs font-bold">${stTxt}</span></td>
-                    <td class="text-slate-500 text-[11px] max-w-[200px] truncate cursor-pointer hover:text-violet-400 hover:underline transition-colors" title="${escapeHtml(s.headline)}" onclick="openSignalNews(this.title)">${escapeHtml(s.headline)}</td>
+                    <td data-label="Status"><span class="${stCls} text-xs font-bold">${stTxt}</span></td>
+                    <td data-label="Headline" class="td-headline text-slate-500 text-[11px] max-w-[200px] truncate cursor-pointer hover:text-violet-400 hover:underline transition-colors" title="${escapeHtml(s.headline)}" onclick="openSignalNews(this.title)">${escapeHtml(s.headline)}</td>
                 </tr>`;
             }).join('');
         }

@@ -413,6 +413,34 @@ nav.glass-panel { z-index: 10001 !important; }
 .terminal-table tbody tr:nth-child(even){background:rgba(255,255,255,0.012)}
 .terminal-table tbody td{padding:14px 20px;font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums;font-family:'JetBrains Mono',monospace}
 
+/* ── Signal Terminal: card view on phones (wide table -> stacked cards) ── */
+@media (max-width:767px){
+    .terminal-table thead{display:none}
+    .terminal-table,.terminal-table tbody,.terminal-table tr{display:block;width:100%}
+    .terminal-table tbody tr{
+        border:1px solid var(--border,rgba(255,255,255,0.07));border-radius:var(--radius-md);
+        margin-bottom:12px;padding:6px 13px;background:var(--surface-1,rgba(16,16,20,0.5));
+    }
+    .terminal-table tbody tr:nth-child(even){background:var(--surface-1,rgba(16,16,20,0.5))}
+    .terminal-table tbody tr:hover{background:var(--surface-1,rgba(16,16,20,0.5))}
+    .terminal-table tbody td{
+        display:flex;align-items:center;justify-content:space-between;gap:14px;
+        padding:8px 0;white-space:normal;text-align:right;
+    }
+    .terminal-table tbody td + td{border-top:1px solid var(--border-subtle,rgba(255,255,255,0.05))}
+    .terminal-table tbody td::before{
+        content:attr(data-label);flex:0 0 auto;text-align:left;
+        font-family:'Space Grotesk',sans-serif;
+        font-size:9px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;
+        color:var(--text-tertiary);
+    }
+    .terminal-table tbody td.td-headline{flex-direction:column;align-items:flex-start;text-align:left;max-width:100%;white-space:normal}
+    /* empty / error state row: keep centered, drop the data-label affordance */
+    .terminal-table tbody td[colspan]{display:block;text-align:center;padding:0}
+    .terminal-table tbody td[colspan]::before{content:none}
+    .terminal-table tbody td[colspan] + td{border-top:0}
+}
+
 /* ── PROGRESS / CONF RING ── */
 .progress-track{height:3px;border-radius:3px;background:rgba(255,255,255,0.05);width:80px;overflow:hidden}
 .progress-fill{height:100%;border-radius:3px;transition:width 0.6s cubic-bezier(0.4,0,0.2,1)}
@@ -507,6 +535,9 @@ nav.glass-panel { z-index: 10001 !important; }
 .cc-card-px{display:flex;align-items:baseline;gap:6px;font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--text-secondary,#cfcdc6);font-variant-numeric:tabular-nums}
 .cc-card-px .arrow{color:var(--text-quaternary,rgba(255,255,255,0.3))}
 .cc-card-chg{font-weight:700}
+.cc-card-spark{height:26px;margin:1px 0 2px;display:block;line-height:0}
+.cc-card-spark:empty{display:none}
+.cc-spark-svg{display:block;width:100%;height:26px;overflow:visible}
 .cc-card-foot{display:flex;align-items:center;gap:8px;margin-top:1px}
 .cc-card-foot .progress-track{width:100%;flex:1}
 .cc-card-prog-lbl{font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:700;letter-spacing:0.02em;white-space:nowrap;font-variant-numeric:tabular-nums}

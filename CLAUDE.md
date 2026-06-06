@@ -353,6 +353,29 @@ rendered entirely by `loadCommandBar()` / `renderCommandBar()` in `app-news.js`.
   header stacks < 480px). A **compliance disclaimer footer** (`.app-footer`) was added
   site-wide for the finance-product trust layer.
 
+### Sparklines (Command Center cards)
+
+Each top-conviction card in the Command Center paints a tiny inline **SVG sparkline**
+of the ticker's recent close trend (green if up over the window, red if down).
+- **Backend:** `GET /api/sparklines?tickers=A,B,C` (in `app.py`) returns
+  `{ticker: [close, …]}` using the shim's daily candles (`yf.get_ohlc`, `_SPARKLINE_DAYS`
+  =15, last ~20 pts). **Server-cached** `_SPARKLINE_CACHE` for `SPARKLINE_TTL_SECS` (900s)
+  and capped at `SPARKLINE_MAX_TICKERS` (10) so the 30s dashboard poll never hammers the
+  data API. Defensive — `[]`/`{}` on any failure. Route count is now **41**.
+- **Frontend:** `enhanceCommandBarSparklines()` / `_sparkSVG()` / `_paintSparks()` in
+  `app-news.js`. Cards render first; sparklines are an **async, additive** enhancement
+  (frontend-cached 10 min in `_ccSparks`, fetches only uncached tickers). A slow/failed
+  fetch never blocks the cards. Pure hand-rolled SVG (no chart lib). Env knobs:
+  `SPARKLINE_TTL_SECS`, `SPARKLINE_DAYS`, `SPARKLINE_MAX_TICKERS`.
+
+### Signal Terminal — mobile card view
+
+The 10-column Signal Terminal table is unreadable on phones. Each `<td>` in
+`renderTerminal()` now carries a `data-label`, and a `@media (max-width:767px)` rule in
+`styles.css` transforms rows into **stacked cards** (thead hidden, each cell a
+label→value flex line, headline wraps full-width). The empty/error `colspan` row is
+excepted so it stays centered. Desktop is untouched (the transform is mobile-only).
+
 ### Mobile navigation (critical fix)
 
 The desktop nav menu is `hidden md:flex`, so **below 768px it disappeared with no
