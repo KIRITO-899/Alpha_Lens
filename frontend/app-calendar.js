@@ -63,7 +63,7 @@ function _renderCalendar() {
                     <div>
                         <span class="cal-day-date">${dt.day} ${dt.month}</span>
                         <span class="cal-day-weekday">${dt.weekday}</span>
-                        ${isToday ? '<span class="cal-day-today">⚡ Today</span>' : ''}
+                        ${isToday ? '<span class="cal-day-today"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>Today</span>' : ''}
                         ${isPast && !isToday ? '<span class="cal-day-today" style="background:rgba(148,163,184,0.10);border-color:rgba(148,163,184,0.20);color:#94a3b8;">Past</span>' : ''}
                     </div>
                     <div class="cal-day-meta">${events.length} event${events.length === 1 ? '' : 's'}${highCount ? ` · ${highCount} HIGH` : ''}</div>

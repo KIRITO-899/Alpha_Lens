@@ -153,7 +153,7 @@ function _mpRenderAlertCard(ev) {
             <div class="mp-alert-row2">
                 <span class="mp-alert-level-badge ${levelCls}">${escapeHtml(ev.shock_level || '')}</span>
                 <span class="mp-alert-action-badge ${isActionable ? 'actionable' : 'info'}">
-                    ${isActionable ? '⚡ Actionable' : 'ⓘ Info'}
+                    ${isActionable ? '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>Actionable' : 'ⓘ Info'}
                 </span>
             </div>
             ${effectsHtml}
@@ -242,7 +242,7 @@ function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
                 <td>
                     <div class="mp-td-instrument">
                         <div>
-                            <div class="mp-td-instrument-label">${escapeHtml(label)}${isShock ? ' <span class="mp-td-shock-badge">⚡ SHOCK</span>' : ''}</div>
+                            <div class="mp-td-instrument-label">${escapeHtml(label)}${isShock ? ' <span class="mp-td-shock-badge"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" style="vertical-align:-1px;margin-right:2px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>SHOCK</span>' : ''}</div>
                             ${key && key !== label ? `<div class="mp-td-instrument-key">${escapeHtml(key.toUpperCase())}</div>` : ''}
                         </div>
                     </div>
@@ -264,7 +264,7 @@ function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
                 </td>
                 <td class="text-center">
                     <span class="mp-status-badge ${isShock ? 'shock' : 'normal'}">
-                        ${isShock ? '⚡ SHOCK' : '● Normal'}
+                        ${isShock ? '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>SHOCK' : '● Normal'}
                     </span>
                 </td>
             </tr>`;
@@ -304,7 +304,7 @@ async function openMacroRipple(eventId) {
     if (side) {
         side.innerHTML = `
             <div class="ripple-side-empty">
-                <div class="ripple-side-empty-icon">⚡</div>
+                <div class="ripple-side-empty-icon"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></div>
                 <div class="ripple-side-empty-text">Click any stock chip to see its causal chain &amp; reasoning</div>
             </div>`;
     }

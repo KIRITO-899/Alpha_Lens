@@ -25,7 +25,7 @@ function _renderRippleSidePanel(node, container) {
     if (!node) {
         container.innerHTML = `
             <div class="ripple-side-empty">
-                <div class="ripple-side-empty-icon">⚡</div>
+                <div class="ripple-side-empty-icon"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></div>
                 <div class="ripple-side-empty-text">Click any stock chip to see its causal chain &amp; reasoning</div>
             </div>`;
         return;
@@ -86,7 +86,7 @@ async function _renderRippleGraph(payload) {
     if (allTiersEmpty) {
         wrap.insertAdjacentHTML('beforeend', `
             <div class="rfl-container rfl-empty-state">
-                <div class="ripple-side-empty-icon">⚡</div>
+                <div class="ripple-side-empty-icon"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></div>
                 <div class="ripple-side-empty-text">No propagation data available for this event yet.</div>
             </div>`);
         return;
@@ -102,7 +102,7 @@ async function _renderRippleGraph(payload) {
                 <span class="rfl-col-sublabel">Shock Event</span>
             </div>
             <div class="rfl-chip rfl-chip--trigger">
-                <span class="rfl-chip-icon">⚡</span>
+                <span class="rfl-chip-icon"><svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" style="vertical-align:-2px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></span>
                 <span class="rfl-chip-ticker">${triggerLabel}</span>
             </div>
         </div>`;
@@ -212,7 +212,7 @@ async function openRipple(newsId) {
     if (side) {
         side.innerHTML = `
             <div class="ripple-side-empty">
-                <div class="ripple-side-empty-icon">⚡</div>
+                <div class="ripple-side-empty-icon"><svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg></div>
                 <div class="ripple-side-empty-text">Click any stock chip to see its causal chain &amp; reasoning</div>
             </div>`;
     }
