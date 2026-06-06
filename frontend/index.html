@@ -733,10 +733,10 @@
                 <!-- Filter pills -->
                 <div class="flex flex-wrap gap-2 mb-5 px-1">
                     <button onclick="setCalendarFilter('all')" id="cal-filter-all" class="sector-pill active">All Events</button>
-                    <button onclick="setCalendarFilter('HIGH')" id="cal-filter-high" class="sector-pill" style="border-color:rgba(244,63,94,0.30);color:#fb7185;">🔴 High Impact</button>
+                    <button onclick="setCalendarFilter('HIGH')" id="cal-filter-high" class="sector-pill" style="border-color:rgba(244,63,94,0.30);color:#fb7185;"><span class="pill-dot"></span>High Impact</button>
                     <button onclick="setCalendarFilter('IN')" id="cal-filter-in" class="sector-pill" style="border-color:rgba(168,85,247,0.30);color:#c4b5fd;">🇮🇳 India</button>
                     <button onclick="setCalendarFilter('US')" id="cal-filter-us" class="sector-pill" style="border-color:rgba(96,165,250,0.30);color:#93c5fd;">🇺🇸 US</button>
-                    <button onclick="setCalendarFilter('CENTRAL_BANK')" id="cal-filter-cb" class="sector-pill" style="border-color:rgba(251,191,36,0.30);color:#fbbf24;">🏦 Central Banks</button>
+                    <button onclick="setCalendarFilter('CENTRAL_BANK')" id="cal-filter-cb" class="sector-pill" style="border-color:rgba(251,191,36,0.30);color:#fbbf24;"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px;margin-right:5px"><path d="M12 2 2 7v2h20V7L12 2zM5 11v6H4v2h16v-2h-1v-6h-2v6h-3v-6h-2v6h-2v-6H8v6H5v-6z"/></svg>Central Banks</button>
                 </div>
 
                 <!-- Day-by-day event list -->
@@ -786,34 +786,33 @@
 
                     <div id="stock-filters" class="flex flex-wrap gap-2 stock-mode-element transition-all">
                         <button onclick="setArchiveFilter('bullish')" id="filter-bullish"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-green-500/30 text-green-400 bg-green-900/10 hover:bg-green-900/30 transition-all">🟢
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-green-500/30 text-green-400 bg-green-900/10 hover:bg-green-900/30 transition-all"><span class="pill-dot"></span>
                             Bullish</button>
                         <button onclick="setArchiveFilter('slightly bullish')" id="filter-slightly bullish"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-emerald-500/30 text-emerald-400 bg-emerald-900/10 hover:bg-emerald-900/30 transition-all">📈
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-emerald-500/30 text-emerald-400 bg-emerald-900/10 hover:bg-emerald-900/30 transition-all"><span class="pill-dot"></span>
                             Slightly Bullish</button>
                         <button onclick="setArchiveFilter('bearish')" id="filter-bearish"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-red-500/30 text-red-400 bg-red-900/10 hover:bg-red-900/30 transition-all">🔴
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-red-500/30 text-red-400 bg-red-900/10 hover:bg-red-900/30 transition-all"><span class="pill-dot"></span>
                             Bearish</button>
                         <button onclick="setArchiveFilter('slightly bearish')" id="filter-slightly bearish"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-orange-500/30 text-orange-400 bg-orange-900/10 hover:bg-orange-900/30 transition-all">📉
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-orange-500/30 text-orange-400 bg-orange-900/10 hover:bg-orange-900/30 transition-all"><span class="pill-dot"></span>
                             Slightly Bearish</button>
                         <button onclick="setArchiveFilter('none')" id="filter-none"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-500/30 text-slate-400 bg-slate-900/10 hover:bg-slate-900/30 transition-all">⬜
-                            No Stock Impact</button>
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-500/30 text-slate-400 bg-slate-900/10 hover:bg-slate-900/30 transition-all"><span class="pill-dot" style="opacity:0.5"></span>No Stock Impact</button>
                     </div>
 
                     <div id="general-filters" class="flex flex-wrap gap-2 transition-all" style="display:none;">
                         <button onclick="setArchiveFilter('cat:business')" id="filter-cat:business"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-violet-500/20 text-violet-400 bg-violet-900/10 hover:bg-violet-900/30 transition-all">💼
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-violet-500/20 text-violet-400 bg-violet-900/10 hover:bg-violet-900/30 transition-all"><span class="pill-dot"></span>
                             Business</button>
                         <button onclick="setArchiveFilter('cat:technology')" id="filter-cat:technology"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-purple-500/30 text-purple-400 bg-purple-900/10 hover:bg-purple-900/30 transition-all">💻
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-purple-500/30 text-purple-400 bg-purple-900/10 hover:bg-purple-900/30 transition-all"><span class="pill-dot"></span>
                             Technology</button>
                         <button onclick="setArchiveFilter('cat:politics')" id="filter-cat:politics"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-rose-500/30 text-rose-400 bg-rose-900/10 hover:bg-rose-900/30 transition-all">🏛️
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-rose-500/30 text-rose-400 bg-rose-900/10 hover:bg-rose-900/30 transition-all"><span class="pill-dot"></span>
                             Politics</button>
                         <button onclick="setArchiveFilter('cat:general')" id="filter-cat:general"
-                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-500/30 text-slate-400 bg-slate-900/10 hover:bg-slate-900/30 transition-all">📰
+                            class="archive-filter-btn px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-widest border border-slate-500/30 text-slate-400 bg-slate-900/10 hover:bg-slate-900/30 transition-all"><span class="pill-dot"></span>
                             General</button>
                     </div>
                 </div>
