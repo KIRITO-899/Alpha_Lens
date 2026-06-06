@@ -91,6 +91,165 @@
             if (globalNewsData.length > 0) loadArticleIntoMainViewer(globalNewsData[0]);
         }
 
+        // ══════════════════════════════════════════════════════════════
+        // COMMAND CENTER — the dashboard "live edge" bar. Leads the page with
+        // the product's actual value (live signals + track record) instead of
+        // burying it behind a tab. Pulls the same data the Signal Terminal and
+        // Track Record use, so it can never disagree with them. Additive and
+        // self-contained: on any fetch failure it stays hidden and the page
+        // degrades to just the news feed.
+        // ══════════════════════════════════════════════════════════════
+        let _ccSummary = {};
+        let _ccSummaryAt = 0;
+        async function loadCommandBar() {
+            const sec = document.getElementById('command-center');
+            if (!sec) return;
+            try {
+                // Signals are cheap and change tick-to-tick, so refetch every poll.
+                // The all-time track record barely moves — refetch it at most every
+                // 5 min and reuse the cached summary in between to spare the DB.
+                const needStats = (Date.now() - _ccSummaryAt) > 300000;
+                const [sigRes, statRes] = await Promise.all([
+                    fetch('/api/signal-terminal'),
+                    needStats ? fetch('/api/backtest-stats?range=all').catch(() => null) : Promise.resolve(null),
+                ]);
+                const sigData = await sigRes.json();
+                const signals = Array.isArray(sigData.signals) ? sigData.signals : [];
+                if (statRes && statRes.ok) {
+                    try { _ccSummary = (await statRes.json()).summary || {}; _ccSummaryAt = Date.now(); } catch (_) { /* keep prior */ }
+                }
+                const summary = _ccSummary;
+                const hasTrack = (summary.ruled_signals || 0) > 0;
+                // Nothing meaningful to surface yet (cold start, zero signals) —
+                // keep the bar hidden so the dashboard just shows news.
+                if (!signals.length && !hasTrack) { sec.hidden = true; return; }
+                renderCommandBar(signals, summary);
+                sec.hidden = false;
+            } catch (e) {
+                console.log('Command bar fetch error', e);
+                // Leave hidden; the news-poll loop retries on the next tick.
+            }
+        }
+
+        function renderCommandBar(signals, summary) {
+            const active = signals.filter(s => s.status === 'Active View');
+            const pool = active.length ? active : signals;
+            const bulls = active.filter(s => s.direction === 'BULLISH').length;
+            const bears = active.filter(s => s.direction === 'BEARISH').length;
+            const avgConf = active.length
+                ? Math.round(active.reduce((a, s) => a + (s.confidence || 0), 0) / active.length)
+                : null;
+
+            // Net bias across live signals
+            let biasCls = 'neutral', biasTxt = 'Balanced';
+            if (active.length) {
+                if (bulls > bears) { biasCls = 'pos'; biasTxt = 'Net Bullish'; }
+                else if (bears > bulls) { biasCls = 'neg'; biasTxt = 'Net Bearish'; }
+            }
+
+            // Track record — only show a hit rate once trades have actually closed.
+            const ruled = summary.ruled_signals || 0;
+            const hr = summary.hit_rate;
+            let recLabel, recVal, recSub, recCls = '';
+            if (ruled && hr != null) {
+                recLabel = 'Hit Rate · All-time';
+                recVal = Math.round(hr) + '%';
+                recCls = hr >= 60 ? 'pos' : (hr >= 50 ? 'neutral' : 'neg');
+                recSub = (summary.hits || 0) + ' wins · ' + (summary.stops || 0) + ' stops';
+            } else {
+                recLabel = 'Signals Tracked';
+                recVal = String((summary.total_signals != null ? summary.total_signals : signals.length) || 0);
+                recSub = 'grading in progress';
+            }
+
+            const statsEl = document.getElementById('cc-stats');
+            if (statsEl) {
+                statsEl.innerHTML = `
+                    <div class="cc-stat">
+                        <div class="cc-stat-label">Live Signals</div>
+                        <div class="cc-stat-value">${active.length}</div>
+                        <div class="cc-stat-sub">monitored against price</div>
+                    </div>
+                    <div class="cc-stat">
+                        <div class="cc-stat-label">Today's Bias</div>
+                        <div class="cc-stat-value ${biasCls}" style="font-size:var(--text-xl,22px)">${biasTxt}</div>
+                        <div class="cc-stat-sub">${bulls} bullish · ${bears} bearish</div>
+                    </div>
+                    <div class="cc-stat">
+                        <div class="cc-stat-label">Avg Conviction</div>
+                        <div class="cc-stat-value">${avgConf == null ? '&mdash;' : avgConf + '%'}</div>
+                        ${avgConf == null
+                            ? '<div class="cc-stat-sub">across live signals</div>'
+                            : `<div class="cc-meter"><div class="cc-meter-fill" style="width:${avgConf}%;background:${avgConf >= 80 ? 'var(--green)' : (avgConf >= 60 ? 'var(--amber)' : 'var(--red)')}"></div></div>`}
+                    </div>
+                    <div class="cc-stat">
+                        <div class="cc-stat-label">${recLabel}</div>
+                        <div class="cc-stat-value ${recCls}">${recVal}</div>
+                        <div class="cc-stat-sub">${recSub}</div>
+                    </div>`;
+            }
+
+            // Bias distribution bar — proportion of live signals leaning bull vs bear.
+            const biasEl = document.getElementById('cc-bias');
+            if (biasEl) {
+                const tot = bulls + bears;
+                if (tot > 0) {
+                    const bullPct = (bulls / tot) * 100;
+                    const bearPct = 100 - bullPct;
+                    biasEl.innerHTML = `
+                        <div class="cc-bias-track" role="img" aria-label="${bulls} bullish, ${bears} bearish signals">
+                            <div class="cc-bias-bull" style="width:${bullPct}%"></div>
+                            <div class="cc-bias-bear" style="width:${bearPct}%"></div>
+                        </div>
+                        <div class="cc-bias-legend">
+                            <span class="b"><i></i>${bulls} Bullish · ${Math.round(bullPct)}%</span>
+                            <span class="s">${bears} Bearish · ${Math.round(bearPct)}%<i></i></span>
+                        </div>`;
+                    biasEl.hidden = false;
+                } else {
+                    biasEl.hidden = true;
+                }
+            }
+
+            const sigEl = document.getElementById('cc-signals');
+            if (!sigEl) return;
+            const top = pool.slice()
+                .sort((a, b) => (b.confidence || 0) - (a.confidence || 0))
+                .slice(0, 5);
+            if (!top.length) {
+                sigEl.innerHTML = `<div class="cc-empty">No live signals at the moment — the engine is monitoring 68 news sources. Fresh signals surface here during market hours.</div>`;
+                return;
+            }
+            sigEl.innerHTML = top.map(s => {
+                const ticker = (s.ticker || '').replace('.NS', '').replace('.BO', '');
+                const isBull = s.direction === 'BULLISH';
+                const dirCls = isBull ? 'dir-bull' : 'dir-bear';
+                const arrow = isBull ? '▲' : '▼';
+                const diff = s.diff_pct || 0;
+                const chg = (diff >= 0 ? '+' : '') + diff.toFixed(2) + '%';
+                const chgCls = diff > 0 ? 'dir-bull' : (diff < 0 ? 'dir-bear' : 'text-slate-400');
+                const conf = s.confidence || 0;
+                const confCls = conf >= 80 ? 'conf-high' : (conf >= 60 ? 'conf-mid' : 'conf-low');
+                const prog = s.progress_pct || 0;
+                const progW = Math.min(100, Math.max(0, Math.abs(prog)));
+                const progColor = prog >= 0 ? 'var(--green)' : 'var(--red)';
+                const entry = (s.entry != null) ? '₹' + s.entry.toLocaleString('en-IN') : '—';
+                const cur = (s.current != null) ? '₹' + s.current.toLocaleString('en-IN') : '—';
+                return `<button class="cc-card" type="button" onclick="switchTab('terminal')" title="${escapeHtml(s.headline || '')}">
+                    <div class="cc-card-top">
+                        <span class="cc-card-ticker">${escapeHtml(ticker)}</span>
+                        <span class="conf-ring ${confCls}">${conf}</span>
+                    </div>
+                    <span class="cc-card-dir ${dirCls}">${arrow} ${s.direction || ''}</span>
+                    <div class="cc-card-px">${entry} <span class="arrow">&rarr;</span> ${cur} <span class="cc-card-chg ${chgCls}">${chg}</span></div>
+                    <div class="cc-card-foot">
+                        <div class="progress-track"><div class="progress-fill" style="width:${progW}%;background:${progColor}"></div></div>
+                        <span class="cc-card-prog-lbl" style="color:${progColor}">${progW.toFixed(0)}% ${prog >= 0 ? 'Tgt' : 'Stop'}</span>
+                    </div>
+                </button>`;
+            }).join('');
+        }
+
         function getImpactColorClasses(impact) {
             const i = (impact || '').toLowerCase();
             if (i === 'bullish') return "bg-green-800/60 text-green-300 border-green-500/80 shadow-[0_0_15px_rgba(34,197,94,0.3)]";

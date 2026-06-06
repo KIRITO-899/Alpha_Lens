@@ -175,7 +175,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v15-2026-06-07-tnums">
+    <link rel="stylesheet" href="/styles.css?v=al-v16-2026-06-07-command">
 </head>
 
 <body class="antialiased">
@@ -403,6 +403,20 @@
         </nav>
 
         <!-- ============================================== -->
+        <!-- MOBILE TAB BAR — primary nav under md (the desktop -->
+        <!-- menu is hidden there). Horizontally scrollable.   -->
+        <!-- ============================================== -->
+        <nav class="mobile-tabbar" id="mobile-tabbar" aria-label="Primary navigation">
+            <a href="#" class="mtab active" data-mtab="top-news" onclick="switchTab('top-news'); return false;">Top News</a>
+            <a href="#" class="mtab" data-mtab="all-news" onclick="switchTab('all-news'); return false;">All News</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="macro-pulse" onclick="switchTab('macro-pulse'); return false;">Macro Pulse</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="calendar" onclick="switchTab('calendar'); return false;">Calendar</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="portfolio" onclick="switchTab('portfolio'); return false;">Portfolio</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="terminal" onclick="switchTab('terminal'); return false;">Signal Terminal</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="stocks" onclick="switchTab('stocks'); return false;">Track Record</a>
+        </nav>
+
+        <!-- ============================================== -->
         <!-- INDEX CARDS STRIP (hidden in non-stock mode)  -->
         <!-- ============================================== -->
         <div id="index-ticker" class="mx-6 mt-3 grid grid-cols-2 lg:grid-cols-4 gap-3 stock-mode-element">
@@ -429,7 +443,7 @@
             </div>
         </div>
 
-        <main class="container mx-auto p-6 flex-grow">
+        <main class="container mx-auto p-4 md:p-6 flex-grow">
 
             <!-- ============================================== -->
             <!-- VIEW 1: TOP NEWS (DASHBOARD)                  -->
@@ -437,7 +451,29 @@
             <div id="view-top-news" class="grid grid-cols-1 xl:grid-cols-12 gap-8 items-start">
                 <div id="top-news-main-col" class="col-span-1 xl:col-span-8 space-y-8">
 
-
+                    <!-- ============================================== -->
+                    <!-- COMMAND CENTER - lead with the edge, not the news -->
+                    <!-- ============================================== -->
+                    <section id="command-center" class="cc-wrap glass-panel premium-shell rounded-2xl" aria-label="Live signal overview" hidden>
+                        <div class="cc-head">
+                            <div class="cc-head-left">
+                                <div class="section-kicker"><span>Live Edge</span></div>
+                                <p class="cc-head-sub">Tradeable signals decoded from the news, right now.</p>
+                            </div>
+                            <button onclick="switchTab('terminal')" class="cc-head-link" type="button">
+                                Open Signal Terminal
+                                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+                            </button>
+                        </div>
+                        <div id="cc-stats" class="cc-stats" aria-live="polite">
+                            <div class="cc-stat"><span class="skel skel-cell" style="width:55%;height:9px"></span><span class="skel skel-cell" style="width:42%;height:24px;margin-top:10px"></span></div>
+                            <div class="cc-stat"><span class="skel skel-cell" style="width:55%;height:9px"></span><span class="skel skel-cell" style="width:42%;height:24px;margin-top:10px"></span></div>
+                            <div class="cc-stat"><span class="skel skel-cell" style="width:55%;height:9px"></span><span class="skel skel-cell" style="width:42%;height:24px;margin-top:10px"></span></div>
+                            <div class="cc-stat"><span class="skel skel-cell" style="width:55%;height:9px"></span><span class="skel skel-cell" style="width:42%;height:24px;margin-top:10px"></span></div>
+                        </div>
+                        <div id="cc-bias" class="cc-bias" hidden></div>
+                        <div id="cc-signals" class="cc-signals"></div>
+                    </section>
 
                     <div class="glass-panel premium-shell p-5 rounded-2xl">
                         <div class="flex justify-between items-center mb-3">
@@ -1145,6 +1181,21 @@
 
             <!-- ============================================== -->
         </main>
+        <footer class="app-footer">
+            <div class="app-footer-inner">
+                <div class="app-footer-brand">
+                    <span class="app-footer-mark">Alpha Lens</span>
+                    <span class="app-footer-tag">AI signal intelligence for Indian markets</span>
+                </div>
+                <p class="app-footer-disc">
+                    For informational and educational purposes only. Alpha Lens is not a registered
+                    investment adviser, and nothing here is investment advice, a recommendation, or
+                    an offer to buy or sell any security. Signals are AI-generated, can be wrong, and
+                    are not a guarantee of future results. Markets carry risk &mdash; do your own
+                    research and consult a SEBI-registered adviser before trading.
+                </p>
+            </div>
+        </footer>
     </div>
 
     <!-- ──────────────────────────────────────────────────────────────────
@@ -1199,15 +1250,15 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-news.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-stocks.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-market.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-premium.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-terminal.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-ripple.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-macro.js?v=al-v15-2026-06-07-tnums" defer></script>
-    <script src="/app-calendar.js?v=al-v15-2026-06-07-tnums" defer></script>
+    <script src="/app-core.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-news.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-stocks.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-market.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-premium.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-terminal.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-ripple.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-macro.js?v=al-v16-2026-06-07-command" defer></script>
+    <script src="/app-calendar.js?v=al-v16-2026-06-07-command" defer></script>
 </body>
 
 </html>

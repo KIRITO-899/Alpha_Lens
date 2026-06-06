@@ -165,6 +165,7 @@
             // Initial fetch
             fetchLiveNews();
             fetchIndices();
+            if (typeof loadCommandBar === 'function') loadCommandBar();
 
             function schedulePolling() {
                 // Re-check market status every tick
@@ -185,7 +186,11 @@
                 const day = nowIST.getDay();
                 const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
                 const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-                setTimeout(() => { fetchLiveNews(); scheduleNewsPolling(); }, isOpen ? 30000 : 120000);
+                setTimeout(() => {
+                    fetchLiveNews();
+                    if (typeof loadCommandBar === 'function') loadCommandBar();
+                    scheduleNewsPolling();
+                }, isOpen ? 30000 : 120000);
             }
 
             function scheduleIndexPolling() {

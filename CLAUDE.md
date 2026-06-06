@@ -147,7 +147,7 @@ Alpha_Lens/
 ├── frontend/
 │   ├── index.html               # Main dashboard (stocks ticker, news cards, signals)
 │   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/9)
-│   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive (2/9)
+│   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive, Command Center (2/9)
 │   ├── app-stocks.js            # Watchlist search, portfolio assistant (3/9)
 │   ├── app-market.js            # Major stocks, indices, smart polling (4/9)
 │   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/9)
@@ -324,6 +324,47 @@ A forward-looking schedule of macro events (RBI/Fed/MPC, CPI/IIP/WPI, PMIs, OPEC
 **Refreshing the week.** Two paths: (a) edit `CALENDAR_EVENTS_SEED` + restart (startup runs `seed_calendar_events(force=False)`, INSERT-OR-IGNORE keyed on `(event_date, country, title)`), or (b) `POST /api/admin/calendar/upsert` (token: `X-Alpha-Lens-Token`) for a live delete-then-insert over a window. The current seed (`2026-06-08 → 2026-06-17`) was produced by the `Workflow` pipeline (draft → adversarial verify), web-grounded in real prints, then harmonized to one macro backdrop (USD/INR ~95, Brent ~$95-97). Regenerate with `scratch/gen_calendar_seed.py` (gitignored) if you re-run that workflow.
 
 Env knobs: `CALENDAR_RUN_EVERY_MIN` (30), `CALENDAR_PURGE_AFTER_DAYS` (2), `CALENDAR_DONE_GRACE_MIN` (0), `CALENDAR_WORKER_DISABLED`.
+
+## The Command Center (dashboard "live edge" bar)
+
+The dashboard (`view-top-news`) leads with the product's **actual value** — live
+signals + track record — instead of burying it behind a tab. The `#command-center`
+`<section>` sits at the **top of the main column, above "Latest Headlines"**, and is
+rendered entirely by `loadCommandBar()` / `renderCommandBar()` in `app-news.js`.
+
+- **Data:** reuses the exact same endpoints as the Signal Terminal and Track Record —
+  `GET /api/signal-terminal` (signals) + `GET /api/backtest-stats?range=all` (summary)
+  — so it can never disagree with them. No new backend.
+- **Shows:** 4 stat tiles (Live Signals · Today's Bias · Avg Conviction w/ color-coded
+  meter · Hit Rate **only once trades close**, else "Signals Tracked · grading in
+  progress"), a **bull/bear bias distribution bar** (`#cc-bias`), and the **top 5
+  highest-conviction live signal cards** (`#cc-signals`) — each card links to the
+  Signal Terminal.
+- **Lifecycle:** `loadCommandBar()` is called from `startSmartPolling()` on boot and
+  on every news-poll tick (`app-market.js`). The heavier `backtest-stats` call is
+  **throttled to ≤ once / 5 min** (cached in `_ccSummary`); signals refetch every tick.
+- **Degradation:** the section is `hidden` by default and only revealed once there's
+  something real to show. On a cold-start fetch failure or zero signals + zero track
+  record, it **stays hidden** and the dashboard simply shows the news feed — never a
+  broken skeleton.
+- **Does NOT touch** the per-article Signal Desk, Plain English Decode, Full Article,
+  or the "Stocks Affected" table (all intentional, left as-is).
+- Styles: `.cc-*` block in `styles.css` (token-based, responsive: stats 2-col→4-col,
+  header stacks < 480px). A **compliance disclaimer footer** (`.app-footer`) was added
+  site-wide for the finance-product trust layer.
+
+### Mobile navigation (critical fix)
+
+The desktop nav menu is `hidden md:flex`, so **below 768px it disappeared with no
+replacement** — phones had no way to switch tabs. Fixed with a **horizontally-scrollable
+mobile tab bar** (`#mobile-tabbar` / `.mtab` in `index.html`, shown only `< 768px` via a
+self-contained `@media (max-width:767px)` rule — NOT Tailwind's `md:hidden`, to avoid
+CDN source-order ambiguity). Each pill calls the same `switchTab(...)`; `switchTab` now
+also syncs the active `.mtab`. The stock-only tabs carry `stock-mode-element` so they
+hide in non-stock mode exactly like the desktop nav. Other mobile touches: `<main>` is
+`p-4 md:p-6` (more content width on phones); heroes already use `clamp()`; data tables
+keep their `overflow-x-auto` horizontal scroll (a full mobile card-view is a noted
+follow-up). Viewport meta is present.
 
 ## The Ripple (macro propagation graph)
 

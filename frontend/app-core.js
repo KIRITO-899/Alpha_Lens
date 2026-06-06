@@ -373,6 +373,10 @@
                     }
                 }
             });
+            // Keep the mobile tab bar's active pill in sync with the desktop nav.
+            document.querySelectorAll('#mobile-tabbar .mtab').forEach(t => {
+                t.classList.toggle('active', t.getAttribute('data-mtab') === targetTabId);
+            });
             // Index cards only belong on the Top News page
             const ticker = document.getElementById('index-ticker');
             if (ticker) {
