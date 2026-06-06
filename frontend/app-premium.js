@@ -4,9 +4,8 @@
             pollSignalNotifications();
             setInterval(pollSignalNotifications, 30000);
             initPremiumInteractions();
-            // v2 premium UI features (#9 trail, #11 parallax, #19 live-pulse intensity)
-            initCursorTrail();
-            initKpiParallax();
+            // Live-pulse intensity stays (purposeful: reflects real worker activity).
+            // Cursor-trail + scroll-parallax were removed — gimmicky, not premium.
             initLivePulseIntensity();
         }
 
@@ -43,72 +42,6 @@
             overlay.classList.add('fade-out');
             sessionStorage.setItem('al_onboarded', '1');
             setTimeout(() => { overlay.classList.add('hidden'); }, 700);
-        }
-
-        // ══════════════════════════════════════════════════════════════
-        // #9 — Cursor glow trail
-        // Soft champagne orb follows the cursor with rAF interpolation
-        // so it lags slightly behind (premium "trailing" feel).
-        // ══════════════════════════════════════════════════════════════
-        function initCursorTrail() {
-            const orb = document.getElementById('cursor-glow');
-            if (!orb) return;
-            if (window.matchMedia('(hover: none)').matches) return;  // mobile/touch — skip
-            let tx = -9999, ty = -9999, cx = -9999, cy = -9999;
-            let active = false;
-            const half = 140; // half of orb size
-
-            window.addEventListener('pointermove', (e) => {
-                tx = e.clientX; ty = e.clientY;
-                if (!active) {
-                    active = true;
-                    orb.classList.add('show');
-                }
-            }, { passive: true });
-
-            window.addEventListener('pointerleave', () => {
-                active = false;
-                orb.classList.remove('show');
-            }, { passive: true });
-
-            function loop() {
-                // Lerp — smoother than direct follow
-                cx += (tx - cx) * 0.16;
-                cy += (ty - cy) * 0.16;
-                orb.style.transform = `translate3d(${cx - half}px, ${cy - half}px, 0)`;
-                requestAnimationFrame(loop);
-            }
-            requestAnimationFrame(loop);
-        }
-
-        // ══════════════════════════════════════════════════════════════
-        // #11 — Scroll-linked parallax on Track Record KPI cards
-        // Sets --scroll-y CSS var on #tr-kpi-row based on its offset
-        // within the viewport. CSS handles per-card multiplier.
-        // ══════════════════════════════════════════════════════════════
-        function initKpiParallax() {
-            const row = document.getElementById('tr-kpi-row');
-            if (!row) return;
-            if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-            let ticking = false;
-            function updateParallax() {
-                ticking = false;
-                const rect = row.getBoundingClientRect();
-                // Distance from viewport center (positive = below center, negative = above)
-                const vhCenter = window.innerHeight / 2;
-                const rowCenter = rect.top + rect.height / 2;
-                const offset = rowCenter - vhCenter;
-                // Clamp so the effect doesn't go crazy at extremes
-                const clamped = Math.max(-400, Math.min(400, offset));
-                row.style.setProperty('--scroll-y', clamped);
-            }
-            window.addEventListener('scroll', () => {
-                if (!ticking) {
-                    requestAnimationFrame(updateParallax);
-                    ticking = true;
-                }
-            }, { passive: true });
-            updateParallax();
         }
 
         // ══════════════════════════════════════════════════════════════
@@ -254,51 +187,15 @@
             document.addEventListener('pointermove', (event) => {
                 if (reducedMotion) return;
 
-                // Existing parallax tilt for hero/insight tiles
-                const card = event.target.closest('.premium-hero, .headline-tile, .insight-tile, .index-card');
-                if (card) {
-                    const rect = card.getBoundingClientRect();
-                    const px = ((event.clientX - rect.left) / rect.width) - 0.5;
-                    const py = ((event.clientY - rect.top) / rect.height) - 0.5;
-                    card.style.transform = `perspective(900px) rotateX(${py * -2.2}deg) rotateY(${px * 2.2}deg) translateY(-2px)`;
-                }
-
-                // UI-11: per-panel cursor spotlight — set --px/--py in pixels on every panel under the cursor
+                // Per-panel cursor spotlight — a subtle glass sheen that tracks the
+                // cursor. Kept because it's an ambient depth cue, not a gimmick.
+                // (The full-card 3D tilt and magnetic-button pull were removed —
+                // they read as "look at my effects" rather than as a finished product.)
                 const panel = event.target.closest('.glass-panel');
                 if (panel) {
                     const pRect = panel.getBoundingClientRect();
                     panel.style.setProperty('--px', (event.clientX - pRect.left) + 'px');
                     panel.style.setProperty('--py', (event.clientY - pRect.top) + 'px');
-                }
-
-                // UI-2: magnetic buttons — translate toward cursor when within range
-                const mag = event.target.closest('[data-magnetic]');
-                if (mag) {
-                    const mRect = mag.getBoundingClientRect();
-                    const cx = mRect.left + mRect.width / 2;
-                    const cy = mRect.top + mRect.height / 2;
-                    const dx = event.clientX - cx;
-                    const dy = event.clientY - cy;
-                    const dist = Math.hypot(dx, dy);
-                    const radius = Math.max(mRect.width, mRect.height) * 0.9 + 20;
-                    if (dist < radius) {
-                        const strength = Math.min(1, (radius - dist) / radius);
-                        const pull = 0.32 * strength; // max ~32% of distance
-                        mag.style.setProperty('--mx', (dx * pull) + 'px');
-                        mag.style.setProperty('--my', (dy * pull) + 'px');
-                        mag.classList.add('is-pulling');
-                    }
-                }
-            }, { passive: true });
-
-            document.addEventListener('pointerout', (event) => {
-                const card = event.target.closest('.premium-hero, .headline-tile, .insight-tile, .index-card');
-                if (card) card.style.transform = '';
-                const mag = event.target.closest('[data-magnetic]');
-                if (mag && !mag.contains(event.relatedTarget)) {
-                    mag.classList.remove('is-pulling');
-                    mag.style.setProperty('--mx', '0px');
-                    mag.style.setProperty('--my', '0px');
                 }
             }, { passive: true });
 

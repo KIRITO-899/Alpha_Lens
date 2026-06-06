@@ -165,7 +165,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v9-2026-06-06-ripple">
+    <link rel="stylesheet" href="/styles.css?v=al-v10-2026-06-07-ui-polish">
 </head>
 
 <body class="antialiased">
@@ -1089,11 +1089,11 @@
                     <button onclick="setTerminalFilter('active')" id="tf-active"
                         class="sector-pill">Active</button>
                     <button onclick="setTerminalFilter('bullish')" id="tf-bullish"
-                        class="sector-pill" style="border-color:rgba(16,185,129,0.3);color:#10b981;">🟢 Bullish</button>
+                        class="sector-pill" style="border-color:var(--green-border);color:var(--green);"><span class="pill-dot"></span>Bullish</button>
                     <button onclick="setTerminalFilter('bearish')" id="tf-bearish"
-                        class="sector-pill" style="border-color:rgba(244,63,94,0.3);color:#f43f5e;">🔴 Bearish</button>
+                        class="sector-pill" style="border-color:var(--red-border);color:var(--red);"><span class="pill-dot"></span>Bearish</button>
                     <button onclick="setTerminalFilter('high')" id="tf-high"
-                        class="sector-pill" style="border-color:rgba(245,158,11,0.3);color:#f59e0b;">⭐ High Conviction</button>
+                        class="sector-pill" style="border-color:var(--amber-border);color:var(--amber);"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px;margin-right:5px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg>High Conviction</button>
                 </div>
 
                 <div class="terminal-wrap">
@@ -1190,15 +1190,15 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-news.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-stocks.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-market.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-premium.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-terminal.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-ripple.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-macro.js?v=al-v9-2026-06-06-ripple" defer></script>
-    <script src="/app-calendar.js?v=al-v9-2026-06-06-ripple" defer></script>
+    <script src="/app-core.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-news.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-stocks.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-market.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-premium.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-terminal.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-ripple.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-macro.js?v=al-v10-2026-06-07-ui-polish" defer></script>
+    <script src="/app-calendar.js?v=al-v10-2026-06-07-ui-polish" defer></script>
 </body>
 
 </html>
