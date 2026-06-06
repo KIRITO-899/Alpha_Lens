@@ -101,9 +101,9 @@
         }
 
         function getStatusBadge(status) {
-            if (status === 'Predicted Target Hit') return { text: '🎯 Target Hit', cls: 'text-green-400' };
-            if (status === 'Stop Loss Hit') return { text: '🛑 Stop Loss Hit', cls: 'text-red-400' };
-            if (status === 'Reacted Against Prediction') return { text: '🛑 Stop Loss Hit', cls: 'text-red-400' };
+            if (status === 'Predicted Target Hit') return { text: '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M5 13l4 4L19 7"/></svg>Target Hit', cls: 'text-green-400' };
+            if (status === 'Stop Loss Hit') return { text: '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stop Loss Hit', cls: 'text-red-400' };
+            if (status === 'Reacted Against Prediction') return { text: '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stop Loss Hit', cls: 'text-red-400' };
             return { text: '● Active View', cls: 'text-violet-400' };
         }
 

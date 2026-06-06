@@ -236,15 +236,15 @@
                 const progW = Math.min(100, Math.max(0, Math.abs(s.progress_pct)));
                 const progColor = s.progress_pct >= 0 ? '#10b981' : '#f43f5e';
                 let stCls = 'status-active', stTxt = 'Active';
-                if (s.status === 'Predicted Target Hit') { stCls = 'status-hit'; stTxt = '✅ Target'; }
-                else if (s.status === 'Stop Loss Hit') { stCls = 'status-stop'; stTxt = '❌ Stopped'; }
-                else if (s.status === 'Expired') { stCls = 'status-expired'; stTxt = '⏱ Expired'; }
+                if (s.status === 'Predicted Target Hit') { stCls = 'status-hit'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M5 13l4 4L19 7"/></svg>Target'; }
+                else if (s.status === 'Stop Loss Hit') { stCls = 'status-stop'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stopped'; }
+                else if (s.status === 'Expired') { stCls = 'status-expired'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Expired'; }
                 const ticker = (s.ticker||'').replace('.NS','').replace('.BO','');
                 const isHigh = s.confidence >= 85;
                 const rowBg = isHigh ? 'background:rgba(245,158,11,0.03);' : '';
                 const staggerI = Math.min(idx, 12);
                 return `<tr data-stagger-i="${idx}" style="${rowBg}--i:${staggerI};">
-                    <td><span class="ticker-hover-target font-display font-bold text-white text-sm" data-ticker="${escapeHtml(s.ticker || ticker)}">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction">⭐</span>':''}</td>
+                    <td><span class="ticker-hover-target font-display font-bold text-white text-sm" data-ticker="${escapeHtml(s.ticker || ticker)}">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction"><svg viewBox="0 0 24 24" width="11" height="11" fill="var(--amber)" style="vertical-align:-1px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg></span>':''}</td>
                     <td><span class="${dirCls} text-xs">${dirIcon} ${s.direction}</span></td>
                     <td><div class="conf-ring ${confCls}">${s.confidence}</div></td>
                     <td class="text-slate-300 font-mono text-xs">₹${s.entry.toLocaleString('en-IN')}</td>
@@ -533,8 +533,8 @@
                 const dirArrow = r.direction === 'BULLISH' ? '▲' : (r.direction === 'BEARISH' ? '▼' : '◆');
 
                 let outcomeCls = 'expired', outcomeTxt = 'Expired';
-                if (r.status === 'Predicted Target Hit') { outcomeCls = 'hit'; outcomeTxt = '✓ Target'; }
-                else if (r.status === 'Stop Loss Hit') { outcomeCls = 'stop'; outcomeTxt = '✕ Stop'; }
+                if (r.status === 'Predicted Target Hit') { outcomeCls = 'hit'; outcomeTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M5 13l4 4L19 7"/></svg>Target'; }
+                else if (r.status === 'Stop Loss Hit') { outcomeCls = 'stop'; outcomeTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stop'; }
                 else if (r.status === 'Reacted Against Prediction') { outcomeCls = 'stop'; outcomeTxt = '↘ Reacted'; }
 
                 const staggerI = Math.min(idx, 12);
@@ -588,10 +588,10 @@
             toast.innerHTML = `
                 <div class="toast-header">
                     <div class="flex items-center gap-2">
-                        <span style="font-size:14px">${isBull?'📈':'📉'}</span>
+                        <span style="display:inline-flex">${isBull?'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>':'<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>'}</span>
                         <span class="toast-ticker">${ticker}</span>
                         <span class="toast-dir ${isBull?'bull':'bear'} text-xs font-bold">${sig.direction}</span>
-                        ${isHigh?'<span style="color:#f59e0b;font-size:10px;font-weight:800;">⭐ HIGH</span>':''}
+                        ${isHigh?'<span style="color:#f59e0b;font-size:10px;font-weight:800;"><svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg>HIGH</span>':''}
                     </div>
                     <button class="toast-close" onclick="this.closest('.signal-toast').remove()">✕</button>
                 </div>

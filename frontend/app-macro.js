@@ -49,7 +49,7 @@ async function fetchMacroPulse() {
         if (!events.length) {
             chipsEl.innerHTML = `
                 <div class="mp-alert-empty">
-                    <div class="mp-alert-empty-icon">🟢</div>
+                    <div class="mp-alert-empty-icon"><svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg></div>
                     <div class="mp-alert-empty-title">All Systems Stable</div>
                     <p class="mp-alert-empty-sub">No macroeconomic shock thresholds have been breached in the last 24 hours. Global regime is nominal.</p>
                 </div>`;

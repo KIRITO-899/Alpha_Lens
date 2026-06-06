@@ -166,8 +166,8 @@ function _renderCalEventDetail(container, ev) {
         </div>
         <h2 class="cal-detail-title">${escapeHtml(ev.title)}</h2>
         <div class="cal-detail-meta">
-            <span>📅 <b>${escapeHtml(ev.event_date)}</b></span>
-            <span>🕒 <b>${escapeHtml(ev.event_time_ist || 'TBD')} IST</b></span>
+            <span><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg><b>${escapeHtml(ev.event_date)}</b></span>
+            <span><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><b>${escapeHtml(ev.event_time_ist || 'TBD')} IST</b></span>
             <span><span class="cal-importance ${importance}"><span class="cal-importance-dot"></span>${importance}</span></span>
         </div>
 
