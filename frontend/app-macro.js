@@ -54,12 +54,13 @@ function _mpRenderNiftyOutlook(d) {
             <div class="mp-out-left">
                 <div class="mp-out-level-lbl">NIFTY 50 · last</div>
                 <div class="mp-out-level">${_mpInr(d.nifty_last)}</div>
-                <div class="mp-out-proj">Projected range <strong>${projRange}</strong></div>
+                <div class="mp-out-proj">~68% range <strong>${projRange}</strong></div>
+                ${(d.projected_wide_low != null && d.projected_wide_high != null) ? `<div class="mp-out-proj mp-out-proj-wide">~95% ${_mpInr(d.projected_wide_low)} – ${_mpInr(d.projected_wide_high)}</div>` : ''}
             </div>
             <div class="mp-out-mid">
                 <div class="mp-out-stance" style="color:${color}">${escapeHtml(d.stance_label || '')}</div>
                 <div class="mp-out-move" style="color:${color}">${expSign}${Number(d.expected_move_pct).toFixed(2)}%</div>
-                <div class="mp-out-rangepct">expected band ${Number(d.range_low_pct).toFixed(2)}% to ${Number(d.range_high_pct).toFixed(2)}%</div>
+                <div class="mp-out-rangepct">~68% band ${Number(d.range_low_pct).toFixed(2)}% to ${Number(d.range_high_pct).toFixed(2)}%${(d.wide_low_pct != null) ? ` · ~95% ${Number(d.wide_low_pct).toFixed(2)}% to ${Number(d.wide_high_pct).toFixed(2)}%` : ''}</div>
                 <div class="mp-out-conf">
                     <div class="mp-out-conf-bar"><div class="mp-out-conf-fill" style="width:${d.confidence}%;background:${color}"></div></div>
                     <span class="mp-out-conf-num">${d.confidence}% conviction</span>

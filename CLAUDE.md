@@ -199,7 +199,7 @@ Alpha_Lens/
 | `persistence/db.py` | Database layer — `connect_news_db`/`connect_users_db`, `db_write`, the SQLite↔Postgres wrappers + PG pool. **`_APP_DIR` = parent of this file's dir** so DBs resolve to `backend/`, not `backend/persistence/` |
 | `persistence/schema.py` | Schema builders — `init_db`/`init_news_db` (table creation + idempotent migrations); imports `from persistence.db import …` |
 | `marketdata/market_calendar.py` | Pure NSE calendar helpers — holidays, `is_market_open`, `has_market_traded_since` |
-| `marketdata/macro_tracker.py` | `MacroDataTracker` — live commodity/FX/rates snapshot + **volatility-normalized (σ/z-score) shock detection**. Pulls 6mo daily closes → realized vol → `sigma = move/vol`; pure helpers `daily_returns()`/`compute_vol_stats()` (unit-tested) |
+| `marketdata/macro_tracker.py` | `MacroDataTracker` — live commodity/FX/rates snapshot + **volatility-normalized (σ/z-score) shock detection**. Pulls 6mo daily closes → realized vol → `sigma = move/vol`; pure helpers `daily_returns()`/`compute_vol_stats()`/`latest_daily_change()` (unit-tested). ⚠️ `latest_daily_change` computes the **TRUE 1-day change** from the last two daily closes — NOT Yahoo's `chartPreviousClose`, which on the 6mo chart is the close ~6 months ago (that bug made every "1d" move a 6-MONTH move → Nifty -10.77%, USD/INR +5.68%, and inflated every σ so the whole board flagged MAJOR) |
 | `marketdata/ticker_utils.py` | Ticker normalization + news-candidate screening — `normalize_ticker`, `candidate_quality_score`, etc. Imports `newsproc.news_rules`/`newsproc.news_data` |
 | `marketdata/oi_data.py` | NSE F&O bhavcopy fetch+parse — **futures (STF) + options (STO/IDO)** from one ZIP → `get_oi_buildup_for_ticker` (technical model) + `get_fno_raw_snapshot`/`get_option_chain_raw` (Smart-Money board). Also defensive `get_delivery_map` (cash delivery%) + `get_bulk_block_deals`. Lazy-imported |
 | `newsproc/news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` |
@@ -550,17 +550,25 @@ keys, reproducible, instant).
   capped) across 8 curated, **non-redundant** drivers (US VIX, DXY, US 10Y, Brent, USD/INR,
   Gold, Copper, India VIX — brent not wti, gold not silver; banknifty/nifty aren't drivers of
   themselves). Betas are grounded in India macro structure (net oil importer, EM beta to the
-  dollar/US rates, risk-on/off via vol). The expected **range** uses NIFTY's own realized
-  daily vol (`vol_pct` from the snapshot); **confidence** is built from driver *agreement* +
-  breadth + magnitude, floored 25 / **ceiled 80**.
+  dollar/US rates, risk-on/off via vol). The **range** is probability-banded around the bias
+  using NIFTY's own realized daily vol: a **~68% (±1σ)** most-likely band + a **~95% (±2σ)**
+  outer "all-possibilities" bound (`range_*` / `wide_*` + projected levels). **Confidence** is
+  built from driver *agreement* + breadth + magnitude, floored 25 / **ceiled 80**.
 - **Route:** `GET /api/macro/nifty-outlook` (in `app.py`) — `MacroDataTracker.get_snapshot()`
   + `is_market_open()` → `compute_nifty_outlook`. Pure compute, no DB cache, safe shell on
   failure. **Route count is now 47.**
-- **NIFTY price read hardened:** `macro_tracker._fetch_one` now falls back to the latest
-  valid close in the series when Yahoo omits `regularMarketPrice` for `^NSEI` (handles the
-  blank/stale-null case). The live `^NSEI` feed is still Yahoo's free, ~15-min-delayed quote
-  (last close after hours) — a true real-time level needs a paid feed; the tile labels the
-  value `LAST` and frames the horizon (`NSE is shut` / `NSE is open`) so it reads honestly.
+- **⚠️ 1-day-change fix (foundational):** `macro_tracker` previously used Yahoo's
+  `chartPreviousClose` from a **6mo-range** chart as "prev" → every "1-day" move was actually
+  a **6-MONTH** move (Nifty −10.77%, USD/INR +5.68%, Copper +17%…), which also inflated every
+  σ so the whole board flagged MAJOR/ACTIONABLE and poisoned the outlook range. Now
+  `latest_daily_change()` derives prev from the **prior session close** (`series[-2]`, then
+  `previousClose`) — never `chartPreviousClose`. This corrects the change %, the σ shock
+  detection, and the outlook for the *entire* Macro Pulse. Regression-tested.
+- **NIFTY price read hardened:** `latest_daily_change` also falls back to the latest valid
+  close when Yahoo omits `regularMarketPrice` for `^NSEI`. The live `^NSEI` feed is still
+  Yahoo's free, ~15-min-delayed quote (last close after hours) — a true real-time level needs
+  a paid feed (GIFT Nifty is the best next-session proxy); the tile labels the value `LAST`
+  and frames the horizon (`NSE is shut` / `NSE is open`) so it reads honestly.
 - **Frontend:** `loadNiftyOutlook()` / `_mpRenderNiftyOutlook()` in `app-macro.js`, tile
   `#mp-nifty-outlook` at the top of `#view-macro-pulse` (called from `fetchMacroPulse()`).
   Renders NIFTY last + projected level range, stance + expected move ± band, a confidence

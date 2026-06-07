@@ -110,11 +110,18 @@ def compute_nifty_outlook(snapshot, during_nse_hours=None):
     expected = round(_clamp(total, -MAX_EXPECTED, MAX_EXPECTED), 2)
     contributions.sort(key=lambda c: -abs(c['contribution_pct']))
 
-    # Expected range from NIFTY's own realized daily vol (snapshot carries vol_pct).
+    # Probability-banded range from NIFTY's own realized daily vol (1σ). The most
+    # likely next-session outcome is the macro bias ± one daily σ (≈68% of days
+    # under a normal random-walk approx); ±2σ bounds the ≈95% "all possibilities"
+    # range. (vol_pct is the genuine realized daily vol — computed from true daily
+    # returns — so it stays correct independent of the 1-day-change fix.)
     vol = _f(nifty.get('vol_pct'))
     band = round(vol, 2) if vol and vol > 0 else DEFAULT_RANGE
     range_low = round(expected - band, 2)
     range_high = round(expected + band, 2)
+    wide = round(band * 2, 2)
+    wide_low = round(expected - wide, 2)
+    wide_high = round(expected + wide, 2)
 
     # Confidence: honest, capped. Built from driver AGREEMENT (do the cues align?),
     # breadth (how many cues), and magnitude — never near-certainty.
@@ -147,11 +154,13 @@ def compute_nifty_outlook(snapshot, during_nse_hours=None):
     else:
         horizon, horizon_note = 'Next session', 'Pre-open read'
 
-    # NIFTY reference + projected levels.
+    # NIFTY reference + projected levels (most-likely 68% band + 95% outer bound).
     last = _f(nifty.get('last'))
     proj = round(last * (1 + expected / 100.0), 2) if last else None
     proj_low = round(last * (1 + range_low / 100.0), 2) if last else None
     proj_high = round(last * (1 + range_high / 100.0), 2) if last else None
+    proj_wlow = round(last * (1 + wide_low / 100.0), 2) if last else None
+    proj_whigh = round(last * (1 + wide_high / 100.0), 2) if last else None
 
     bull = sum(1 for c in contributions if c['contribution_pct'] > 0)
     bear = sum(1 for c in contributions if c['contribution_pct'] < 0)
@@ -164,7 +173,8 @@ def compute_nifty_outlook(snapshot, during_nse_hours=None):
                     f"{lead['contribution_pct']}% to NIFTY).")
         summary = (f"Overnight macro cues point to a {stance_label.lower()} NIFTY "
                    f"{horizon.lower()}: est. {sign}{expected}% "
-                   f"(range {range_low}% to {range_high}%), {confidence}% conviction. "
+                   f"(~68% range {range_low}% to {range_high}%; ~95% {wide_low}% to "
+                   f"{wide_high}%), {confidence}% conviction. "
                    f"{bull} cue{'s' if bull != 1 else ''} bullish / "
                    f"{bear} bearish.{lead_txt}")
     else:
@@ -183,9 +193,15 @@ def compute_nifty_outlook(snapshot, during_nse_hours=None):
         'expected_move_pct': expected,
         'range_low_pct': range_low,
         'range_high_pct': range_high,
+        'range_prob': 68,            # ≈ probability the close lands in [low, high] (±1σ)
+        'daily_vol_pct': band,       # NIFTY realized daily σ used for the band
+        'wide_low_pct': wide_low,    # ≈95% bound (±2σ) — "all possibilities"
+        'wide_high_pct': wide_high,
         'projected_level': proj,
         'projected_low': proj_low,
         'projected_high': proj_high,
+        'projected_wide_low': proj_wlow,
+        'projected_wide_high': proj_whigh,
         'confidence': confidence,
         'agreement': agreement,
         'driver_count': n,

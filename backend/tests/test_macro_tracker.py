@@ -1,8 +1,42 @@
 import unittest
 
 from marketdata.macro_tracker import (
-    daily_returns, compute_vol_stats, MacroDataTracker as MT,
+    daily_returns, compute_vol_stats, latest_daily_change, MacroDataTracker as MT,
 )
+
+
+class TestLatestDailyChange(unittest.TestCase):
+    def test_uses_prior_session_close(self):
+        # last two daily closes are the 1-day pair
+        last, prev, pct = latest_daily_change(
+            [100.0] * 120 + [23200.0, 23366.7], regular_market_price=23366.7)
+        self.assertEqual(last, 23366.7)
+        self.assertEqual(prev, 23200.0)
+        self.assertAlmostEqual(pct, (23366.7 - 23200.0) / 23200.0 * 100, places=2)
+
+    def test_regression_not_six_month_window_start(self):
+        # The bug: window starts ~6mo ago at 26186; prior session close is 23200.
+        last, prev, pct = latest_daily_change(
+            [26186.45] + [24000.0] * 100 + [23200.0, 23366.7],
+            regular_market_price=23366.7)
+        self.assertEqual(prev, 23200.0)          # NOT 26186.45
+        self.assertLess(abs(pct), 5.0)           # a sane 1-day move, not -10.77%
+
+    def test_last_falls_back_to_series(self):
+        last, prev, _ = latest_daily_change([99.0, 100.0, 102.0], regular_market_price=None)
+        self.assertEqual(last, 102.0)
+        self.assertEqual(prev, 100.0)
+
+    def test_previous_close_fallback_when_short(self):
+        last, prev, pct = latest_daily_change(
+            [102.0], regular_market_price=102.0, previous_close=100.0)
+        self.assertEqual(prev, 100.0)
+        self.assertAlmostEqual(pct, 2.0, places=2)
+
+    def test_indeterminate(self):
+        self.assertEqual(latest_daily_change([], None), (None, None, None))
+        self.assertEqual(latest_daily_change([100.0], None), (None, None, None))
+        self.assertEqual(latest_daily_change([0.0, 100.0], 100.0), (None, None, None))
 
 
 class TestDailyReturns(unittest.TestCase):

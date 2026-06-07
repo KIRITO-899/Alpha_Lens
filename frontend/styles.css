@@ -3780,6 +3780,7 @@ main.container {
 .mp-out-level{font-size:var(--text-2xl);font-weight:900;letter-spacing:-.02em;color:var(--text-primary);font-variant-numeric:tabular-nums;line-height:1.1;margin-top:2px}
 .mp-out-proj{font-size:var(--text-xs);color:var(--text-secondary);margin-top:6px}
 .mp-out-proj strong{color:var(--text-primary);font-variant-numeric:tabular-nums}
+.mp-out-proj-wide{font-size:var(--text-2xs);color:var(--text-tertiary);margin-top:2px;font-variant-numeric:tabular-nums}
 .mp-out-mid{flex:1;min-width:200px;display:flex;flex-direction:column;justify-content:center;gap:3px}
 .mp-out-stance{font-size:var(--text-lg);font-weight:900;letter-spacing:-.01em}
 .mp-out-move{font-size:var(--text-2xl);font-weight:900;font-variant-numeric:tabular-nums;line-height:1}

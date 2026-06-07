@@ -84,6 +84,34 @@ def compute_vol_stats(returns, change_pct_1d, window=60):
     return {'vol_pct': round(vol, 4), 'sigma': sigma, 'pctile': pctile, 'sample': n}
 
 
+def latest_daily_change(closes, regular_market_price=None, previous_close=None):
+    """
+    TRUE 1-day change from a daily close series → (last, prev, pct%) or (None,)*3.
+
+    `prev` is the PRIOR SESSION close: the second-to-last valid daily close (ground
+    truth straight from the series), falling back to Yahoo's `previousClose`.
+
+    ⚠️ It deliberately does NOT use `chartPreviousClose`. On a multi-month-range chart
+    (we pull 6mo for the vol estimate), `chartPreviousClose` is the close at the START
+    of the window — i.e. ~6 months ago. Using it turned every "1-day" move into a
+    6-MONTH move (Nifty showing -10.77%, USD/INR +5.68%, Copper +17%, …) and inflated
+    every σ so the whole board flagged MAJOR/ACTIONABLE. This restores the real 1d %.
+    """
+    valid = [c for c in (closes or []) if c is not None]
+    last = regular_market_price if regular_market_price is not None else (valid[-1] if valid else None)
+    prev = valid[-2] if len(valid) >= 2 else previous_close
+    if last is None or prev is None:
+        return (None, None, None)
+    try:
+        last = float(last)
+        prev = float(prev)
+    except (TypeError, ValueError):
+        return (None, None, None)
+    if prev == 0:
+        return (None, None, None)
+    return (last, prev, round((last - prev) / prev * 100.0, 4))
+
+
 class MacroDataTracker:
     INSTRUMENTS = {
         'brent':     {'symbol': 'BZ=F',      'label': 'Brent Crude'},
@@ -165,24 +193,16 @@ class MacroDataTracker:
             # Daily close series (also used for realized-vol / σ below).
             closes = (((res0.get('indicators') or {}).get('quote') or [{}])[0] or {}).get('close') or []
 
-            # Live price with a robust fallback: Yahoo sometimes omits
-            # regularMarketPrice for Indian indices (^NSEI) — fall back to the
-            # most recent valid close so the value is never blank/stale-null.
-            last = meta_data.get('regularMarketPrice')
-            if last is None:
-                for c in reversed(closes):
-                    if c is not None:
-                        last = c
-                        break
-            prev = meta_data.get('chartPreviousClose') or meta_data.get('previousClose')
-            if prev is None:
-                valid = [c for c in closes if c is not None]
-                if len(valid) >= 2:
-                    prev = valid[-2]   # prior session's close as the reference
-            if last is None or prev is None or float(prev) == 0:
+            # TRUE 1-day change: last vs the PRIOR SESSION close (series[-2]), with
+            # regularMarketPrice as the live "last" and previousClose as a fallback.
+            # NEVER chartPreviousClose — see latest_daily_change() for the 6-month bug.
+            last_f, prev_f, pct = latest_daily_change(
+                closes,
+                regular_market_price=meta_data.get('regularMarketPrice'),
+                previous_close=meta_data.get('previousClose'),
+            )
+            if last_f is None:
                 return None
-            last_f = float(last); prev_f = float(prev)
-            pct = (last_f - prev_f) / prev_f * 100.0
 
             # Realized-vol / σ from the daily close series. Exclude the most
             # recent return so today's move doesn't inflate its own vol estimate.
