@@ -1,3 +1,77 @@
+// ── NIFTY NEXT-SESSION OUTLOOK (deterministic pre-open bias) ──────────────
+function _mpOutColor(stance) {
+    if (stance === 'BULLISH' || stance === 'MILD_BULLISH') return 'var(--green)';
+    if (stance === 'BEARISH' || stance === 'MILD_BEARISH') return 'var(--red)';
+    return 'var(--amber)';
+}
+function _mpInr(v, d = 0) {
+    const n = Number(v);
+    return isFinite(n) ? n.toLocaleString('en-IN', { maximumFractionDigits: d }) : '—';
+}
+
+async function loadNiftyOutlook() {
+    const el = document.getElementById('mp-nifty-outlook');
+    if (!el) return;
+    try {
+        const res = await fetch('/api/macro/nifty-outlook');
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        _mpRenderNiftyOutlook(await res.json());
+    } catch (e) {
+        el.hidden = true;   // never show a broken tile
+    }
+}
+
+function _mpRenderNiftyOutlook(d) {
+    const el = document.getElementById('mp-nifty-outlook');
+    if (!el) return;
+    if (!d || d.applicable === false) {
+        el.hidden = false;
+        el.innerHTML = `<div class="mp-out-head"><div class="mp-out-kicker"><span class="mp-out-dot"></span>NIFTY NEXT-SESSION OUTLOOK</div></div>`
+            + `<div class="mp-out-empty">Awaiting the global macro board — the next-session bias populates once overnight cues load.</div>`;
+        return;
+    }
+    el.hidden = false;
+    const color = _mpOutColor(d.stance);
+    const expSign = d.expected_move_pct >= 0 ? '+' : '';
+    const drivers = (d.drivers || []).map(c => {
+        const w = Math.min(100, Math.abs(c.contribution_pct) / 1.2 * 100);
+        const cls = c.contribution_pct >= 0 ? 'bull' : 'bear';
+        return `<div class="mp-out-driver" title="${escapeHtml(c.why || '')}">
+            <div class="mp-out-dl"><span class="mp-out-dname">${escapeHtml(c.label)}</span><span class="mp-out-dchg ${c.change_pct >= 0 ? 'bull' : 'bear'}">${c.change_pct >= 0 ? '+' : ''}${Number(c.change_pct).toFixed(2)}%</span></div>
+            <div class="mp-out-dbar"><div class="mp-out-dfill ${cls}" style="width:${w}%"></div></div>
+            <div class="mp-out-dcontrib ${cls}">${c.contribution_pct >= 0 ? '+' : ''}${Number(c.contribution_pct).toFixed(2)}%</div>
+        </div>`;
+    }).join('');
+    const projRange = (d.projected_low != null && d.projected_high != null)
+        ? `${_mpInr(d.projected_low)} – ${_mpInr(d.projected_high)}` : '—';
+
+    el.innerHTML = `
+        <div class="mp-out-head">
+            <div class="mp-out-kicker"><span class="mp-out-dot"></span>NIFTY NEXT-SESSION OUTLOOK</div>
+            <span class="mp-out-horizon">${escapeHtml(d.horizon || '')}${d.horizon_note ? ' · ' + escapeHtml(d.horizon_note) : ''}</span>
+        </div>
+        <div class="mp-out-body">
+            <div class="mp-out-left">
+                <div class="mp-out-level-lbl">NIFTY 50 · last</div>
+                <div class="mp-out-level">${_mpInr(d.nifty_last)}</div>
+                <div class="mp-out-proj">Projected range <strong>${projRange}</strong></div>
+            </div>
+            <div class="mp-out-mid">
+                <div class="mp-out-stance" style="color:${color}">${escapeHtml(d.stance_label || '')}</div>
+                <div class="mp-out-move" style="color:${color}">${expSign}${Number(d.expected_move_pct).toFixed(2)}%</div>
+                <div class="mp-out-rangepct">expected band ${Number(d.range_low_pct).toFixed(2)}% to ${Number(d.range_high_pct).toFixed(2)}%</div>
+                <div class="mp-out-conf">
+                    <div class="mp-out-conf-bar"><div class="mp-out-conf-fill" style="width:${d.confidence}%;background:${color}"></div></div>
+                    <span class="mp-out-conf-num">${d.confidence}% conviction</span>
+                </div>
+            </div>
+        </div>
+        <div class="mp-out-drivers-title">What is driving it <span class="mp-out-cues">${d.bull} bullish · ${d.bear} bearish cues</span></div>
+        <div class="mp-out-drivers">${drivers}</div>
+        <p class="mp-out-summary">${escapeHtml(d.summary || '')}</p>
+        <p class="mp-out-disclaimer"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>${escapeHtml(d.disclaimer || '')}</p>`;
+}
+
 async function fetchMacroPulse() {
     const chipsEl  = document.getElementById('macro-pulse-chips');
     const countEl  = document.getElementById('macro-pulse-count');
@@ -11,6 +85,9 @@ async function fetchMacroPulse() {
     const alertDotEl        = document.getElementById('mp-alert-indicator');
 
     if (!chipsEl) return;
+
+    // Nifty Next-Session Outlook — independent fetch, renders its own tile.
+    loadNiftyOutlook();
 
     try {
         const res = await fetch('/api/macro/events');

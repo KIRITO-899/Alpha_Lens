@@ -162,8 +162,23 @@ class MacroDataTracker:
             result = (data.get('chart') or {}).get('result') or [{}]
             res0 = result[0] or {}
             meta_data = res0.get('meta') or {}
+            # Daily close series (also used for realized-vol / σ below).
+            closes = (((res0.get('indicators') or {}).get('quote') or [{}])[0] or {}).get('close') or []
+
+            # Live price with a robust fallback: Yahoo sometimes omits
+            # regularMarketPrice for Indian indices (^NSEI) — fall back to the
+            # most recent valid close so the value is never blank/stale-null.
             last = meta_data.get('regularMarketPrice')
+            if last is None:
+                for c in reversed(closes):
+                    if c is not None:
+                        last = c
+                        break
             prev = meta_data.get('chartPreviousClose') or meta_data.get('previousClose')
+            if prev is None:
+                valid = [c for c in closes if c is not None]
+                if len(valid) >= 2:
+                    prev = valid[-2]   # prior session's close as the reference
             if last is None or prev is None or float(prev) == 0:
                 return None
             last_f = float(last); prev_f = float(prev)
@@ -171,7 +186,6 @@ class MacroDataTracker:
 
             # Realized-vol / σ from the daily close series. Exclude the most
             # recent return so today's move doesn't inflate its own vol estimate.
-            closes = (((res0.get('indicators') or {}).get('quote') or [{}])[0] or {}).get('close') or []
             rets = daily_returns(closes)
             hist = rets[:-1] if len(rets) >= 2 else rets
             vs = compute_vol_stats(hist, pct, cls.VOL_WINDOW)

@@ -134,7 +134,8 @@ Alpha_Lens/
 │   │   ├── calibration.py       #   Score→P(win) calibration map + meta-label gate (levers #1/#4)
 │   │   ├── calibration_map.json #   Isotonic score→P(win) map (refreshable; built by scratch/ pipeline)
 │   │   ├── ripple_engine.py     #   Ripple 2.0 — pure deterministic 5-dimension macro cascade (beta-based)
-│   │   └── fno_engine.py        #   F&O Smart-Money board — pure OI-buildup/PCR/max-pain/sector analytics
+│   │   ├── fno_engine.py        #   F&O Smart-Money board — pure OI-buildup/PCR/max-pain/sector analytics
+│   │   └── nifty_outlook.py     #   Nifty Next-Session Outlook — pure macro-cue → NIFTY bias model
 │   ├── tests/                   # stdlib unittest suite for the pure subpackage modules
 │   ├── backtest.py              # Historical backtesting harness (⚠ stale: uses .history(start=) the shim dropped)
 │   ├── eval_loop.py             # Forward shadow-ledger — logs every signal decision + ATR outcomes (append-only)
@@ -210,6 +211,7 @@ Alpha_Lens/
 | `signals/calibration.py` | Maps ensemble score → empirical P(target before stop); meta-label gate (levers #1/#4). Loads `calibration_map.json`; gate OFF by default (`CALIBRATION_GATE_ENABLED`) |
 | `signals/ripple_engine.py` | **Ripple 2.0** — pure, deterministic 5-dimension macro cascade (direct/second-order/sector/portfolio/action-window) via signed betas. No LLM. `compute_ripple()`; served by `/api/macro/events/<id>/ripple2` |
 | `signals/fno_engine.py` | **F&O Smart-Money** — pure board builder. `build_smart_money_board()`: OI×price buildup quadrants + conviction, unusual-OI, PCR/max-pain/OI-walls (`option_chain_view`), index option matrix, static sector clustering, market bias, deterministic narrative. No LLM. Served by `/api/fno/*` |
+| `signals/nifty_outlook.py` | **Nifty Next-Session Outlook** — pure pre-open bias model. `compute_nifty_outlook(snapshot, during_nse_hours)`: aggregates the live macro board (US VIX, DXY, US10Y, Brent, USD/INR, Gold, Copper, India VIX) via signed NIFTY betas → expected next-session move + vol-band range + honest (capped) confidence + transparent per-driver breakdown. No LLM. Served by `/api/macro/nifty-outlook` |
 | `eval_loop.py` | Forward shadow-ledger — logs EVERY signal decision (approved + rejected, with config) into the append-only `signal_eval_log` table, then labels ATR outcomes for all so each filter is measurable. Surfaced by `/api/eval-report` |
 | `backtest.py` | Bulk historical replay — news vs candle data, win/loss stats. ⚠ **Stale**: calls `.history(start=…)` which the current shim no longer supports |
 | `performance_report.py` | Terminal-based performance stats |
@@ -411,7 +413,7 @@ mirroring the dashboard's Command Center ("lead with value").
   is skipped and flagged in `degraded`; the route never 500s (returns a safe empty shell).
   Per-stock composite = weighted blend (technical .42 / news .26 / F&O .18 / valuation .14)
   renormalized over whichever dims a name has; overall =
-  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **46** (the F&O layer added two).
+  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **47** (F&O layer + Nifty Outlook).
 - **Frontend:** `loadRiskRadar()` / `renderRiskRadar()` + helpers (`_rrDimTile`,
   `_rrStockRow`, `_rrMeter`, `_rrSkeleton`, `_rrErrorState`) in `app-stocks.js`. Renders a
   hero (big score + level + summary + a LOW→HIGH meter), 6 dimension tiles (each with a
@@ -511,7 +513,7 @@ correlations already in `compute_macro_effects()` and refined per name.
   imports `compute_ripple as compute_ripple2`). Computed on the fly — **no DB
   cache** (it's cheap and the portfolio dimension is per-watchlist). Defensive:
   404 on unknown event, safe shell on bad input, never 500s on known inputs.
-  **Route count is now 46.**
+  **Route count is now 47.**
 - **Frontend:** `openRipple2()` / `_renderRipple2()` + `_r2*` helpers in
   `app-ripple.js` render a dedicated `#ripple2-modal` (separate from the legacy
   `#ripple-modal`). The Macro Pulse alert cards (`app-macro.js`) call
@@ -528,6 +530,46 @@ correlations already in `compute_macro_effects()` and refined per name.
   cap, confidence decay, sector rollup, watchlist matching, action-window states,
   unknown-instrument/zero/bad-input safety). To extend the model, edit the
   `_GROUPS` betas/mechanisms — pure data, no wiring changes.
+
+## The Nifty Next-Session Outlook (Macro Pulse pre-open bias)
+
+The **Macro Pulse tab** leads with a **Nifty Next-Session Outlook** — a deterministic,
+transparent pre-open bias that aggregates the **live macro board** (overnight global cues
+already tracked by `MacroDataTracker`) into an expected NIFTY next-session **directional
+bias + expected % range + honest confidence**, with a full **per-driver contribution
+breakdown**. Like Risk Radar / Ripple 2.0 it is **purely quantitative — NO LLM** (zero
+keys, reproducible, instant).
+
+> ⚠️ **Honesty contract.** It is a *bias estimate* (the framework a macro desk uses
+> pre-open), **NOT a market-prediction guarantee** — markets gap on news/earnings/flows the
+> model cannot see. The engine therefore **caps its own confidence at 80**, labels itself a
+> bias, and shows every input that drove the read. Don't re-market it as a forecast of fact.
+
+- **Engine:** `signals/nifty_outlook.py` — **pure** (stdlib only). `compute_nifty_outlook(
+  snapshot, during_nse_hours)` sums `driver_change × signed_beta` (each term and the total
+  capped) across 8 curated, **non-redundant** drivers (US VIX, DXY, US 10Y, Brent, USD/INR,
+  Gold, Copper, India VIX — brent not wti, gold not silver; banknifty/nifty aren't drivers of
+  themselves). Betas are grounded in India macro structure (net oil importer, EM beta to the
+  dollar/US rates, risk-on/off via vol). The expected **range** uses NIFTY's own realized
+  daily vol (`vol_pct` from the snapshot); **confidence** is built from driver *agreement* +
+  breadth + magnitude, floored 25 / **ceiled 80**.
+- **Route:** `GET /api/macro/nifty-outlook` (in `app.py`) — `MacroDataTracker.get_snapshot()`
+  + `is_market_open()` → `compute_nifty_outlook`. Pure compute, no DB cache, safe shell on
+  failure. **Route count is now 47.**
+- **NIFTY price read hardened:** `macro_tracker._fetch_one` now falls back to the latest
+  valid close in the series when Yahoo omits `regularMarketPrice` for `^NSEI` (handles the
+  blank/stale-null case). The live `^NSEI` feed is still Yahoo's free, ~15-min-delayed quote
+  (last close after hours) — a true real-time level needs a paid feed; the tile labels the
+  value `LAST` and frames the horizon (`NSE is shut` / `NSE is open`) so it reads honestly.
+- **Frontend:** `loadNiftyOutlook()` / `_mpRenderNiftyOutlook()` in `app-macro.js`, tile
+  `#mp-nifty-outlook` at the top of `#view-macro-pulse` (called from `fetchMacroPulse()`).
+  Renders NIFTY last + projected level range, stance + expected move ± band, a confidence
+  meter, the transparent driver-contribution bars, summary + disclaimer. `.mp-out-*` CSS
+  (champagne/green/red tokens). Hides itself on fetch error (never a broken tile).
+- **Tests:** `tests/test_nifty_outlook.py` (13 cases — direction per driver, aggregation +
+  caps, range-from-vol, confidence ceiling/agreement, horizon framing, empty-safety,
+  driver-set dedup). Tunables are module constants in `nifty_outlook.py` (betas, caps,
+  `CONF_FLOOR`/`CONF_CEIL`) — pure data, no wiring.
 
 ## The F&O Smart-Money Layer (institutional positioning radar)
 
@@ -574,7 +616,7 @@ path that already feeds the technical model's `oi_buildup`).
   returns a **safe shell (HTTP 200)** rather than 500, so the UI degrades to an honest
   empty state.
 - `GET /api/fno/option-chain/<symbol>` — per-name strike ladder + PCR/max-pain/walls; 404
-  when the symbol has no F&O options. **Route count is now 46.**
+  when the symbol has no F&O options. **Route count is now 47.**
 
 **Frontend:** `fetchFnoSmartMoney()` + `_fno*` render helpers + `openFnoOptionChain()`
 modal in `app-fno.js`. Lazy-loaded by `switchTab('fno')`, 60s client throttle. Hero with a
@@ -649,7 +691,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **46 routes**. Then run the test suite (`python -m unittest discover -s tests`).
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **47 routes**. Then run the test suite (`python -m unittest discover -s tests`).
 
 ## Context7 MCP — Library Documentation
 

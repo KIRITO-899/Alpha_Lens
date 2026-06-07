@@ -5627,6 +5627,36 @@ def list_macro_events():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route('/api/macro/nifty-outlook', methods=['GET'])
+def get_nifty_outlook():
+    """
+    Nifty Next-Session Outlook — a deterministic pre-open bias from the live macro
+    board: overnight global cues (US VIX, DXY, US 10Y, Brent, USD/INR, Gold, Copper,
+    India VIX) → expected NIFTY next-session move + range + honest confidence +
+    a transparent per-driver contribution breakdown.
+
+    ⚠️ It is a directional BIAS, not a guarantee (see the engine honesty contract).
+    Pure compute over MacroDataTracker.get_snapshot() — no DB, no LLM, zero keys.
+    """
+    try:
+        from signals.nifty_outlook import compute_nifty_outlook
+        snap = MacroDataTracker.get_snapshot()
+        try:
+            during = 1 if is_market_open() else 0
+        except Exception:
+            during = None
+        data = compute_nifty_outlook(snap, during_nse_hours=during)
+        return jsonify(data)
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": str(e), "traceback": traceback.format_exc(),
+            "applicable": False, "drivers": [], "expected_move_pct": 0.0,
+            "stance": "NEUTRAL", "stance_label": "Unavailable", "confidence": 0,
+            "summary": "Nifty outlook is temporarily unavailable.",
+        }), 200
+
+
 @app.route('/api/macro/events/<int:event_id>/ripple', methods=['GET'])
 def get_macro_event_ripple(event_id):
     """
