@@ -99,6 +99,18 @@ function _mpUpdateRegime(events, valueEl, fillEl) {
     else fillEl.style.background = 'linear-gradient(90deg,var(--green),#34e0a0)';
 }
 
+/** Robustly format a DB timestamp ('YYYY-MM-DD HH:MM:SS', assumed UTC) as IST
+ *  clock time. Returns '' if unparseable — fixes the "Invalid Date" bug that
+ *  came from appending 'Z' to a space-separated (non-ISO) datetime. */
+function _mpFmtDetected(s) {
+    if (!s) return '';
+    let t = String(s).trim().replace(' ', 'T');
+    if (!/[zZ]$|[+-]\d\d:?\d\d$/.test(t)) t += 'Z';   // treat naive time as UTC
+    const d = new Date(t);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Kolkata' });
+}
+
 /** Render a single premium alert card */
 function _mpRenderAlertCard(ev) {
     const pct         = parseFloat(ev.change_pct_1d || 0);
@@ -114,7 +126,7 @@ function _mpRenderAlertCard(ev) {
     const prevPx      = ev.prev_close != null
         ? parseFloat(ev.prev_close).toLocaleString(undefined, { maximumFractionDigits: 4 })
         : '—';
-    const detectedAt  = ev.detected_at ? new Date(ev.detected_at + (ev.detected_at.includes('Z') ? '' : 'Z')).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—';
+    const detectedAt  = _mpFmtDetected(ev.detected_at);
 
     const arrowSvg = isUp
         ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
@@ -144,26 +156,30 @@ function _mpRenderAlertCard(ev) {
     }
 
     return `
-        <button class="mp-alert-card shock-${levelCls}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open shock ripple for ${label}">
-            <div class="mp-alert-row1">
-                <div>
-                    <div class="mp-alert-ticker">${label}</div>
-                    <div class="mp-alert-last-price">Last: ${lastPx} | Prev: ${prevPx}</div>
+        <button class="mp-alert-card shock-${levelCls}" data-macro-event-id="${ev.id}" data-has-ripple="${ev.has_ripple}" aria-label="Open Ripple 2.0 for ${label}">
+            <div class="mp-alert-head">
+                <span class="mp-alert-name">${label}</span>
+                <span class="mp-alert-pct ${isUp ? 'up' : 'down'}">${arrowSvg}${pctFmt}</span>
+            </div>
+            <div class="mp-alert-quote">
+                <div class="mp-alert-q">
+                    <span class="mp-alert-q-k">Last</span>
+                    <span class="mp-alert-q-v">${lastPx}</span>
                 </div>
-                <div style="text-align:right">
-                    <div class="mp-alert-pct ${isUp ? 'up' : 'down'}" style="display:inline-flex;align-items:center;gap:5px;">${arrowSvg}${pctFmt}</div>
+                <div class="mp-alert-q">
+                    <span class="mp-alert-q-k">Prev</span>
+                    <span class="mp-alert-q-v">${prevPx}</span>
                 </div>
             </div>
-            <div class="mp-alert-row2">
+            <div class="mp-alert-badges">
                 <span class="mp-alert-level-badge ${levelCls}">${escapeHtml(ev.shock_level || '')}</span>
                 <span class="mp-alert-action-badge ${isActionable ? 'actionable' : 'info'}">
                     ${isActionable ? '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>Actionable' : '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;margin-right:3px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>Info'}
                 </span>
             </div>
             ${effectsHtml}
-            <div class="mp-alert-divider"></div>
             <div class="mp-alert-footer">
-                <span class="mp-alert-detected">Detected ${detectedAt} IST</span>
+                <span class="mp-alert-detected">${detectedAt ? 'Detected ' + detectedAt + ' IST' : 'Active shock'}</span>
                 <span class="mp-alert-ripple-cta">
                     <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
                     Ripple 2.0
