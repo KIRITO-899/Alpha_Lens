@@ -8,14 +8,80 @@ session, with all caching held at class level (cls._cache, 5-min TTL). No app
 import -> no cycle. app.py imports the class back and calls it class-level
 (MacroDataTracker.get_snapshot() / .detect_shocks()).
 """
+import os
 import time
 import threading
+import statistics
 import concurrent.futures
 import requests
 
 # Dedicated session (app.py keeps its own HTTP_SESSION for other callers).
 HTTP_SESSION = requests.Session()
 HTTP_SESSION.headers.update({'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+
+
+def _envf(name, default):
+    """Float env reader that never raises (falls back to default)."""
+    try:
+        return float(os.getenv(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+# ── Pure volatility helpers (no network/state -> unit-testable) ──────────
+def daily_returns(closes):
+    """A list of daily closes (Nones tolerated) -> list of daily % returns."""
+    out = []
+    prev = None
+    for c in closes or []:
+        if c is None:
+            continue
+        try:
+            c = float(c)
+        except (TypeError, ValueError):
+            continue
+        if prev is not None and prev != 0:
+            out.append((c / prev - 1.0) * 100.0)
+        prev = c
+    return out
+
+
+def compute_vol_stats(returns, change_pct_1d, window=60):
+    """
+    Quant core: turn a move into a volatility-normalized z-score (σ).
+
+    Args:
+        returns        : historical daily % returns EXCLUDING today's move
+                         (so the move never inflates its own vol estimate).
+        change_pct_1d  : today's signed % move.
+        window         : trailing sample size for the realized-vol estimate.
+
+    Returns dict(vol_pct, sigma, pctile, sample):
+        vol_pct : realized daily volatility (sample std of returns, %)
+        sigma   : signed z-score = change_pct_1d / vol_pct  (None if no vol)
+        pctile  : percentile rank of |move| within |historical returns| (0-100)
+        sample  : number of returns used
+    Degrades gracefully: sample < 5 or zero-vol -> sigma/pctile = None.
+    """
+    rs = [r for r in (returns or []) if r is not None]
+    sample = rs[-int(window):] if window and len(rs) > int(window) else rs
+    n = len(sample)
+    if n < 5:
+        return {'vol_pct': None, 'sigma': None, 'pctile': None, 'sample': n}
+    try:
+        vol = statistics.stdev(sample)
+    except statistics.StatisticsError:
+        return {'vol_pct': None, 'sigma': None, 'pctile': None, 'sample': n}
+    if vol <= 1e-9:
+        return {'vol_pct': round(vol, 4), 'sigma': None, 'pctile': None, 'sample': n}
+    try:
+        sigma = round(float(change_pct_1d) / vol, 2)
+    except (TypeError, ValueError):
+        sigma = None
+    mag = abs(float(change_pct_1d)) if change_pct_1d is not None else 0.0
+    le = sum(1 for r in sample if abs(r) <= mag)
+    pctile = round(le / n * 100.0, 1)
+    return {'vol_pct': round(vol, 4), 'sigma': sigma, 'pctile': pctile, 'sample': n}
 
 
 class MacroDataTracker:
@@ -62,6 +128,18 @@ class MacroDataTracker:
         'us10y':     {'significant': 5.0, 'major': 8.0},
     }
 
+    # ── σ-based (volatility-normalized) shock detection ──
+    # A move's significance is its z-score = |return| / realized daily vol, which
+    # is comparable across assets and across vol regimes — unlike a fixed %. One
+    # σ threshold is correct for every instrument. SHOCK_THRESHOLDS (above) is the
+    # automatic fallback when there isn't enough history to estimate vol.
+    SHOCK_MODE        = os.getenv('MACRO_SHOCK_MODE', 'sigma').lower()  # 'sigma' | 'pct'
+    SIGMA_SIGNIFICANT = _envf('MACRO_SIGMA_SIGNIFICANT', 2.5)
+    SIGMA_MAJOR       = _envf('MACRO_SIGMA_MAJOR', 3.5)
+    VOL_WINDOW        = int(_envf('MACRO_VOL_WINDOW', 60))   # trailing days for vol
+    ABS_FLOOR_PCT     = _envf('MACRO_ABS_FLOOR_PCT', 0.1)    # ignore sub-floor noise
+    HISTORY_RANGE     = os.getenv('MACRO_HISTORY_RANGE', '6mo')
+
     _cache = {}
     _cache_time = 0.0
     _CACHE_TTL = 300  # 5 minutes
@@ -69,21 +147,35 @@ class MacroDataTracker:
 
     @classmethod
     def _fetch_one(cls, key, meta):
-        """Single instrument fetch via Yahoo's free chart endpoint."""
+        """
+        Single instrument fetch via Yahoo's free chart endpoint. Pulls ~6mo of
+        daily closes so we can compute realized volatility and a z-score (σ) for
+        today's move, not just the raw %.
+        """
         try:
-            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{meta['symbol']}?range=5d&interval=1d"
-            resp = HTTP_SESSION.get(url, timeout=4)
+            url = (f"https://query1.finance.yahoo.com/v8/finance/chart/"
+                   f"{meta['symbol']}?range={cls.HISTORY_RANGE}&interval=1d")
+            resp = HTTP_SESSION.get(url, timeout=6)
             if resp.status_code != 200:
                 return None
             data = resp.json()
             result = (data.get('chart') or {}).get('result') or [{}]
-            meta_data = (result[0] or {}).get('meta') or {}
+            res0 = result[0] or {}
+            meta_data = res0.get('meta') or {}
             last = meta_data.get('regularMarketPrice')
             prev = meta_data.get('chartPreviousClose') or meta_data.get('previousClose')
             if last is None or prev is None or float(prev) == 0:
                 return None
             last_f = float(last); prev_f = float(prev)
             pct = (last_f - prev_f) / prev_f * 100.0
+
+            # Realized-vol / σ from the daily close series. Exclude the most
+            # recent return so today's move doesn't inflate its own vol estimate.
+            closes = (((res0.get('indicators') or {}).get('quote') or [{}])[0] or {}).get('close') or []
+            rets = daily_returns(closes)
+            hist = rets[:-1] if len(rets) >= 2 else rets
+            vs = compute_vol_stats(hist, pct, cls.VOL_WINDOW)
+
             return {
                 'key':            key,
                 'symbol':         meta['symbol'],
@@ -93,6 +185,10 @@ class MacroDataTracker:
                 'change_pct_1d':  round(pct, 2),
                 'is_shock_3pct':  abs(pct) >= 3.0,
                 'is_shock_5pct':  abs(pct) >= 5.0,
+                'vol_pct':        vs['vol_pct'],
+                'sigma':          vs['sigma'],
+                'pctile':         vs['pctile'],
+                'sample':         vs['sample'],
             }
         except Exception:
             return None
@@ -127,18 +223,39 @@ class MacroDataTracker:
     @classmethod
     def classify_shock(cls, instrument):
         """
-        Given a snapshot row, returns:
-          ('MAJOR' / 'SIGNIFICANT' / None, threshold_pct or None)
-        Compared against SHOCK_THRESHOLDS specific to the instrument.
-        Purely quantitative — no news, no keywords.
+        Classify a snapshot row's move as ('MAJOR'/'SIGNIFICANT'/None, threshold).
+
+        Primary path (SHOCK_MODE='sigma'): volatility-normalized — the move's
+        z-score (|return| / realized daily vol) is compared against ONE σ
+        threshold that holds for every asset class. A small absolute floor
+        (ABS_FLOOR_PCT) suppresses statistically-large-but-economically-trivial
+        moves in ultra-low-vol instruments.
+
+        Fallback path (no σ available, or SHOCK_MODE='pct'): the original
+        per-instrument fixed-% SHOCK_THRESHOLDS.
+
+        Returns the triggering threshold as the 2nd element (σ in sigma-mode,
+        % in pct-mode) for context.
         """
-        if not instrument or 'change_pct_1d' not in instrument:
-            return (None, None)
-        key = instrument.get('key')
-        thr = cls.SHOCK_THRESHOLDS.get(key)
-        if not thr:
+        if not instrument or instrument.get('change_pct_1d') is None:
             return (None, None)
         move = abs(instrument['change_pct_1d'])
+        sigma = instrument.get('sigma')
+
+        if cls.SHOCK_MODE == 'sigma' and sigma is not None:
+            if move < cls.ABS_FLOOR_PCT:
+                return (None, None)
+            asig = abs(sigma)
+            if asig >= cls.SIGMA_MAJOR:
+                return ('MAJOR', cls.SIGMA_MAJOR)
+            if asig >= cls.SIGMA_SIGNIFICANT:
+                return ('SIGNIFICANT', cls.SIGMA_SIGNIFICANT)
+            return (None, None)
+
+        # Fallback: per-instrument fixed-% thresholds.
+        thr = cls.SHOCK_THRESHOLDS.get(instrument.get('key'))
+        if not thr:
+            return (None, None)
         if move >= thr['major']:
             return ('MAJOR', thr['major'])
         if move >= thr['significant']:
@@ -162,7 +279,9 @@ class MacroDataTracker:
             row['shock_level'] = level
             row['threshold_pct'] = threshold
             out.append(row)
-        # MAJOR first, then SIGNIFICANT; within each, biggest move first
+        # MAJOR first, then SIGNIFICANT; within each, biggest σ-move first
+        # (falls back to raw % when σ is unavailable).
         out.sort(key=lambda r: (0 if r['shock_level'] == 'MAJOR' else 1,
-                                -abs(r['change_pct_1d'])))
+                                -abs(r.get('sigma') if r.get('sigma') is not None
+                                     else r['change_pct_1d'])))
         return out

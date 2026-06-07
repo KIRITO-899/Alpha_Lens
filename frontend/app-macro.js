@@ -128,6 +128,15 @@ function _mpRenderAlertCard(ev) {
         : '—';
     const detectedAt  = _mpFmtDetected(ev.detected_at);
 
+    // Volatility-normalized z-score (how many σ this move is vs its own history)
+    const sigmaVal = (ev.sigma != null && isFinite(ev.sigma)) ? Math.abs(ev.sigma) : null;
+    const sigmaTitle = sigmaVal != null
+        ? `${sigmaVal.toFixed(1)}σ move — vol-normalized z-score${ev.pctile != null ? ` · ${Math.round(ev.pctile)}th percentile vs its own 6-month history` : ''}`
+        : '';
+    const sigmaChip = sigmaVal != null
+        ? `<span class="mp-alert-sigma ${sigmaVal >= 3.5 ? 'hot' : ''}" title="${sigmaTitle}">${sigmaVal.toFixed(1)}&sigma;</span>`
+        : '';
+
     const arrowSvg = isUp
         ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>`
         : `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>`;
@@ -173,6 +182,7 @@ function _mpRenderAlertCard(ev) {
             </div>
             <div class="mp-alert-badges">
                 <span class="mp-alert-level-badge ${levelCls}">${escapeHtml(ev.shock_level || '')}</span>
+                ${sigmaChip}
                 <span class="mp-alert-action-badge ${isActionable ? 'actionable' : 'info'}">
                     ${isActionable ? '<svg viewBox="0 0 24 24" width="11" height="11" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M7 2v11h3v9l7-12h-4l4-8z"/></svg>Actionable' : '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.5" style="vertical-align:-2px;margin-right:3px"><circle cx="12" cy="12" r="10"/><line x1="12" y1="11" x2="12" y2="16"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>Info'}
                 </span>
@@ -276,7 +286,7 @@ function _mpRenderSnapshotTable(tbodyEl, snapshot, events) {
                 <td class="text-right">
                     <div style="display:flex;flex-direction:column;align-items:flex-end;">
                         <span class="mp-td-pct ${dirCls}" style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;font-size:11px;">${arrowSvg}${pctFmt}</span>
-                        <span style="font-size:9px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;margin-top:2px;">${absDiffFmt}</span>
+                        <span style="font-size:9px;color:var(--text-muted);font-family:'JetBrains Mono',monospace;margin-top:2px;">${(item.sigma != null && isFinite(item.sigma)) ? Math.abs(item.sigma).toFixed(1) + '&sigma; · ' : ''}${absDiffFmt}</span>
                     </div>
                 </td>
                 <td>

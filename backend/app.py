@@ -5603,9 +5603,17 @@ def list_macro_events():
                 seen_keys.add(key)
                 deduped_rows.append(r)
 
-        # Enrich with systemic causal effects
+        # Enrich with systemic causal effects + live volatility stats (σ / vol /
+        # percentile) joined from the snapshot by instrument key, so the stored
+        # alert cards show the same vol-normalized read as the live monitor.
+        snap_by_key = {s.get('key'): s for s in snap}
         for r in deduped_rows:
-            r['effects'] = compute_macro_effects(r.get('instrument_key'), r.get('change_pct_1d'))
+            ikey = r.get('instrument_key')
+            r['effects'] = compute_macro_effects(ikey, r.get('change_pct_1d'))
+            live = snap_by_key.get(ikey) or {}
+            r['sigma'] = live.get('sigma')
+            r['vol_pct'] = live.get('vol_pct')
+            r['pctile'] = live.get('pctile')
 
         for s in snap:
             s['effects'] = compute_macro_effects(s.get('key'), s.get('change_pct_1d'))

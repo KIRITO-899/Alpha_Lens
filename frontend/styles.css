@@ -2619,17 +2619,18 @@ main.container {
 .mp-alert-pct.up   { color: var(--green); background: var(--green-dim); border: 1px solid var(--green-border); }
 .mp-alert-pct.down { color: var(--red);   background: var(--red-dim);   border: 1px solid var(--red-border); }
 
-/* Last / Prev quote strip */
+/* Last / Prev quote strip — LAST pinned left, PREV pinned right */
 .mp-alert-quote {
-    display: flex; align-items: stretch;
+    display: flex; align-items: stretch; justify-content: space-between;
+    gap: 12px;
     margin-bottom: 14px;
     padding: 9px 14px;
     background: var(--bg-inset);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-md);
 }
-.mp-alert-q { display: flex; flex-direction: column; gap: 3px; flex: 1; }
-.mp-alert-q + .mp-alert-q { border-left: 1px solid var(--border); padding-left: 14px; }
+.mp-alert-q { display: flex; flex-direction: column; gap: 3px; }
+.mp-alert-q:last-child { align-items: flex-end; text-align: right; }
 .mp-alert-q-k {
     font-family: 'JetBrains Mono', monospace;
     font-size: 8px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase;
@@ -2650,6 +2651,18 @@ main.container {
 }
 .mp-alert-level-badge.major { color: var(--red); background: var(--red-dim); border: 1px solid var(--red-border); box-shadow: 0 0 12px rgba(255,51,102,0.18); }
 .mp-alert-level-badge.significant { color: var(--amber); background: var(--amber-dim); border: 1px solid var(--amber-border); }
+
+/* σ (z-score) chip — how many standard deviations this move is vs its own vol */
+.mp-alert-sigma {
+    display: inline-flex; align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 8px; font-weight: 700; letter-spacing: 0.06em;
+    padding: 3px 8px; border-radius: var(--radius-pill);
+    color: var(--accent-soft); background: var(--accent-dim);
+    border: 1px solid var(--accent-border);
+    font-variant-numeric: tabular-nums; cursor: help;
+}
+.mp-alert-sigma.hot { color: var(--red); background: var(--red-dim); border-color: var(--red-border); }
 
 .mp-alert-badges { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 .mp-alert-action-badge {
