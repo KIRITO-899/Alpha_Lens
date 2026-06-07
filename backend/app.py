@@ -91,6 +91,9 @@ from signals.technical_analysis import (
 )
 from signals.prediction_models import EnsemblePredictor
 from signals.ripple_engine import compute_ripple as compute_ripple2
+from signals.fno_engine import (
+    build_smart_money_board, option_chain_view, normalize_ticker as _fno_norm,
+)
 
 
 
@@ -5750,6 +5753,107 @@ def get_macro_event_ripple2(event_id):
             "detected_at": str(detected_at),
         })
         return jsonify(data)
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# F&O SMART-MONEY BOARD — deterministic institutional-positioning analytics
+#
+# Built from the daily NSE F&O bhavcopy (futures + options) + optional cash
+# delivery% and bulk/block deals. PURE engine (signals/fno_engine), zero LLM
+# keys. Underlying data is cached 4h in oi_data; the assembled board is cached
+# briefly here (FNO_BOARD_TTL_SECS) so tab-flips don't re-assemble.
+# ════════════════════════════════════════════════════════════════════════════
+_FNO_BOARD_CACHE = {}
+_FNO_BOARD_LOCK = threading.Lock()
+FNO_BOARD_TTL_SECS = int(os.environ.get('FNO_BOARD_TTL_SECS', '600'))
+
+
+@app.route('/api/fno/smart-money', methods=['GET'])
+def get_fno_smart_money():
+    """
+    The F&O Smart-Money board: market-wide institutional bias, the four OI×price
+    buildup quadrants (long/short buildup, short-covering, long-unwinding),
+    unusual OI surges, delivery spikes, the index option matrix (NIFTY/BANKNIFTY
+    PCR + max-pain + OI walls), sector clustering, bulk/block deals, and a
+    deterministic English narrative.
+
+    ?tickers=A,B,C personalises the watchlist slice + conviction (delivery).
+    Defensive: each secondary source is isolated; the route returns a safe shell
+    rather than 500 on data-source failure.
+    """
+    try:
+        raw_tickers = (request.args.get('tickers') or '').strip()
+        watchlist = [t.strip() for t in raw_tickers.split(',') if t.strip()] if raw_tickers else []
+        key = ','.join(sorted(_fno_norm(t) for t in watchlist))
+        now = time.time()
+        with _FNO_BOARD_LOCK:
+            hit = _FNO_BOARD_CACHE.get(key)
+            if hit and (now - hit['t']) < FNO_BOARD_TTL_SECS:
+                return jsonify(hit['board'])
+
+        from marketdata import oi_data
+        snap = oi_data.get_fno_raw_snapshot()
+
+        delivery, deals = {}, []
+        try:
+            delivery = oi_data.get_delivery_map()
+        except Exception as exc:
+            print(f"[FNO] delivery map failed: {exc}")
+        try:
+            deals = oi_data.get_bulk_block_deals()
+        except Exception as exc:
+            print(f"[FNO] deals fetch failed: {exc}")
+
+        board = build_smart_money_board(
+            snap, watchlist=watchlist, delivery=delivery, deals=deals,
+        )
+        board['degraded'] = {
+            'futures': not snap.get('futures'),
+            'options': not snap.get('options'),
+            'delivery': not delivery,
+            'deals': not deals,
+        }
+
+        with _FNO_BOARD_LOCK:
+            _FNO_BOARD_CACHE[key] = {'t': now, 'board': board}
+            if len(_FNO_BOARD_CACHE) > 32:   # bound cache
+                oldest = min(_FNO_BOARD_CACHE.items(), key=lambda kv: kv[1]['t'])[0]
+                _FNO_BOARD_CACHE.pop(oldest, None)
+        return jsonify(board)
+    except Exception as e:
+        import traceback
+        # Safe shell — the UI degrades gracefully rather than showing an error.
+        return jsonify({
+            "error": str(e), "traceback": traceback.format_exc(),
+            "applicable": False, "universe_count": 0,
+            "market_bias": {"score": 0, "label": "NEUTRAL"},
+            "buildups": {}, "index_matrix": [], "unusual_oi": [],
+            "delivery_spikes": [], "sectors": [], "deals": [], "watchlist": [],
+            "narrative": "F&O data is temporarily unavailable.",
+        }), 200
+
+
+@app.route('/api/fno/option-chain/<symbol>', methods=['GET'])
+def get_fno_option_chain(symbol):
+    """
+    Per-symbol option-chain drill-down: front-expiry strike ladder with CE/PE OI
+    and ΔOI, PCR, max-pain, call/put OI walls, and an option-sentiment read.
+    404 when the symbol has no F&O options in the latest bhavcopy.
+    """
+    try:
+        from marketdata import oi_data
+        opt = oi_data.get_option_chain_raw(symbol)
+        if not opt:
+            return jsonify({"error": "No F&O option chain for this symbol",
+                            "symbol": _fno_norm(symbol)}), 404
+        view = option_chain_view(symbol, opt)
+        if not view:
+            return jsonify({"error": "Option chain could not be computed",
+                            "symbol": _fno_norm(symbol)}), 404
+        return jsonify(view)
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

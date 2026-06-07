@@ -175,7 +175,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v22-2026-06-08-sigma">
+    <link rel="stylesheet" href="/styles.css?v=al-v23-2026-06-08-fno">
 </head>
 
 <body class="antialiased">
@@ -360,10 +360,23 @@
             </a>
 
             <div class="hidden md:flex space-x-5 items-center text-[10px] font-bold tracking-[0.14em] uppercase">
-                <a href="#" id="nav-top-news" onclick="switchTab('top-news'); return false;"
-                    class="text-violet-400 border-b-2 border-violet-500/20 pb-1 transition">Top News</a>
-                <a href="#" id="nav-all-news" onclick="switchTab('all-news'); return false;"
-                    class="nav-link text-slate-300 hover:text-white transition">All News</a>
+                <div class="nav-dropdown">
+                    <button type="button" id="nav-news-trigger" class="nav-dropdown-trigger is-active"
+                        aria-haspopup="true" aria-expanded="false">
+                        News
+                        <svg class="nav-caret" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+                    </button>
+                    <div class="nav-dropdown-panel" role="menu">
+                        <a href="#" id="nav-top-news" onclick="switchTab('top-news'); return false;"
+                            class="nav-dropdown-item is-active" role="menuitem">Top News</a>
+                        <a href="#" id="nav-all-news" onclick="switchTab('all-news'); return false;"
+                            class="nav-dropdown-item" role="menuitem">All News</a>
+                    </div>
+                </div>
+                <a href="#" id="nav-fno" onclick="switchTab('fno'); return false;"
+                    class="nav-link text-slate-300 hover:text-white transition flex items-center gap-2 stock-mode-element">
+                    <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--accent);box-shadow:0 0 6px var(--accent)"></span>F&amp;O
+                </a>
                 <a href="#" id="nav-macro-pulse" onclick="switchTab('macro-pulse'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Macro Pulse</a>
                 <a href="#" id="nav-calendar" onclick="switchTab('calendar'); return false;"
@@ -409,6 +422,7 @@
         <nav class="mobile-tabbar" id="mobile-tabbar" aria-label="Primary navigation">
             <a href="#" class="mtab active" data-mtab="top-news" onclick="switchTab('top-news'); return false;">Top News</a>
             <a href="#" class="mtab" data-mtab="all-news" onclick="switchTab('all-news'); return false;">All News</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="fno" onclick="switchTab('fno'); return false;">F&amp;O</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="macro-pulse" onclick="switchTab('macro-pulse'); return false;">Macro Pulse</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="calendar" onclick="switchTab('calendar'); return false;">Calendar</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="portfolio" onclick="switchTab('portfolio'); return false;">Portfolio</a>
@@ -806,6 +820,142 @@
                     <div class="cal-event-body" id="cal-event-body">
                         <!-- populated by openCalendarEvent() -->
                     </div>
+                </div>
+            </div>
+
+            <!-- ============================================== -->
+            <!-- VIEW: F&O SMART MONEY (institutional radar)   -->
+            <!-- ============================================== -->
+            <div id="view-fno" class="hidden max-w-7xl mx-auto w-full mt-4 space-y-5 stock-mode-element">
+
+                <!-- ── HERO ── -->
+                <div class="fno-hero glass-panel rounded-2xl relative overflow-hidden">
+                    <div class="fno-hero-glow-a"></div>
+                    <div class="fno-hero-glow-b"></div>
+                    <div class="fno-hero-grid-bg"></div>
+                    <div class="relative z-10 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-6 p-8 md:p-10">
+                        <div>
+                            <div class="fno-kicker mb-4">
+                                <span class="fno-live-dot"></span>
+                                <span class="fno-kicker-text">LIVE · F&amp;O SMART MONEY</span>
+                            </div>
+                            <h1 class="fno-hero-title">F&amp;O <span class="fno-hero-title-accent">Smart Money</span></h1>
+                            <p class="fno-hero-subtitle">
+                                Institutional positioning decoded from the daily derivatives tape —<br>
+                                OI buildup, option-chain flow, delivery &amp; block deals.
+                            </p>
+                            <div class="fno-meta" id="fno-meta"></div>
+                        </div>
+                        <div class="fno-bias-card" id="fno-bias-card">
+                            <div class="fno-bias-label">SMART-MONEY BIAS</div>
+                            <div class="fno-bias-value" id="fno-bias-value">SCANNING…</div>
+                            <div class="fno-bias-meter">
+                                <div class="fno-bias-fill" id="fno-bias-fill"></div>
+                                <div class="fno-bias-mid"></div>
+                            </div>
+                            <div class="fno-bias-sub" id="fno-bias-sub">Reading the OI tape…</div>
+                        </div>
+                    </div>
+                    <div class="fno-stats-row" id="fno-stats">
+                        <div class="fno-stat-cell"><div class="fno-stat-value">&mdash;</div><div class="fno-stat-label">Long Buildup</div></div>
+                        <div class="fno-stat-divider"></div>
+                        <div class="fno-stat-cell"><div class="fno-stat-value">&mdash;</div><div class="fno-stat-label">Short Buildup</div></div>
+                        <div class="fno-stat-divider"></div>
+                        <div class="fno-stat-cell"><div class="fno-stat-value">&mdash;</div><div class="fno-stat-label">Unusual OI</div></div>
+                        <div class="fno-stat-divider"></div>
+                        <div class="fno-stat-cell"><div class="fno-stat-value">&mdash;</div><div class="fno-stat-label">F&amp;O Universe</div></div>
+                    </div>
+                </div>
+
+                <!-- ── INSTITUTIONAL READ (deterministic narrative) ── -->
+                <div class="fno-narrative glass-panel rounded-2xl" id="fno-narrative">
+                    <div class="fno-skel-line"></div>
+                    <div class="fno-skel-line" style="width:72%"></div>
+                </div>
+
+                <!-- ── INDEX OPTION MATRIX ── -->
+                <div id="fno-index-section">
+                    <div class="fno-section-header">
+                        <div class="fno-section-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+                            Index Options
+                        </div>
+                        <span class="fno-section-hint">PCR · Max Pain · OI Walls</span>
+                    </div>
+                    <div class="fno-index-grid" id="fno-index-grid">
+                        <div class="fno-card-skel"></div><div class="fno-card-skel"></div><div class="fno-card-skel"></div>
+                    </div>
+                </div>
+
+                <!-- ── SMART-MONEY POSITIONING (4 OI×price quadrants) ── -->
+                <div id="fno-quad-section">
+                    <div class="fno-section-header">
+                        <div class="fno-section-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+                            Smart-Money Positioning
+                        </div>
+                        <span class="fno-section-hint">OI × Price · ranked by conviction</span>
+                    </div>
+                    <div class="fno-quad-grid" id="fno-quadrants">
+                        <div class="fno-card-skel tall"></div><div class="fno-card-skel tall"></div>
+                    </div>
+                </div>
+
+                <!-- ── UNUSUAL OI + DELIVERY SPIKES ── -->
+                <div class="fno-two-col">
+                    <div id="fno-unusual-section">
+                        <div class="fno-section-header">
+                            <div class="fno-section-title">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
+                                Unusual OI Surges
+                            </div>
+                        </div>
+                        <div class="fno-panel glass-panel rounded-2xl" id="fno-unusual"><div class="fno-skel-line"></div></div>
+                    </div>
+                    <div id="fno-delivery-section">
+                        <div class="fno-section-header">
+                            <div class="fno-section-title">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7l-9 9-5-5"/></svg>
+                                Delivery Conviction
+                            </div>
+                        </div>
+                        <div class="fno-panel glass-panel rounded-2xl" id="fno-delivery"><div class="fno-skel-line"></div></div>
+                    </div>
+                </div>
+
+                <!-- ── SECTOR CLUSTERING ── -->
+                <div id="fno-sector-section">
+                    <div class="fno-section-header">
+                        <div class="fno-section-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 22h16"/><path d="M6 18V8M12 18V4M18 18v-6"/></svg>
+                            Sector Positioning
+                        </div>
+                        <span class="fno-section-hint">net conviction-weighted bias</span>
+                    </div>
+                    <div class="fno-panel glass-panel rounded-2xl" id="fno-sectors"><div class="fno-skel-line"></div></div>
+                </div>
+
+                <!-- ── BULK / BLOCK DEALS ── -->
+                <div id="fno-deals-section">
+                    <div class="fno-section-header">
+                        <div class="fno-section-title">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h18M3 12h18M3 17h18"/></svg>
+                            Bulk &amp; Block Deals
+                        </div>
+                        <span class="fno-section-hint">institutional footprints</span>
+                    </div>
+                    <div class="fno-panel glass-panel rounded-2xl" id="fno-deals"><div class="fno-skel-line"></div></div>
+                </div>
+            </div>
+
+            <!-- F&O option-chain drill-down modal -->
+            <div id="fno-modal" class="fno-modal hidden" role="dialog" aria-modal="true" aria-hidden="true">
+                <div class="fno-modal-backdrop" onclick="closeFnoModal()"></div>
+                <div class="fno-modal-shell">
+                    <button class="fno-modal-close" onclick="closeFnoModal()" aria-label="Close">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"/></svg>
+                    </button>
+                    <div class="fno-modal-body" id="fno-modal-body"></div>
                 </div>
             </div>
 
@@ -1272,15 +1422,16 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-news.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-stocks.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-market.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-premium.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-terminal.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-ripple.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-macro.js?v=al-v22-2026-06-08-sigma" defer></script>
-    <script src="/app-calendar.js?v=al-v22-2026-06-08-sigma" defer></script>
+    <script src="/app-core.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-news.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-stocks.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-market.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-premium.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-terminal.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-ripple.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-macro.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-fno.js?v=al-v23-2026-06-08-fno" defer></script>
+    <script src="/app-calendar.js?v=al-v23-2026-06-08-fno" defer></script>
 </body>
 
 </html>

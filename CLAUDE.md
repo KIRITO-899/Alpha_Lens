@@ -49,7 +49,7 @@ first), and stop any server you were told to start when done.
 
 **Backend (Flask):** `C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe backend/app.py` — serves on port 5000
 
-**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **9 ordered chunks** (`app-core.js` → `app-calendar.js`, see below) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
+**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **10 ordered chunks** (`app-core.js` → `app-calendar.js`, see below — `app-fno.js` is the F&O Smart-Money view) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
 
 Open `http://127.0.0.1:5000` in your browser.
 
@@ -122,7 +122,7 @@ Alpha_Lens/
 │   │   ├── market_calendar.py   #   Pure NSE calendar/market-hours helpers
 │   │   ├── macro_tracker.py     #   MacroDataTracker — commodity/FX/rates snapshot + σ (vol-normalized) shock detection
 │   │   ├── ticker_utils.py      #   Ticker normalization + news-candidate screening helpers
-│   │   └── oi_data.py           #   Open-interest data fetch (lazy-imported by signals/technical_analysis)
+│   │   └── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals
 │   ├── newsproc/                # ── Subpackage: news processing (pure) ──
 │   │   ├── news_rules.py        #   Rule-based news classification + STOCK_KEYWORD_MAP
 │   │   ├── news_data.py         #   Static data tables (MACRO_IMPACT_MAP, keyword lists, ticker sets)
@@ -133,7 +133,8 @@ Alpha_Lens/
 │   │   ├── technical_analysis.py#   RSI, SMA, Bollinger Bands, market regime detection
 │   │   ├── calibration.py       #   Score→P(win) calibration map + meta-label gate (levers #1/#4)
 │   │   ├── calibration_map.json #   Isotonic score→P(win) map (refreshable; built by scratch/ pipeline)
-│   │   └── ripple_engine.py     #   Ripple 2.0 — pure deterministic 5-dimension macro cascade (beta-based)
+│   │   ├── ripple_engine.py     #   Ripple 2.0 — pure deterministic 5-dimension macro cascade (beta-based)
+│   │   └── fno_engine.py        #   F&O Smart-Money board — pure OI-buildup/PCR/max-pain/sector analytics
 │   ├── tests/                   # stdlib unittest suite for the pure subpackage modules
 │   ├── backtest.py              # Historical backtesting harness (⚠ stale: uses .history(start=) the shim dropped)
 │   ├── eval_loop.py             # Forward shadow-ledger — logs every signal decision + ATR outcomes (append-only)
@@ -154,8 +155,9 @@ Alpha_Lens/
 │   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/9)
 │   ├── app-terminal.js          # Stock drawer, signal terminal, backtest, notifications (6/9)
 │   ├── app-ripple.js            # Ripple graph render (7/9)
-│   ├── app-macro.js             # Macro Pulse view (8/9)
-│   ├── app-calendar.js          # Economic-events calendar (9/9)
+│   ├── app-macro.js             # Macro Pulse view (8/10)
+│   ├── app-fno.js               # F&O Smart-Money board + option-chain modal (9/10)
+│   ├── app-calendar.js          # Economic-events calendar (10/10)
 │   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries, lazy-loaded)
 │   ├── sw.js                    # PWA service worker (cache-first static, network-first HTML/API)
 │   └── styles.css               # Dashboard styling
@@ -198,7 +200,7 @@ Alpha_Lens/
 | `marketdata/market_calendar.py` | Pure NSE calendar helpers — holidays, `is_market_open`, `has_market_traded_since` |
 | `marketdata/macro_tracker.py` | `MacroDataTracker` — live commodity/FX/rates snapshot + **volatility-normalized (σ/z-score) shock detection**. Pulls 6mo daily closes → realized vol → `sigma = move/vol`; pure helpers `daily_returns()`/`compute_vol_stats()` (unit-tested) |
 | `marketdata/ticker_utils.py` | Ticker normalization + news-candidate screening — `normalize_ticker`, `candidate_quality_score`, etc. Imports `newsproc.news_rules`/`newsproc.news_data` |
-| `marketdata/oi_data.py` | Open-interest fetch; lazy-imported by `signals/technical_analysis.py` |
+| `marketdata/oi_data.py` | NSE F&O bhavcopy fetch+parse — **futures (STF) + options (STO/IDO)** from one ZIP → `get_oi_buildup_for_ticker` (technical model) + `get_fno_raw_snapshot`/`get_option_chain_raw` (Smart-Money board). Also defensive `get_delivery_map` (cash delivery%) + `get_bulk_block_deals`. Lazy-imported |
 | `newsproc/news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` |
 | `newsproc/news_data.py` | Pure static data tables — `MACRO_IMPACT_MAP`, materiality/noise keyword lists, ticker-parsing sets |
 | `newsproc/calendar_seed.py` | Pure static seed for the macro/economic-events calendar (`CALENDAR_EVENTS_SEED`) |
@@ -207,6 +209,7 @@ Alpha_Lens/
 | `signals/technical_analysis.py` | RSI, SMA, Bollinger Bands, volume analysis, market regime detection. Now also returns `avg_volume_20d` (for the liquidity filter) |
 | `signals/calibration.py` | Maps ensemble score → empirical P(target before stop); meta-label gate (levers #1/#4). Loads `calibration_map.json`; gate OFF by default (`CALIBRATION_GATE_ENABLED`) |
 | `signals/ripple_engine.py` | **Ripple 2.0** — pure, deterministic 5-dimension macro cascade (direct/second-order/sector/portfolio/action-window) via signed betas. No LLM. `compute_ripple()`; served by `/api/macro/events/<id>/ripple2` |
+| `signals/fno_engine.py` | **F&O Smart-Money** — pure board builder. `build_smart_money_board()`: OI×price buildup quadrants + conviction, unusual-OI, PCR/max-pain/OI-walls (`option_chain_view`), index option matrix, static sector clustering, market bias, deterministic narrative. No LLM. Served by `/api/fno/*` |
 | `eval_loop.py` | Forward shadow-ledger — logs EVERY signal decision (approved + rejected, with config) into the append-only `signal_eval_log` table, then labels ATR outcomes for all so each filter is measurable. Surfaced by `/api/eval-report` |
 | `backtest.py` | Bulk historical replay — news vs candle data, win/loss stats. ⚠ **Stale**: calls `.history(start=…)` which the current shim no longer supports |
 | `performance_report.py` | Terminal-based performance stats |
@@ -408,7 +411,7 @@ mirroring the dashboard's Command Center ("lead with value").
   is skipped and flagged in `degraded`; the route never 500s (returns a safe empty shell).
   Per-stock composite = weighted blend (technical .42 / news .26 / F&O .18 / valuation .14)
   renormalized over whichever dims a name has; overall =
-  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **44** (Ripple 2.0 added one).
+  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **46** (the F&O layer added two).
 - **Frontend:** `loadRiskRadar()` / `renderRiskRadar()` + helpers (`_rrDimTile`,
   `_rrStockRow`, `_rrMeter`, `_rrSkeleton`, `_rrErrorState`) in `app-stocks.js`. Renders a
   hero (big score + level + summary + a LOW→HIGH meter), 6 dimension tiles (each with a
@@ -508,7 +511,7 @@ correlations already in `compute_macro_effects()` and refined per name.
   imports `compute_ripple as compute_ripple2`). Computed on the fly — **no DB
   cache** (it's cheap and the portfolio dimension is per-watchlist). Defensive:
   404 on unknown event, safe shell on bad input, never 500s on known inputs.
-  **Route count is now 44.**
+  **Route count is now 46.**
 - **Frontend:** `openRipple2()` / `_renderRipple2()` + `_r2*` helpers in
   `app-ripple.js` render a dedicated `#ripple2-modal` (separate from the legacy
   `#ripple-modal`). The Macro Pulse alert cards (`app-macro.js`) call
@@ -525,6 +528,67 @@ correlations already in `compute_macro_effects()` and refined per name.
   cap, confidence decay, sector rollup, watchlist matching, action-window states,
   unknown-instrument/zero/bad-input safety). To extend the model, edit the
   `_GROUPS` betas/mechanisms — pure data, no wiring changes.
+
+## The F&O Smart-Money Layer (institutional positioning radar)
+
+The **F&O tab** is a dedicated derivatives desk that decodes **what institutions are
+doing** from the daily NSE F&O tape. The nav was reorganized for it — **Top News + All
+News now live under a "News" dropdown** (desktop) / pills (mobile), freeing a top-level
+**F&O** item. Frontend: `app-fno.js` (chunk 9/10), view `#view-fno`, `.fno-*` +
+`.nav-dropdown` CSS. Like the Risk Radar and Ripple 2.0 it is **purely quantitative /
+deterministic — NO Gemini/LLM call** (zero keys), so it is reproducible, instant, and
+never hallucinates a ticker. (An on-demand Gemini "deep brief" was deliberately left out
+to respect the key-saving policy — the deterministic narrative already synthesizes 6+
+signals; it's a clean one-route follow-up if ever wanted.)
+
+**Data — one file, minimal API-block risk.** Everything is built from the **daily NSE
+F&O bhavcopy** (a static ZIP on `archives.nseindia.com` — the CDN, NOT the
+datacenter-blocked `api.nseindia.com`). `marketdata/oi_data.py` was extended to parse the
+**full** bhavcopy (futures `STF` + options `STO`/`IDO`), so futures OI-buildup AND the
+option chain (CE/PE OI by strike, ΔOI, spot via `UndrlygPric`) come from ONE download —
+zero extra calls. Two **optional secondary sources** are fetched defensively (each
+isolated → `{}`/`[]` + a `degraded` flag on failure, never breaks the board): **delivery
+%** (cash `sec_bhavdata_full`) and **bulk/block deals** (`bulk.csv`/`block.csv`). ⚠️ The
+secondary equity-archive endpoints could **not be exercised against live data in the build
+env** — validate in production via the `[FNO]` logs (the FO bhavcopy itself is the proven
+path that already feeds the technical model's `oi_buildup`).
+
+**Engine:** `signals/fno_engine.py` — **pure** (stdlib only, no app/DB/network import).
+`build_smart_money_board(snapshot, watchlist, delivery, deals)` returns:
+- **Buildup quadrants** (OI×price): Long Buildup / Short Buildup / Short Covering / Long
+  Unwinding, each ranked by a **conviction score** (ΔOI magnitude × price-confirm ×
+  liquidity × delivery).
+- **Unusual OI surges** + **delivery-conviction** spikes.
+- **Option analytics** per symbol: PCR(OI), **max-pain**, call/put **OI walls**,
+  option-sentiment from fresh writing (ΔOI). `option_chain_view()` powers the per-stock
+  drill-down.
+- **Index option matrix** (NIFTY / BANKNIFTY / FINNIFTY …) — the headline numbers.
+- **Sector clustering** (static ~190-name F&O sector map → no fundamentals calls),
+  **market-wide bias** (conviction-weighted long vs short pressure + a NIFTY-PCR overlay),
+  and a **deterministic English institutional narrative**.
+
+**Routes** (in `app.py`, both lazy-import `marketdata.oi_data`):
+- `GET /api/fno/smart-money?tickers=A,B,C` — the assembled board (watchlist personalises
+  the slice + delivery-boosted conviction). The bhavcopy is cached 4h in `oi_data`; the
+  board is cached briefly here (`FNO_BOARD_TTL_SECS`, 600s) keyed by watchlist. Defensive:
+  returns a **safe shell (HTTP 200)** rather than 500, so the UI degrades to an honest
+  empty state.
+- `GET /api/fno/option-chain/<symbol>` — per-name strike ladder + PCR/max-pain/walls; 404
+  when the symbol has no F&O options. **Route count is now 46.**
+
+**Frontend:** `fetchFnoSmartMoney()` + `_fno*` render helpers + `openFnoOptionChain()`
+modal in `app-fno.js`. Lazy-loaded by `switchTab('fno')`, 60s client throttle. Hero with a
+**bias gauge**, the index matrix, the 2×2 quadrant tables (click a row → the broker-style
+option-chain modal: diverging CE/PE OI ladder with ATM + wall tags), unusual-OI + delivery
+lists, diverging **sector bars**, and a bulk/block deals table. Watchlist names get a ★.
+Degrades to an honest empty/error state (never a broken skeleton) when the bhavcopy is
+unreachable — common outside the ~7-8 PM IST publish. The view + nav-dropdown UI were
+verified via the static-harness + Claude Preview workflow (see Development Notes).
+
+**Tests:** `tests/test_fno_engine.py` (27 cases — buildup routing, PCR/max-pain/walls math,
+conviction, sector map, board assembly, safety, + the bhavcopy parser vs a synthetic UDiFF
+sample). Env knob: `FNO_BOARD_TTL_SECS` (600); the engine's caps are module constants in
+`fno_engine.py` (kept there to keep it import-pure).
 
 ## Development Workflow
 
@@ -567,7 +631,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   - **Empty / error states**: render an intentional state, never leave skeleton rows or a misleading message. The `.term-empty` pattern (centered icon + `.term-empty-title` + `.term-empty-sub`, token-styled) is the template — see `renderTerminal()` / the `fetchTerminalData()` catch in `app-terminal.js`, which distinguish **truly-empty** ("No active signals right now…") from **filtered-empty** ("No signals match this filter") from **fetch error** ("Couldn't reach the signal engine — retrying"). Perpetual skeletons on a failed/zero fetch read as *broken*; this is the biggest perceived-professionalism lever given free-tier sleep makes "empty" the common state.
   - **Numbers**: use `font-variant-numeric: tabular-nums` for any changing figure so columns/prices don't jitter — applied to `.font-mono` and `.terminal-table` cells. Prefer the `.font-mono` data utility for prices, %, P&L, confidence.
   - **Removed gimmick motion** (read as "vibe-coded", not premium): the cursor-glow trail and scroll-linked KPI parallax were deleted from `app-premium.js`, and the full-card 3D tilt + magnetic-button pull were removed from `initPremiumInteractions()`. The subtle per-panel glass spotlight, digit-flip, skeleton-swap, stagger, and ticker-hover preview were **kept** (purposeful micro-interactions). Don't re-add cursor trails / parallax.
-  - **app.js chunk split**: `app.js` was split into 9 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
+  - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree; `app-fno.js` is the F&O view, loaded between `app-macro.js` and `app-calendar.js`). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, the `sw.js` `isStaticAsset` regex (which **enumerates each chunk name** — add the new one), and the `/app-` rule in `app.py` `_CACHE_RULES` (a **prefix**, so it auto-covers new chunks). Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).
 - **`print()` is globally `safe_print`** (top of `app.py`): `_real_print = builtins.print` is captured first, then `builtins.print = safe_print` shadows it process-wide. So **every bare `print()` in any module** (workers, `performance_report`, etc.) is automatically guarded against I/O errors on a closed stdout (e.g. the Flask reloader / gunicorn worker recycle) — no need to hunt down call-sites. `safe_print` calls `_real_print` directly to avoid infinite recursion once `print` points back at itself.
 - **Database**: SQLite files (`news_cache.db`, `users.db`) are created on first run. Delete to reset.
@@ -585,7 +649,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **44 routes**. Then run the test suite (`python -m unittest discover -s tests`).
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **46 routes**. Then run the test suite (`python -m unittest discover -s tests`).
 
 ## Context7 MCP — Library Documentation
 

@@ -8,7 +8,7 @@
         let currentArchiveFilter = 'all';
         let selectedHeadlineKey = '';
         let marketOpen = true;  // Updated from API — controls whether stock changes are shown
-        const tabs = ['top-news', 'all-news', 'macro-pulse', 'calendar', 'portfolio', 'stocks', 'terminal'];
+        const tabs = ['top-news', 'all-news', 'fno', 'macro-pulse', 'calendar', 'portfolio', 'stocks', 'terminal'];
 
         function getNewsKey(newsItem) {
             return (newsItem?.headline || '').trim().toLowerCase();
@@ -356,7 +356,7 @@
         // Nav links that must stay hidden in non-stock mode
         // Terminal is stock-only — every row is a ticker signal, so it has
         // zero meaning when the user has toggled off the stock-mode UI.
-        const STOCK_NAV_IDS = ['nav-macro-pulse', 'nav-calendar', 'nav-portfolio', 'nav-stocks', 'nav-terminal'];
+        const STOCK_NAV_IDS = ['nav-fno', 'nav-macro-pulse', 'nav-calendar', 'nav-portfolio', 'nav-stocks', 'nav-terminal'];
 
         function updateAppHeaderOffset() {
             const headerEls = [
@@ -386,15 +386,27 @@
                 if (view && nav) {
                     const isStockNav = STOCK_NAV_IDS.includes(`nav-${id}`);
                     const stockCls = isStockNav ? ' stock-mode-element' : '';
+                    const isDropdownItem = nav.classList.contains('nav-dropdown-item');
                     if (id === targetTabId) {
                         view.classList.remove('hidden');
-                        nav.className = `text-violet-400 border-b-2 border-violet-500/20 pb-1 transition${stockCls}`;
+                        // Dropdown items (Top/All News) keep their own styling — just
+                        // toggle .is-active so we never wipe the .nav-dropdown-item class.
+                        if (isDropdownItem) nav.classList.add('is-active');
+                        else nav.className = `text-violet-400 border-b-2 border-violet-500/20 pb-1 transition${stockCls}`;
                     } else {
                         view.classList.add('hidden');
-                        nav.className = `nav-link text-slate-300 hover:text-white transition${stockCls}`;
+                        if (isDropdownItem) nav.classList.remove('is-active');
+                        else nav.className = `nav-link text-slate-300 hover:text-white transition${stockCls}`;
                     }
                 }
             });
+            // Mirror the active state of the News dropdown items onto the collapsed
+            // "News" trigger so it highlights when either child tab is active.
+            const newsTrigger = document.getElementById('nav-news-trigger');
+            if (newsTrigger) {
+                newsTrigger.classList.toggle('is-active',
+                    targetTabId === 'top-news' || targetTabId === 'all-news');
+            }
             // Keep the mobile tab bar's active pill in sync with the desktop nav.
             document.querySelectorAll('#mobile-tabbar .mtab').forEach(t => {
                 t.classList.toggle('active', t.getAttribute('data-mtab') === targetTabId);
@@ -408,6 +420,7 @@
             if (targetTabId === 'terminal') fetchTerminalData();
             if (targetTabId === 'stocks') fetchBacktestStats();
             if (targetTabId === 'macro-pulse') fetchMacroPulse();
+            if (targetTabId === 'fno' && typeof fetchFnoSmartMoney === 'function') fetchFnoSmartMoney();
             if (targetTabId === 'portfolio' && typeof loadRiskRadar === 'function') loadRiskRadar();
             updateAppHeaderOffset();
             window.scrollTo({ top: 0, behavior: 'smooth' });
