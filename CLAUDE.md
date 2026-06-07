@@ -366,10 +366,16 @@ rendered entirely by `loadCommandBar()` / `renderCommandBar()` in `app-news.js`.
 Each top-conviction card in the Command Center paints a tiny inline **SVG sparkline**
 of the ticker's recent close trend (green if up over the window, red if down).
 - **Backend:** `GET /api/sparklines?tickers=A,B,C` (in `app.py`) returns
-  `{ticker: [close, …]}` using the shim's daily candles (`yf.get_ohlc`, `_SPARKLINE_DAYS`
-  =15, last ~20 pts). **Server-cached** `_SPARKLINE_CACHE` for `SPARKLINE_TTL_SECS` (900s)
-  and capped at `SPARKLINE_MAX_TICKERS` (10) so the 30s dashboard poll never hammers the
-  data API. Defensive — `[]`/`{}` on any failure.
+  `{ticker: [close, …]}` (last ~20 daily closes). It fetches via
+  **`yf.Ticker(t).history(period='1mo', interval='1d')`** — NOT `get_ohlc()`. ⚠️ This
+  matters: `get_ohlc()` is **Angel-One-only with no fallback** and returns `[]` on the
+  Render datacenter IP (the static symbol→token map makes it *enter* the Angel One branch,
+  but the authenticated candle call fails there) — so the original `get_ohlc()` version
+  rendered **empty** in production. `Ticker.history()` falls back to **Yahoo's chart API**
+  (reachable from Render — live quotes already use it), which populates the series.
+  **Server-cached** `_SPARKLINE_CACHE` for `SPARKLINE_TTL_SECS` (900s) and capped at
+  `SPARKLINE_MAX_TICKERS` (10) so the 30s dashboard poll never hammers the data API.
+  Defensive — `[]`/`{}` on any failure.
 - **Frontend:** `enhanceCommandBarSparklines()` / `_sparkSVG()` / `_paintSparks()` in
   `app-news.js`. Cards render first; sparklines are an **async, additive** enhancement
   (frontend-cached 10 min in `_ccSparks`, fetches only uncached tickers). A slow/failed
@@ -505,6 +511,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   - **Removed gimmick motion** (read as "vibe-coded", not premium): the cursor-glow trail and scroll-linked KPI parallax were deleted from `app-premium.js`, and the full-card 3D tilt + magnetic-button pull were removed from `initPremiumInteractions()`. The subtle per-panel glass spotlight, digit-flip, skeleton-swap, stagger, and ticker-hover preview were **kept** (purposeful micro-interactions). Don't re-add cursor trails / parallax.
   - **app.js chunk split**: `app.js` was split into 9 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).
+- **`print()` is globally `safe_print`** (top of `app.py`): `_real_print = builtins.print` is captured first, then `builtins.print = safe_print` shadows it process-wide. So **every bare `print()` in any module** (workers, `performance_report`, etc.) is automatically guarded against I/O errors on a closed stdout (e.g. the Flask reloader / gunicorn worker recycle) — no need to hunt down call-sites. `safe_print` calls `_real_print` directly to avoid infinite recursion once `print` points back at itself.
 - **Database**: SQLite files (`news_cache.db`, `users.db`) are created on first run. Delete to reset.
 - **API keys**: Always use environment variables (`.env`). Never hardcode in source.
 - **Background threads** (all started by `start_background_workers`, unless `--workers-only` mode): AI news engine, yfinance price worker, `archival_worker` (90-day reversible archive), `news_prune_worker` (800/5-day feed prune), `calendar_worker` (every 30m — releases concluded calendar events + purges them after 2 days), plus macro warmer/shock workers, and `eval_labeler_worker` (every 6h — fills ATR outcomes for the append-only `signal_eval_log` eval ledger). Retention is owned by these workers — there is **no** per-cycle hard-delete anymore.
