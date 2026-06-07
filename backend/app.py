@@ -7360,16 +7360,21 @@ def get_sparklines():
             continue
         series = []
         try:
-            rows = yf.get_ohlc(key, days=_SPARKLINE_DAYS) or []
-            # rows: list of (dt_utc, high, low, close) — take closes, last ~20 pts
-            for r in rows:
-                try:
-                    cl = float(r[3])
-                    if cl > 0:
-                        series.append(round(cl, 2))
-                except Exception:
-                    continue
-            series = series[-20:]
+            # Use Ticker.history() (NOT get_ohlc): history() falls back to Yahoo
+            # candles when Angel One candles are unavailable, which is the case on
+            # the Render datacenter IP. get_ohlc() is Angel-One-only and returns []
+            # there, so the sparklines never rendered. Yahoo's chart API is reachable
+            # from Render (live quotes already use it), so this populates the series.
+            df = yf.Ticker(key).history(period='1mo', interval='1d')
+            if df is not None and not df.empty and 'Close' in df.columns:
+                for v in df['Close'].tolist():
+                    try:
+                        cl = float(v)
+                        if cl > 0:
+                            series.append(round(cl, 2))
+                    except Exception:
+                        continue
+                series = series[-20:]  # last ~20 trading days
         except Exception:
             series = []
         _SPARKLINE_CACHE[key] = {'series': series, 'ts': now}
