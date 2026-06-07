@@ -285,6 +285,237 @@ window.openRipple = openRipple;
 window.closeRipple = closeRipple;
 
 // ════════════════════════════════════════════════════════════════════════
+// THE RIPPLE 2.0 — deterministic quantitative five-dimension cascade
+// Fetches /api/macro/events/<id>/ripple2 (pure engine, no LLM) and renders:
+//   Direct · Second-order · Sector · Portfolio · Action window
+// Personalized portfolio dimension via the user's watchlist (?tickers=).
+// ════════════════════════════════════════════════════════════════════════
+
+function _r2WatchlistTickers() {
+    // `watchlist` is a global from app-stocks.js: [{ticker, name}, ...].
+    try {
+        if (Array.isArray(window.watchlist)) {
+            return window.watchlist.map(w => (w && (w.ticker || w.symbol)) || '').filter(Boolean);
+        }
+        const raw = JSON.parse(localStorage.getItem('alpha_lens_watchlist') || '[]');
+        return raw.map(w => (w && (w.ticker || w.symbol)) || w).filter(Boolean);
+    } catch (e) { return []; }
+}
+
+function _r2Move(pct) {
+    const v = Number(pct || 0);
+    const up = v >= 0;
+    const arrow = up
+        ? '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 14l6-6 6 6"/></svg>'
+        : '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M6 10l6 6 6-6"/></svg>';
+    return `<span class="r2-move ${up ? 'bull' : 'bear'}">${arrow}${up ? '+' : ''}${v.toFixed(2)}%</span>`;
+}
+
+function _r2StockRow(n) {
+    const bull = n.direction === 'BULLISH';
+    return `
+        <div class="r2-row ${bull ? 'is-bull' : 'is-bear'}">
+            <div class="r2-row-top">
+                <div class="r2-row-id">
+                    <span class="r2-tkr">${escapeHtml((n.ticker || '').replace(/\.(NS|BO)$/i, ''))}</span>
+                    <span class="r2-sector">${escapeHtml(n.sector || '')}</span>
+                </div>
+                <div class="r2-row-metrics">
+                    ${_r2Move(n.expected_move_pct)}
+                    <span class="r2-conf" title="Model confidence">${n.confidence != null ? n.confidence + '%' : '—'}</span>
+                </div>
+            </div>
+            <div class="r2-mech">${escapeHtml(n.mechanism || '')}</div>
+            <div class="r2-row-foot">
+                <span class="r2-lag r2-lag--${n.lag === 'lagged' ? 'lag' : 'now'}">${n.lag === 'lagged' ? 'Lagged · 1–3 sessions' : 'Immediate'}</span>
+            </div>
+        </div>`;
+}
+
+function _r2NodeListPanel(title, sub, nodes, accent) {
+    let inner;
+    if (!nodes || !nodes.length) {
+        inner = `<div class="r2-panel-empty">No material ${title.toLowerCase()} names for this shock.</div>`;
+    } else {
+        inner = nodes.map(_r2StockRow).join('');
+    }
+    return `
+        <div class="r2-panel" style="--r2-accent:${accent};">
+            <div class="r2-panel-head">
+                <div class="r2-panel-title">${title}</div>
+                <div class="r2-panel-sub">${sub}</div>
+                ${nodes && nodes.length ? `<span class="r2-panel-count">${nodes.length}</span>` : ''}
+            </div>
+            <div class="r2-panel-body">${inner}</div>
+        </div>`;
+}
+
+function _r2SectorPanel(sectors) {
+    let inner;
+    if (!sectors || !sectors.length) {
+        inner = `<div class="r2-panel-empty">No sector-level concentration detected.</div>`;
+    } else {
+        const maxNet = Math.max(...sectors.map(s => Math.abs(s.net_move_pct)), 0.01);
+        inner = sectors.map(s => {
+            const bull = s.net_move_pct >= 0;
+            const w = Math.max(4, Math.round(Math.abs(s.net_move_pct) / maxNet * 50)); // % of half-width
+            const tops = (s.top || []).map(t => (t.ticker || '').replace(/\.(NS|BO)$/i, '')).join(' · ');
+            return `
+                <div class="r2-sec">
+                    <div class="r2-sec-head">
+                        <span class="r2-sec-name">${escapeHtml(s.sector)}</span>
+                        <span class="r2-sec-net ${bull ? 'bull' : 'bear'}">${bull ? '+' : ''}${Number(s.net_move_pct).toFixed(2)}%</span>
+                    </div>
+                    <div class="r2-sec-track">
+                        <div class="r2-sec-mid"></div>
+                        <div class="r2-sec-fill ${bull ? 'bull' : 'bear'}" style="width:${w}%;${bull ? 'left:50%;' : 'right:50%;'}"></div>
+                    </div>
+                    <div class="r2-sec-foot"><span class="r2-sec-count">${s.count} name${s.count !== 1 ? 's' : ''}</span><span class="r2-sec-top">${escapeHtml(tops)}</span></div>
+                </div>`;
+        }).join('');
+    }
+    return `
+        <div class="r2-panel" style="--r2-accent:var(--accent);">
+            <div class="r2-panel-head">
+                <div class="r2-panel-title">Sector Impact</div>
+                <div class="r2-panel-sub">Net directional bias by sector</div>
+            </div>
+            <div class="r2-panel-body">${inner}</div>
+        </div>`;
+}
+
+function _r2PortfolioPanel(p) {
+    let inner;
+    if (!p || !p.applicable) {
+        inner = `
+            <div class="r2-pf-cta">
+                <div class="r2-pf-cta-icon"><svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2v20M2 12h20"/></svg></div>
+                <div class="r2-pf-cta-text">${escapeHtml((p && p.summary) || 'Add stocks to your watchlist to see portfolio impact.')}</div>
+            </div>`;
+    } else if (p.exposure_count === 0) {
+        inner = `
+            <div class="r2-pf-clear">
+                <div class="r2-pf-clear-badge">No direct exposure</div>
+                <div class="r2-pf-clear-text">${escapeHtml(p.summary)}</div>
+            </div>`;
+    } else {
+        const bull = p.net_move_pct >= 0;
+        inner = `
+            <div class="r2-pf-gauge">
+                <div class="r2-pf-net ${bull ? 'bull' : 'bear'}">${bull ? '+' : ''}${Number(p.net_move_pct).toFixed(2)}%</div>
+                <div class="r2-pf-net-label">Est. equal-weight impact on your watchlist</div>
+                <div class="r2-pf-expo"><span class="r2-pf-expo-num">${p.exposure_count}</span><span class="r2-pf-expo-of">/ ${p.total} names exposed</span></div>
+            </div>
+            <div class="r2-pf-hits">${p.hits.map(_r2StockRow).join('')}</div>`;
+    }
+    return `
+        <div class="r2-panel r2-panel--pf" style="--r2-accent:var(--accent-bright);">
+            <div class="r2-panel-head">
+                <div class="r2-panel-title">Portfolio Impact</div>
+                <div class="r2-panel-sub">How this lands on your watchlist</div>
+            </div>
+            <div class="r2-panel-body">${inner}</div>
+        </div>`;
+}
+
+function _r2ActionBanner(a) {
+    if (!a) return '';
+    const stateCls = { ACTIONABLE: 'go', LIVE: 'live', INFO: 'info' }[a.state] || 'info';
+    const urgCls = { HIGH: 'high', MEDIUM: 'med', LOW: 'low' }[a.urgency] || 'low';
+    return `
+        <div class="r2-action r2-action--${stateCls}">
+            <div class="r2-action-left">
+                <span class="r2-action-state">${escapeHtml(a.label || a.state || '')}</span>
+                <span class="r2-action-detail">${escapeHtml(a.detail || '')}</span>
+            </div>
+            <div class="r2-action-right">
+                <div class="r2-action-chip"><span class="r2-chip-k">Horizon</span><span class="r2-chip-v">${escapeHtml(a.horizon || '—')}</span></div>
+                <div class="r2-action-chip r2-urg-${urgCls}"><span class="r2-chip-k">Urgency</span><span class="r2-chip-v">${escapeHtml(a.urgency || '—')}</span></div>
+            </div>
+        </div>`;
+}
+
+function _renderRipple2(data) {
+    const body = document.getElementById('r2-body');
+    if (!body) return;
+    const pct = Number(data.pct || 0);
+    const up = pct >= 0;
+    const shock = (data.shock_level || '').toString();
+    const shockCls = shock.toUpperCase() === 'MAJOR' ? 'major' : (shock ? 'significant' : 'info');
+
+    body.innerHTML = `
+        <div class="r2-header">
+            <div class="r2-kicker"><span class="r2-kicker-dot"></span>THE RIPPLE 2.0 · QUANTITATIVE CASCADE</div>
+            <div class="r2-title-row">
+                <h2 class="r2-title">${escapeHtml(data.instrument || 'Macro event')}</h2>
+                <span class="r2-headline-move ${up ? 'bull' : 'bear'}">${up ? '+' : ''}${pct.toFixed(2)}%</span>
+                ${shock ? `<span class="r2-shock-badge ${shockCls}">${escapeHtml(shock)} shock</span>` : ''}
+            </div>
+            <p class="r2-summary">${escapeHtml(data.summary || '')}</p>
+        </div>
+        ${_r2ActionBanner(data.action_window)}
+        <div class="r2-grid">
+            ${_r2NodeListPanel('Direct Impact', 'Mechanically tied to the move', data.direct, 'var(--green)')}
+            ${_r2NodeListPanel('Second-Order', 'Supply-chain & financing transmission', data.second_order, '#60a5fa')}
+            ${_r2SectorPanel(data.sector)}
+            ${_r2PortfolioPanel(data.portfolio)}
+        </div>
+        <div class="r2-foot">Deterministic transmission model · expected moves are beta-scaled estimates, not guarantees · not investment advice.</div>`;
+}
+
+async function openRipple2(eventId) {
+    const modal = document.getElementById('ripple2-modal');
+    const body = document.getElementById('r2-body');
+    if (!modal) return;
+    if (body) {
+        body.innerHTML = `
+            <div class="r2-loading">
+                <div class="r2-loading-ring"></div>
+                <div class="r2-loading-text">Modelling the cascade<span class="ripple-dots"><span>.</span><span>.</span><span>.</span></span></div>
+            </div>`;
+    }
+    modal.classList.remove('hidden');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+
+    try {
+        const tickers = _r2WatchlistTickers();
+        const q = tickers.length ? `?tickers=${encodeURIComponent(tickers.join(','))}` : '';
+        const res = await fetch(`/api/macro/events/${eventId}/ripple2${q}`);
+        if (!res.ok) {
+            const errBody = await res.json().catch(() => ({}));
+            if (body) body.innerHTML = `<div class="r2-error"><div class="r2-error-title">Couldn’t model this cascade</div><div class="r2-error-sub">${escapeHtml(errBody.error || ('HTTP ' + res.status))}</div></div>`;
+            return;
+        }
+        const data = await res.json();
+        _renderRipple2(data);
+    } catch (err) {
+        if (body) body.innerHTML = `<div class="r2-error"><div class="r2-error-title">Couldn’t model this cascade</div><div class="r2-error-sub">${escapeHtml(String(err && err.message ? err.message : err))}</div></div>`;
+    }
+}
+
+function closeRipple2() {
+    const modal = document.getElementById('ripple2-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+}
+
+document.addEventListener('click', (e) => {
+    if (e.target.closest('[data-close-ripple2]')) closeRipple2();
+});
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const m = document.getElementById('ripple2-modal');
+        if (m && !m.classList.contains('hidden')) closeRipple2();
+    }
+});
+
+window.openRipple2 = openRipple2;
+window.closeRipple2 = closeRipple2;
+
+// ════════════════════════════════════════════════════════════════════════
 // MACRO PULSE — live shock detector strip
 // Fetches /api/macro/events and renders chips for each detected shock.
 // Click → opens the Ripple modal using the macro-event variant.

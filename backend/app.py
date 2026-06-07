@@ -90,6 +90,7 @@ from signals.technical_analysis import (
     get_market_regime
 )
 from signals.prediction_models import EnsemblePredictor
+from signals.ripple_engine import compute_ripple as compute_ripple2
 
 
 
@@ -5688,6 +5689,59 @@ def get_macro_event_ripple(event_id):
             "trigger": graph.get("trigger", {}),
             "cached": False,
         })
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/macro/events/<int:event_id>/ripple2', methods=['GET'])
+def get_macro_event_ripple2(event_id):
+    """
+    Ripple 2.0 — deterministic, quantitative five-dimension cascade for a macro
+    shock (direct / second-order / sector / portfolio / action-window).
+
+    Unlike /ripple (which calls Gemini and caches a tier graph), this is computed
+    on the fly by signals.ripple_engine.compute_ripple — pure, reproducible, and
+    free. The portfolio dimension is personalized via ?tickers=A,B,C (the user's
+    watchlist), so there is nothing to cache per-event.
+    """
+    try:
+        # Watchlist for the portfolio dimension (optional).
+        raw_tickers = (request.args.get('tickers') or '').strip()
+        watchlist = [t.strip() for t in raw_tickers.split(',') if t.strip()] if raw_tickers else []
+
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("""
+            SELECT id, instrument_key, instrument_label, symbol, shock_level,
+                   change_pct_1d, last_price, prev_close, detected_at,
+                   during_nse_hours
+            FROM macro_event WHERE id = ?
+        """, (event_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return jsonify({"error": "Macro event not found"}), 404
+
+        (mid, key, label, symbol, shock_level,
+         pct, last, prev, detected_at, during_nse_hours) = row
+
+        data = compute_ripple2(
+            instrument_key=key,
+            pct=pct,
+            shock_level=shock_level,
+            during_nse_hours=during_nse_hours,
+            watchlist=watchlist,
+            instrument_label=label,
+        )
+        data.update({
+            "event_id": mid,
+            "symbol": symbol,
+            "last_price": last,
+            "prev_close": prev,
+            "detected_at": str(detected_at),
+        })
+        return jsonify(data)
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500

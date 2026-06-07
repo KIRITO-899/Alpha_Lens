@@ -57,7 +57,11 @@ async function fetchMacroPulse() {
             chipsEl.innerHTML = events.map(ev => _mpRenderAlertCard(ev)).join('');
             chipsEl.querySelectorAll('[data-macro-event-id]').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    openMacroRipple(parseInt(btn.getAttribute('data-macro-event-id'), 10));
+                    const id = parseInt(btn.getAttribute('data-macro-event-id'), 10);
+                    // Ripple 2.0 — deterministic quant cascade (falls back to the
+                    // legacy LLM ripple only if the new renderer isn't loaded).
+                    if (typeof openRipple2 === 'function') openRipple2(id);
+                    else openMacroRipple(id);
                 });
             });
         }
@@ -160,10 +164,10 @@ function _mpRenderAlertCard(ev) {
             <div class="mp-alert-divider"></div>
             <div class="mp-alert-footer">
                 <span class="mp-alert-detected">Detected ${detectedAt} IST</span>
-                ${ev.has_ripple ? `<span class="mp-alert-ripple-cta">
+                <span class="mp-alert-ripple-cta">
                     <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg>
-                    View Ripple
-                </span>` : ''}
+                    Ripple 2.0
+                </span>
             </div>
         </button>`;
 }

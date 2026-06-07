@@ -132,7 +132,8 @@ Alpha_Lens/
 │   │   ├── prediction_models.py #   Multi-model ensemble (Sentiment, Historical, Sector, Event)
 │   │   ├── technical_analysis.py#   RSI, SMA, Bollinger Bands, market regime detection
 │   │   ├── calibration.py       #   Score→P(win) calibration map + meta-label gate (levers #1/#4)
-│   │   └── calibration_map.json #   Isotonic score→P(win) map (refreshable; built by scratch/ pipeline)
+│   │   ├── calibration_map.json #   Isotonic score→P(win) map (refreshable; built by scratch/ pipeline)
+│   │   └── ripple_engine.py     #   Ripple 2.0 — pure deterministic 5-dimension macro cascade (beta-based)
 │   ├── tests/                   # stdlib unittest suite for the pure subpackage modules
 │   ├── backtest.py              # Historical backtesting harness (⚠ stale: uses .history(start=) the shim dropped)
 │   ├── eval_loop.py             # Forward shadow-ledger — logs every signal decision + ATR outcomes (append-only)
@@ -205,6 +206,7 @@ Alpha_Lens/
 | `signals/prediction_models.py` | 5-model ensemble predictor — sentiment, historical, sector, event, aggregation |
 | `signals/technical_analysis.py` | RSI, SMA, Bollinger Bands, volume analysis, market regime detection. Now also returns `avg_volume_20d` (for the liquidity filter) |
 | `signals/calibration.py` | Maps ensemble score → empirical P(target before stop); meta-label gate (levers #1/#4). Loads `calibration_map.json`; gate OFF by default (`CALIBRATION_GATE_ENABLED`) |
+| `signals/ripple_engine.py` | **Ripple 2.0** — pure, deterministic 5-dimension macro cascade (direct/second-order/sector/portfolio/action-window) via signed betas. No LLM. `compute_ripple()`; served by `/api/macro/events/<id>/ripple2` |
 | `eval_loop.py` | Forward shadow-ledger — logs EVERY signal decision (approved + rejected, with config) into the append-only `signal_eval_log` table, then labels ATR outcomes for all so each filter is measurable. Surfaced by `/api/eval-report` |
 | `backtest.py` | Bulk historical replay — news vs candle data, win/loss stats. ⚠ **Stale**: calls `.history(start=…)` which the current shim no longer supports |
 | `performance_report.py` | Terminal-based performance stats |
@@ -406,7 +408,7 @@ mirroring the dashboard's Command Center ("lead with value").
   is skipped and flagged in `degraded`; the route never 500s (returns a safe empty shell).
   Per-stock composite = weighted blend (technical .42 / news .26 / F&O .18 / valuation .14)
   renormalized over whichever dims a name has; overall =
-  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **43**.
+  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **44** (Ripple 2.0 added one).
 - **Frontend:** `loadRiskRadar()` / `renderRiskRadar()` + helpers (`_rrDimTile`,
   `_rrStockRow`, `_rrMeter`, `_rrSkeleton`, `_rrErrorState`) in `app-stocks.js`. Renders a
   hero (big score + level + summary + a LOW→HIGH meter), 6 dimension tiles (each with a
@@ -469,6 +471,61 @@ Env knobs (all reversible): `RIPPLE_MIN_CONFIDENCE` (55), `RIPPLE_TIER1_MAX` (5)
 flowing arrow between tiers (`.rfl-arrow-flow`) so the cascade direction reads at
 a glance.
 
+## The Ripple 2.0 (quantitative five-dimension cascade)
+
+**Ripple 2.0 is the accurate, deterministic successor to the LLM macro ripple.**
+For a macro shock it produces five dimensions a sell-side quant desk would frame:
+**Direct Impact · Second-Order Impact · Sector Impact · Portfolio Impact ·
+Action Window**. It replaces the Gemini-generated 3-tier graph **on the Macro
+Pulse alert cards** (the per-news 3-tier `openRipple`/`/api/news/<id>/ripple`
+path is **left intact**).
+
+**Why deterministic (no LLM).** The old macro ripple called Gemini, which padded
+tiers and inflated confidence (and burned keys — see the key-saving policy). The
+engine instead models transmission with **signed betas**: each stock carries an
+expected %-move per +1% move of the instrument, grounded in the mechanism
+(margin / input-cost / duration / risk-on-off). `expected_move = clamp(beta ×
+shock%, ±cap)`; **direction is the sign**, so a down-move flips every node
+automatically. This is reproducible, unit-tested, instant, burns **zero** API
+keys, and never hallucinates a ticker. Betas are seeded from the institutional
+correlations already in `compute_macro_effects()` and refined per name.
+
+- **Backend engine:** `signals/ripple_engine.py` — **pure** (stdlib only, no
+  app/network/DB import → no cycle). `compute_ripple(instrument_key, pct,
+  shock_level, during_nse_hours, watchlist, instrument_label)` returns
+  `{instrument, pct, shock_level, summary, direct[], second_order[], sector[],
+  portfolio{}, action_window{}}`. 13 tracked instruments map onto **8
+  transmission graphs** (`KEY_TO_GROUP`): oil (brent/wti), gas, precious
+  (gold/silver), metals (copper), usd (dxy/usdinr), vol (vix_us/vix_in), index
+  (nifty/banknifty), rates (us10y). Each node: ticker/name/sector/direction/
+  expected_move_pct/confidence/beta/lag/mechanism. **Sector** rolls the nodes up
+  to a per-sector net bias; **portfolio** filters nodes to the user's watchlist
+  (equal-weight net impact + exposure count) — `applicable:false` when no
+  watchlist; **action_window** reads `during_nse_hours` → `ACTIONABLE` (NSE shut,
+  position before open) / `LIVE` (repricing now) / `INFO`, with a horizon
+  (immediate vs lagged majority) and urgency (MAJOR→HIGH / SIGNIFICANT→MEDIUM).
+- **Route:** `GET /api/macro/events/<id>/ripple2?tickers=A,B,C` (in `app.py`,
+  imports `compute_ripple as compute_ripple2`). Computed on the fly — **no DB
+  cache** (it's cheap and the portfolio dimension is per-watchlist). Defensive:
+  404 on unknown event, safe shell on bad input, never 500s on known inputs.
+  **Route count is now 44.**
+- **Frontend:** `openRipple2()` / `_renderRipple2()` + `_r2*` helpers in
+  `app-ripple.js` render a dedicated `#ripple2-modal` (separate from the legacy
+  `#ripple-modal`). The Macro Pulse alert cards (`app-macro.js`) call
+  `openRipple2(id)` (falling back to `openMacroRipple` only if the new renderer
+  is absent) and pass the watchlist via `_r2WatchlistTickers()` (reads the
+  `alpha_lens_watchlist` global/localStorage). Styles: `.r2-*` block in
+  `styles.css` (token-based, green/red semantics, diverging sector bars,
+  responsive 2-col→1-col < 768px).
+- **Tunables** (module constants in `ripple_engine.py`, kept there to keep the
+  module pure): `MAX_EXPECTED_MOVE` (6.0), `MAX_DIRECT_NODES` (6),
+  `MAX_SECOND_NODES` (6), `CONF_DIRECT_BASE` (82), `CONF_SECOND_BASE` (66),
+  `CONF_FLOOR`/`CONF_CEIL` (50/95).
+- **Tests:** `tests/test_ripple_engine.py` (18 cases — sign-flip, beta scaling +
+  cap, confidence decay, sector rollup, watchlist matching, action-window states,
+  unknown-instrument/zero/bad-input safety). To extend the model, edit the
+  `_GROUPS` betas/mechanisms — pure data, no wiring changes.
+
 ## Development Workflow
 
 When you add or modify features in Alpha_Lens, follow this workflow:
@@ -527,7 +584,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **43 routes**. Then run the test suite (`python -m unittest discover -s tests`).
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **44 routes**. Then run the test suite (`python -m unittest discover -s tests`).
 
 ## Context7 MCP — Library Documentation
 

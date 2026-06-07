@@ -175,7 +175,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v18-2026-06-07-risk">
+    <link rel="stylesheet" href="/styles.css?v=al-v19-2026-06-08-ripple2">
 </head>
 
 <body class="antialiased">
@@ -1247,6 +1247,24 @@
         </div>
     </div>
 
+    <!-- ── THE RIPPLE 2.0 — quantitative five-dimension cascade modal ──
+         Deterministic engine (signals/ripple_engine.py via /ripple2). Body is
+         rendered entirely by _renderRipple2() in app-ripple.js. -->
+    <div id="ripple2-modal" class="r2-modal hidden" role="dialog" aria-modal="true" aria-hidden="true">
+        <div class="r2-backdrop" data-close-ripple2></div>
+        <div class="r2-shell">
+            <button class="r2-close" data-close-ripple2 aria-label="Close Ripple 2.0">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+            </button>
+            <div id="r2-body" class="r2-body">
+                <div class="r2-loading">
+                    <div class="r2-loading-ring"></div>
+                    <div class="r2-loading-text">Modelling the cascade<span class="ripple-dots"><span>.</span><span>.</span><span>.</span></span></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- app.js was split into ordered chunks (see frontend/*.js). All are
          classic scripts sharing one global scope; `defer` runs them in document
          order after parse, so concatenating them top-to-bottom reproduces the
@@ -1254,15 +1272,15 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-news.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-stocks.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-market.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-premium.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-terminal.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-ripple.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-macro.js?v=al-v18-2026-06-07-risk" defer></script>
-    <script src="/app-calendar.js?v=al-v18-2026-06-07-risk" defer></script>
+    <script src="/app-core.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-news.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-stocks.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-market.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-premium.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-terminal.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-ripple.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-macro.js?v=al-v19-2026-06-08-ripple2" defer></script>
+    <script src="/app-calendar.js?v=al-v19-2026-06-08-ripple2" defer></script>
 </body>
 
 </html>
