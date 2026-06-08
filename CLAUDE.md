@@ -431,9 +431,13 @@ mirroring the dashboard's Command Center ("lead with value").
   bar + top contributing stocks/reasons), and a **Top risks by stock** ranking.
   **Lifecycle:** called from `switchTab('portfolio')` (lazy-load) and on every watchlist
   change (`saveWatchlist`, force-refresh); a 60s client throttle sits over the 30m server
-  cache. **Degradation:** hidden until there's a watchlist AND a real score — a cold-start
-  / zero-data fetch shows nothing rather than a broken shell; fetch errors show a retrying
-  message. Styles: `.rr-*` block in `styles.css` (token-based, level-colored
+  cache. **Empty state:** with **no watchlist** the section is NOT hidden — it shows a
+  professional **teaser** (`_rrEmpty()`): the 7 dimensions + an **"Add stocks"** CTA
+  (`focusWatchlistSearch()` → focuses `#stock-search-input`) so the radar is discoverable,
+  and a note that **the same watchlist powers both the radar and the portfolio news** (the
+  news empty state references it too). **Degradation:** a zero-data/error fetch with a
+  populated watchlist shows a retrying message (never a broken shell). Styles: `.rr-*` block
+  in `styles.css` (token-based, level-colored
   green/amber/red, responsive 2-col→1-col < 600px). **No holdings sizes** exist (the
   watchlist is `{ticker, name}` only), so the model is **equal-weight** — a quantity-aware
   weighting would be a follow-up. Env knobs: `RISK_RADAR_TTL_SECS`, `RISK_RADAR_MAX_TICKERS`.

@@ -487,7 +487,7 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             if (watchlist.length === 0) {
                 const countEl = document.getElementById('portfolio-count');
                 if (countEl) countEl.innerText = '0 News Items';
-                container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">Add stocks to your watchlist to see relevant news here.</div>';
+                container.innerHTML = '<div class="glass-panel p-8 rounded-2xl text-center text-slate-400">News affecting your holdings appears here once you add stocks above — the same watchlist also powers your Portfolio Risk Radar.</div>';
                 return;
             }
 
@@ -649,8 +649,11 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             const section = document.getElementById('risk-radar');
             if (!section) return;
             if (!watchlist || watchlist.length === 0) {
-                section.classList.add('hidden');
-                section.innerHTML = '';
+                // Don't hide it — show a professional teaser so the Risk Radar is
+                // discoverable, and tell the user adding stocks unlocks it. The
+                // same watchlist then powers the live score + the news below.
+                section.classList.remove('hidden');
+                section.innerHTML = _rrEmpty();
                 _riskRadarLastKey = '';
                 return;
             }
@@ -687,6 +690,55 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
             }
         }
         window.loadRiskRadar = loadRiskRadar;
+
+        // Empty/teaser state for the Risk Radar (before any stock is added) —
+        // makes the feature discoverable and points to the SAME watchlist that
+        // powers both the radar and the portfolio news.
+        function _rrEmpty() {
+            const dims = [
+                ['Per-stock', 'risk of each holding'],
+                ['Concentration', 'over-exposure to one sector'],
+                ['News flow', 'recent bearish signals'],
+                ['Macro', 'India VIX + global shocks'],
+                ['Valuation', 'rich P/E · P/B vs 52-week'],
+                ['Technical', 'trend & momentum weakness'],
+                ['F&O pressure', 'options / OI build-up'],
+            ];
+            const chips = dims.map(d =>
+                `<div class="rr-empty-dim"><span class="rr-empty-dim-name">${d[0]}</span>`
+                + `<span class="rr-empty-dim-desc">${d[1]}</span></div>`).join('');
+            return `
+            <div class="rr-empty">
+                <div class="rr-empty-head">
+                    <div class="rr-empty-icon">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 12l7-7"/><path d="M12 7a5 5 0 1 0 5 5"/></svg>
+                    </div>
+                    <div>
+                        <div class="rr-empty-title">Portfolio Risk Radar</div>
+                        <div class="rr-empty-sub">A daily <strong>LOW / MEDIUM / HIGH</strong> risk score (0–100) for your holdings, scored across seven dimensions.</div>
+                    </div>
+                    <span class="rr-empty-badge">Daily</span>
+                </div>
+                <div class="rr-empty-dims">${chips}</div>
+                <div class="rr-empty-cta">
+                    <span class="rr-empty-cta-text">Add stocks to your watchlist to see your live risk score.</span>
+                    <button type="button" class="rr-empty-btn" onclick="focusWatchlistSearch()">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+                        Add stocks
+                    </button>
+                </div>
+                <div class="rr-empty-note">One watchlist powers both your Risk Radar and the news below — add a stock once and it appears in both.</div>
+            </div>`;
+        }
+
+        // Scroll to + focus the watchlist search so "Add stocks" is one click away.
+        function focusWatchlistSearch() {
+            const el = document.getElementById('stock-search-input');
+            if (!el) return;
+            try { el.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+            setTimeout(() => { try { el.focus(); } catch (e) {} }, 200);
+        }
+        window.focusWatchlistSearch = focusWatchlistSearch;
 
         function _rrMeter(score, level) {
             const pct = Math.max(2, Math.min(98, score || 0));
