@@ -49,7 +49,11 @@ first), and stop any server you were told to start when done.
 
 **Backend (Flask):** `C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe backend/app.py` — serves on port 5000
 
+<<<<<<< HEAD
 **Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **12 ordered chunks** (`app-core.js` → `app-filings.js`, see below — `app-fno.js` is the F&O Smart-Money view, `app-earnings.js` is the Earnings & Results Intelligence view, `app-filings.js` is the Exchange Filing Alerts view) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
+=======
+**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **10 ordered chunks** (`app-core.js` → `app-calendar.js`, see below) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 
 Open `http://127.0.0.1:5000` in your browser.
 
@@ -124,11 +128,16 @@ Alpha_Lens/
 │   │   ├── macro_tracker.py     #   MacroDataTracker — commodity/FX/rates snapshot + σ (vol-normalized) shock detection
 │   │   ├── ticker_utils.py      #   Ticker normalization + news-candidate screening helpers
 <<<<<<< HEAD
+<<<<<<< HEAD
 │   │   └── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals
 =======
 │   │   ├── oi_data.py           #   Open-interest data fetch (lazy-imported by signals/technical_analysis)
 │   │   └── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
 >>>>>>> 14c7a44 (commit)
+=======
+│   │   ├── oi_data.py           #   Open-interest data fetch (lazy-imported by signals/technical_analysis)
+│   │   └── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 │   ├── newsproc/                # ── Subpackage: news processing (pure) ──
 │   │   ├── news_rules.py        #   Rule-based news classification + STOCK_KEYWORD_MAP
 │   │   ├── news_data.py         #   Static data tables (MACRO_IMPACT_MAP, keyword lists, ticker sets)
@@ -158,6 +167,7 @@ Alpha_Lens/
 ├── frontend/
 │   ├── index.html               # Main dashboard (stocks ticker, news cards, signals)
 <<<<<<< HEAD
+<<<<<<< HEAD
 │   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/9)
 │   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive, Command Center (2/9)
 │   ├── app-stocks.js            # Watchlist search, portfolio assistant (3/9)
@@ -170,6 +180,8 @@ Alpha_Lens/
 │   ├── app-calendar.js          # Economic-events calendar (10/11)
 │   ├── app-filings.js           # Exchange Filing Alerts feed (11/11)
 =======
+=======
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 │   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/10)
 │   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive, Command Center (2/10)
 │   ├── app-stocks.js            # Watchlist search, portfolio assistant, Risk Radar (3/10)
@@ -180,7 +192,10 @@ Alpha_Lens/
 │   ├── app-ripple.js            # Ripple graph render (8/10)
 │   ├── app-macro.js             # Macro Pulse view (9/10)
 │   ├── app-calendar.js          # Economic-events calendar (10/10)
+<<<<<<< HEAD
 >>>>>>> 14c7a44 (commit)
+=======
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 │   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries, lazy-loaded)
 │   ├── sw.js                    # PWA service worker (cache-first static, network-first HTML/API)
 │   └── styles.css               # Dashboard styling
@@ -228,7 +243,10 @@ Alpha_Lens/
 =======
 | `marketdata/oi_data.py` | Open-interest fetch; lazy-imported by `signals/technical_analysis.py` |
 | `marketdata/earnings_data.py` | **Pure** earnings math (no I/O) — Indian fiscal-quarter labels, YoY/QoQ growth, margins (bps), EPS-surprise classification, rule-based quarter verdict, and `build_scorecard()`. Backs `/api/earnings/intelligence`; unit-tested in `tests/test_earnings_data.py` |
+<<<<<<< HEAD
 >>>>>>> 14c7a44 (commit)
+=======
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 | `newsproc/news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` |
 | `newsproc/news_data.py` | Pure static data tables — `MACRO_IMPACT_MAP`, materiality/noise keyword lists, ticker-parsing sets |
 | `newsproc/calendar_seed.py` | Pure static seed for the macro/economic-events calendar (`CALENDAR_EVENTS_SEED`) |
@@ -443,10 +461,14 @@ mirroring the dashboard's Command Center ("lead with value").
   Per-stock composite = weighted blend (technical .42 / news .26 / F&O .18 / valuation .14)
   renormalized over whichever dims a name has; overall =
 <<<<<<< HEAD
+<<<<<<< HEAD
   `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **47** (F&O layer + Nifty Outlook).
 =======
   `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. (This addition took the route count to 43.)
 >>>>>>> 14c7a44 (commit)
+=======
+  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. (This addition took the route count to 43.)
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 - **Frontend:** `loadRiskRadar()` / `renderRiskRadar()` + helpers (`_rrDimTile`,
   `_rrStockRow`, `_rrMeter`, `_rrSkeleton`, `_rrErrorState`) in `app-stocks.js`. Renders a
   hero (big score + level + summary + a LOW→HIGH meter), 6 dimension tiles (each with a
@@ -902,10 +924,14 @@ git commit -m "Add feature X and document in CLAUDE.md"
   - **Numbers**: use `font-variant-numeric: tabular-nums` for any changing figure so columns/prices don't jitter — applied to `.font-mono` and `.terminal-table` cells. Prefer the `.font-mono` data utility for prices, %, P&L, confidence.
   - **Removed gimmick motion** (read as "vibe-coded", not premium): the cursor-glow trail and scroll-linked KPI parallax were deleted from `app-premium.js`, and the full-card 3D tilt + magnetic-button pull were removed from `initPremiumInteractions()`. The subtle per-panel glass spotlight, digit-flip, skeleton-swap, stagger, and ticker-hover preview were **kept** (purposeful micro-interactions). Don't re-add cursor trails / parallax.
 <<<<<<< HEAD
+<<<<<<< HEAD
   - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree; `app-fno.js` is the F&O view, loaded between `app-macro.js` and `app-calendar.js`). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, the `sw.js` `isStaticAsset` regex (which **enumerates each chunk name** — add the new one), and the `/app-` rule in `app.py` `_CACHE_RULES` (a **prefix**, so it auto-covers new chunks). Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
 =======
   - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
 >>>>>>> 14c7a44 (commit)
+=======
+  - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).
 - **`print()` is globally `safe_print`** (top of `app.py`): `_real_print = builtins.print` is captured first, then `builtins.print = safe_print` shadows it process-wide. So **every bare `print()` in any module** (workers, `performance_report`, etc.) is automatically guarded against I/O errors on a closed stdout (e.g. the Flask reloader / gunicorn worker recycle) — no need to hunt down call-sites. `safe_print` calls `_real_print` directly to avoid infinite recursion once `print` points back at itself.
 - **Database**: SQLite files (`news_cache.db`, `users.db`) are created on first run. Delete to reset.
@@ -924,10 +950,14 @@ git commit -m "Add feature X and document in CLAUDE.md"
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
 <<<<<<< HEAD
+<<<<<<< HEAD
   This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **48 routes**. Then run the test suite (`python -m unittest discover -s tests`).
 =======
   This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **44 routes**. Then run the test suite (`python -m unittest discover -s tests`).
 >>>>>>> 14c7a44 (commit)
+=======
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **44 routes**. Then run the test suite (`python -m unittest discover -s tests`).
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 
 ## Context7 MCP — Library Documentation
 

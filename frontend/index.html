@@ -175,7 +175,11 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
+<<<<<<< HEAD
     <link rel="stylesheet" href="/styles.css?v=al-v28-2026-06-08-earnings">
+=======
+    <link rel="stylesheet" href="/styles.css?v=al-v19-2026-06-08-earnings">
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 </head>
 
 <body class="antialiased">
@@ -387,10 +391,13 @@
                     class="nav-link text-white/50 hover:text-white transition flex items-center gap-2 stock-mode-element">
                     <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span>Signal Terminal
                 </a>
+<<<<<<< HEAD
                 <a href="#" id="nav-filings" onclick="switchTab('filings'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition flex items-center gap-2 stock-mode-element">
                     <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--amber);box-shadow:0 0 6px var(--amber)"></span>Filings
                 </a>
+=======
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
                 <a href="#" id="nav-earnings" onclick="switchTab('earnings'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Earnings</a>
                 <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;"
@@ -433,7 +440,10 @@
             <a href="#" class="mtab stock-mode-element" data-mtab="calendar" onclick="switchTab('calendar'); return false;">Calendar</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="portfolio" onclick="switchTab('portfolio'); return false;">Portfolio</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="terminal" onclick="switchTab('terminal'); return false;">Signal Terminal</a>
+<<<<<<< HEAD
             <a href="#" class="mtab stock-mode-element" data-mtab="filings" onclick="switchTab('filings'); return false;">Filings</a>
+=======
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
             <a href="#" class="mtab stock-mode-element" data-mtab="earnings" onclick="switchTab('earnings'); return false;">Earnings</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="stocks" onclick="switchTab('stocks'); return false;">Track Record</a>
         </nav>
@@ -1371,6 +1381,7 @@
             </div>
 
             <!-- ============================================== -->
+<<<<<<< HEAD
             <!-- VIEW 7: EXCHANGE FILING ALERTS                 -->
             <!-- ============================================== -->
             <div id="view-filings" class="hidden max-w-7xl mx-auto w-full mt-4 stock-mode-element">
@@ -1431,6 +1442,9 @@
 
             <!-- ============================================== -->
             <!-- VIEW 8: EARNINGS & RESULTS INTELLIGENCE          -->
+=======
+            <!-- VIEW 6.5: EARNINGS & RESULTS INTELLIGENCE        -->
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
             <!-- Sits between Signal Terminal and Track Record.   -->
             <!-- ============================================== -->
             <div id="view-earnings" class="hidden max-w-7xl mx-auto w-full mt-4 stock-mode-element">
@@ -1541,6 +1555,7 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
+<<<<<<< HEAD
     <script src="/app-core.js?v=al-v28-2026-06-08-earnings" defer></script>
     <script src="/app-news.js?v=al-v28-2026-06-08-earnings" defer></script>
     <script src="/app-stocks.js?v=al-v28-2026-06-08-earnings" defer></script>
@@ -1553,6 +1568,18 @@
     <script src="/app-fno.js?v=al-v28-2026-06-08-earnings" defer></script>
     <script src="/app-calendar.js?v=al-v28-2026-06-08-earnings" defer></script>
     <script src="/app-filings.js?v=al-v28-2026-06-08-earnings" defer></script>
+=======
+    <script src="/app-core.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-news.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-stocks.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-market.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-premium.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-terminal.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-earnings.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-ripple.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-macro.js?v=al-v19-2026-06-08-earnings" defer></script>
+    <script src="/app-calendar.js?v=al-v19-2026-06-08-earnings" defer></script>
+>>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 </body>
 
 </html>
