@@ -140,7 +140,8 @@ function _fnoRenderBias(d) {
         fillEl.style.background = color;
     }
     if (subEl) {
-        subEl.innerHTML = `Bias score <strong style="color:${color}">${Number(b.score || 0) >= 0 ? '+' : ''}${Number(b.score || 0).toFixed(0)}</strong> `
+        const _g = (typeof glossTerm === 'function') ? glossTerm : (l) => l;
+        subEl.innerHTML = `${_g('Bias score', 'bias_score')} <strong style="color:${color}">${Number(b.score || 0) >= 0 ? '+' : ''}${Number(b.score || 0).toFixed(0)}</strong> `
             + `· ${_fnoNumF(b.bull_pressure)} bull / ${_fnoNumF(b.bear_pressure)} bear pressure`;
     }
 }
@@ -149,10 +150,11 @@ function _fnoRenderStats(d) {
     const vix = d.india_vix;
     const vixTxt = (vix === null || vix === undefined) ? '—' : Number(vix).toFixed(2);
     const vixCls = (vix == null) ? 'flat' : (vix >= 18 ? 'bear' : vix <= 12 ? 'bull' : 'flat');
+    const _g = (typeof glossTerm === 'function') ? glossTerm : (l) => l;
     const cells = [
-        [_fnoNumF(c['Long Buildup'] || 0), 'Long Buildup', 'bull'],
-        [_fnoNumF(c['Short Buildup'] || 0), 'Short Buildup', 'bear'],
-        [vixTxt, 'India VIX', vixCls],
+        [_fnoNumF(c['Long Buildup'] || 0), _g('Long Buildup', 'long_buildup'), 'bull'],
+        [_fnoNumF(c['Short Buildup'] || 0), _g('Short Buildup', 'short_buildup'), 'bear'],
+        [vixTxt, _g('India VIX', 'india_vix'), vixCls],
         [_fnoNumF(d.universe_count || 0), 'F&O Universe', 'flat'],
     ];
     const el = document.getElementById('fno-stats');
@@ -313,6 +315,7 @@ function _fnoRenderSetups(setups) {
 function _fnoRenderIndexMatrix(rows) {
     const el = document.getElementById('fno-index-grid');
     if (!el) return;
+    const _g = (typeof glossTerm === 'function') ? glossTerm : (l) => l;
     if (!rows.length) {
         el.innerHTML = _fnoMini('No index option data in the latest bhavcopy.');
         document.getElementById('fno-index-section').style.display = '';
@@ -327,14 +330,14 @@ function _fnoRenderIndexMatrix(rows) {
         return `<button type="button" class="fno-idx-card" onclick="openFnoOptionChain('${escapeHtml(r.symbol)}')">
             <div class="fno-idx-head"><span class="fno-idx-name">${escapeHtml(r.label || r.symbol)}</span>${_fnoSentChip(r.sentiment)}</div>
             <div class="fno-idx-spot">${r.spot ? _fnoNumF(r.spot, 0) : '—'}</div>
-            <div class="fno-idx-pcr"><span class="fno-idx-pcr-num ${pcrCls}">${pcr}</span><span class="fno-idx-pcr-lbl">PCR</span></div>
+            <div class="fno-idx-pcr"><span class="fno-idx-pcr-num ${pcrCls}">${pcr}</span><span class="fno-idx-pcr-lbl">${_g('PCR', 'pcr')}</span></div>
             <div class="fno-idx-rows">
-                <div class="fno-idx-row"><span>Max Pain</span><strong>${r.max_pain ? _fnoNumF(r.max_pain, 0) : '—'}</strong></div>
+                <div class="fno-idx-row"><span>${_g('Max Pain', 'max_pain')}</span><strong>${r.max_pain ? _fnoNumF(r.max_pain, 0) : '—'}</strong></div>
                 ${gapTxt ? `<div class="fno-idx-row"><span></span>${gapTxt}</div>` : ''}
-                <div class="fno-idx-row"><span>Call Wall (R)</span><strong class="bear">${r.call_wall ? _fnoNumF(r.call_wall, 0) : '—'}</strong></div>
-                <div class="fno-idx-row"><span>Put Wall (S)</span><strong class="bull">${r.put_wall ? _fnoNumF(r.put_wall, 0) : '—'}</strong></div>
-                <div class="fno-idx-row"><span>ATM IV</span><strong>${r.atm_iv != null ? Number(r.atm_iv).toFixed(1) + '%' : '—'}</strong></div>
-                <div class="fno-idx-row"><span>Basis</span><strong class="${r.basis_pct >= 0 ? 'bull' : 'bear'}">${r.basis_pct != null ? (r.basis_pct >= 0 ? '+' : '') + Number(r.basis_pct).toFixed(2) + '%' : '—'}</strong></div>
+                <div class="fno-idx-row"><span>${_g('Call Wall (R)', 'call_wall')}</span><strong class="bear">${r.call_wall ? _fnoNumF(r.call_wall, 0) : '—'}</strong></div>
+                <div class="fno-idx-row"><span>${_g('Put Wall (S)', 'put_wall')}</span><strong class="bull">${r.put_wall ? _fnoNumF(r.put_wall, 0) : '—'}</strong></div>
+                <div class="fno-idx-row"><span>${_g('ATM IV', 'atm_iv')}</span><strong>${r.atm_iv != null ? Number(r.atm_iv).toFixed(1) + '%' : '—'}</strong></div>
+                <div class="fno-idx-row"><span>${_g('Basis', 'basis')}</span><strong class="${r.basis_pct >= 0 ? 'bull' : 'bear'}">${r.basis_pct != null ? (r.basis_pct >= 0 ? '+' : '') + Number(r.basis_pct).toFixed(2) + '%' : '—'}</strong></div>
             </div>
         </button>`;
     }).join('');
@@ -528,14 +531,16 @@ function _renderFnoOptionChain(d) {
     const gap = d.max_pain_gap_pct;
     const skew = d.iv_skew;
 
+    // Labels carry a glossary affordance (hover/tap → plain-English definition).
+    const _g = (typeof glossTerm === 'function') ? glossTerm : (l) => l;
     const stats = [
-        [`<span class="${pcrCls}">${pcr}</span>`, 'PCR (OI)'],
-        [d.atm_iv != null ? `${Number(d.atm_iv).toFixed(1)}%` : '—', 'ATM IV'],
-        [(skew != null) ? `<span class="${skew >= 0 ? 'bear' : 'bull'}">${skew >= 0 ? '+' : ''}${Number(skew).toFixed(1)}</span>` : '—', 'IV Skew P−C'],
-        [d.max_pain ? _fnoNumF(d.max_pain, 0) : '—', 'Max Pain'],
-        [(gap != null) ? `<span class="${gap >= 0 ? 'bull' : 'bear'}">${gap >= 0 ? '+' : ''}${Number(gap).toFixed(1)}%</span>` : '—', 'Spot vs Pain'],
-        [d.call_wall ? `<span class="bear">${_fnoNumF(d.call_wall, 0)}</span>` : '—', 'Call Wall (R)'],
-        [d.put_wall ? `<span class="bull">${_fnoNumF(d.put_wall, 0)}</span>` : '—', 'Put Wall (S)'],
+        [`<span class="${pcrCls}">${pcr}</span>`, _g('PCR (OI)', 'pcr')],
+        [d.atm_iv != null ? `${Number(d.atm_iv).toFixed(1)}%` : '—', _g('ATM IV', 'atm_iv')],
+        [(skew != null) ? `<span class="${skew >= 0 ? 'bear' : 'bull'}">${skew >= 0 ? '+' : ''}${Number(skew).toFixed(1)}</span>` : '—', _g('IV Skew P−C', 'iv_skew')],
+        [d.max_pain ? _fnoNumF(d.max_pain, 0) : '—', _g('Max Pain', 'max_pain')],
+        [(gap != null) ? `<span class="${gap >= 0 ? 'bull' : 'bear'}">${gap >= 0 ? '+' : ''}${Number(gap).toFixed(1)}%</span>` : '—', _g('Spot vs Pain', 'max_pain')],
+        [d.call_wall ? `<span class="bear">${_fnoNumF(d.call_wall, 0)}</span>` : '—', _g('Call Wall (R)', 'call_wall')],
+        [d.put_wall ? `<span class="bull">${_fnoNumF(d.put_wall, 0)}</span>` : '—', _g('Put Wall (S)', 'put_wall')],
     ];
 
     const ivCell = (iv, delta, side) =>

@@ -165,7 +165,8 @@ Alpha_Lens/
 │   ├── app-macro.js             # Macro Pulse view (9/12)
 │   ├── app-fno.js               # F&O Smart-Money board + option-chain modal (10/12)
 │   ├── app-calendar.js          # Economic-events calendar (11/12)
-│   ├── app-filings.js           # Exchange Filing Alerts feed (12/12)
+│   ├── app-filings.js           # Exchange Filing Alerts feed (12/13)
+│   ├── app-glossary.js          # Beginner explain-layer — JARGON map + delegated tooltip for [data-term] (13/13)
 │   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries, lazy-loaded)
 │   ├── sw.js                    # PWA service worker (cache-first static, network-first HTML/API)
 │   └── styles.css               # Dashboard styling
@@ -916,6 +917,31 @@ reproducible, cacheable, never hallucinates a ticker).
   `/api/filings` now also returns `explainers` (per-type deep map) + `disclaimer`, so the
   modal needs no extra request. Tested in `tests/test_filing_explain.py`. New env knobs:
   `FILINGS_WORKER_DISABLED`, `FILINGS_REFRESH_MIN` (15).
+
+## The Beginner Explain-Layer (glossary tooltips)
+
+A site-wide **deterministic glossary** (no LLM) so a normal investor can learn the jargon
+in place. New chunk **`app-glossary.js`** (13/13) holds a `JARGON` map (`key → {term, short,
+long}`) + **one delegated tooltip** that fires for any element with class `gloss`
+(`data-term="<key>"`) — hover on desktop, tap on mobile. Render a term with the global
+helper **`glossTerm('PCR', 'pcr')`** → a faint dotted label + a `?` chip; unknown keys fall
+back to the plain label, so it's safe to sprinkle anywhere.
+
+- **Covered so far (highest-jargon surface first):** the F&O **option-chain modal** stats
+  (PCR / ATM IV / IV skew / max pain / spot-vs-pain / call & put walls), the F&O **index
+  matrix** (PCR / max pain / walls / ATM IV / basis), and the F&O hero (**India VIX**, long/
+  short buildup, **bias score**). Extending to the Signal Terminal (conviction / ATR / hit
+  rate), Macro Pulse, and Risk Radar dims is now trivial — just wrap the label in
+  `glossTerm()`; the infra (map + tooltip + `.gloss`/`.gloss-tip` CSS) is shared.
+- **Honesty fix (overlapping quick win):** the **Macro Impact Flow** panel's pulsing emerald
+  `live-dot` + **"AI mapped"** badge (misleading — the content is rule-based now that AI is
+  paused) was replaced with a plain **"Likely transmission path"** label. The "Plain English
+  Decode" panel was left (its header is honest; it already falls back to `explanation` /
+  deterministic text). The map/pathway code (`app-news.js`) already builds real `TICKER
+  (Direction)` steps from `affected_stocks` when present.
+- **Registering a new chunk** (done for `app-glossary.js`): `index.html` script tag +
+  `sw.js isStaticAsset` regex + the `/app-` prefix in `app.py _CACHE_RULES` already covers
+  it; bump `?v=` / `CACHE_VERSION`. No backend, no keys.
 
 ## Development Workflow
 
