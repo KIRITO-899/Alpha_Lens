@@ -8,7 +8,7 @@
         let currentArchiveFilter = 'all';
         let selectedHeadlineKey = '';
         let marketOpen = true;  // Updated from API — controls whether stock changes are shown
-        const tabs = ['top-news', 'all-news', 'fno', 'macro-pulse', 'calendar', 'portfolio', 'stocks', 'terminal', 'filings'];
+        const tabs = ['top-news', 'all-news', 'fno', 'macro-pulse', 'calendar', 'portfolio', 'stocks', 'terminal', 'earnings', 'filings'];
 
         function getNewsKey(newsItem) {
             return (newsItem?.headline || '').trim().toLowerCase();
@@ -356,7 +356,7 @@
         // Nav links that must stay hidden in non-stock mode
         // Terminal is stock-only — every row is a ticker signal, so it has
         // zero meaning when the user has toggled off the stock-mode UI.
-        const STOCK_NAV_IDS = ['nav-fno', 'nav-macro-pulse', 'nav-calendar', 'nav-portfolio', 'nav-stocks', 'nav-terminal', 'nav-filings'];
+        const STOCK_NAV_IDS = ['nav-fno', 'nav-macro-pulse', 'nav-calendar', 'nav-portfolio', 'nav-stocks', 'nav-terminal', 'nav-earnings', 'nav-filings'];
 
         function updateAppHeaderOffset() {
             const headerEls = [
@@ -423,6 +423,7 @@
             if (targetTabId === 'fno' && typeof fetchFnoSmartMoney === 'function') fetchFnoSmartMoney();
             if (targetTabId === 'filings' && typeof fetchFilings === 'function') fetchFilings();
             if (targetTabId === 'portfolio' && typeof loadRiskRadar === 'function') loadRiskRadar();
+            if (targetTabId === 'earnings' && typeof loadEarningsIntel === 'function') loadEarningsIntel();
             updateAppHeaderOffset();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
