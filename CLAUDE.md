@@ -49,7 +49,7 @@ first), and stop any server you were told to start when done.
 
 **Backend (Flask):** `C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe backend/app.py` — serves on port 5000
 
-**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **10 ordered chunks** (`app-core.js` → `app-calendar.js`, see below — `app-fno.js` is the F&O Smart-Money view) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
+**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **11 ordered chunks** (`app-core.js` → `app-filings.js`, see below — `app-fno.js` is the F&O Smart-Money view, `app-filings.js` is the Exchange Filing Alerts view) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
 
 Open `http://127.0.0.1:5000` in your browser.
 
@@ -127,7 +127,8 @@ Alpha_Lens/
 │   │   ├── news_rules.py        #   Rule-based news classification + STOCK_KEYWORD_MAP
 │   │   ├── news_data.py         #   Static data tables (MACRO_IMPACT_MAP, keyword lists, ticker sets)
 │   │   ├── calendar_seed.py     #   Macro/economic-events calendar seed (CALENDAR_EVENTS_SEED)
-│   │   └── portfolio_data.py    #   Portfolio-assistant ticker-detection lookup tables
+│   │   ├── portfolio_data.py    #   Portfolio-assistant ticker-detection lookup tables
+│   │   └── filing_classifier.py #   Pure exchange-filing → plain-English alert classifier (9 event types)
 │   ├── signals/                 # ── Subpackage: signal generation ──
 │   │   ├── prediction_models.py #   Multi-model ensemble (Sentiment, Historical, Sector, Event)
 │   │   ├── technical_analysis.py#   RSI, SMA, Bollinger Bands, market regime detection
@@ -157,9 +158,10 @@ Alpha_Lens/
 │   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/9)
 │   ├── app-terminal.js          # Stock drawer, signal terminal, backtest, notifications (6/9)
 │   ├── app-ripple.js            # Ripple graph render (7/9)
-│   ├── app-macro.js             # Macro Pulse view (8/10)
-│   ├── app-fno.js               # F&O Smart-Money board + option-chain modal (9/10)
-│   ├── app-calendar.js          # Economic-events calendar (10/10)
+│   ├── app-macro.js             # Macro Pulse view (8/11)
+│   ├── app-fno.js               # F&O Smart-Money board + option-chain modal (9/11)
+│   ├── app-calendar.js          # Economic-events calendar (10/11)
+│   ├── app-filings.js           # Exchange Filing Alerts feed (11/11)
 │   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries, lazy-loaded)
 │   ├── sw.js                    # PWA service worker (cache-first static, network-first HTML/API)
 │   └── styles.css               # Dashboard styling
@@ -207,6 +209,7 @@ Alpha_Lens/
 | `newsproc/news_data.py` | Pure static data tables — `MACRO_IMPACT_MAP`, materiality/noise keyword lists, ticker-parsing sets |
 | `newsproc/calendar_seed.py` | Pure static seed for the macro/economic-events calendar (`CALENDAR_EVENTS_SEED`) |
 | `newsproc/portfolio_data.py` | Pure lookup tables for the portfolio assistant's ticker detection |
+| `newsproc/filing_classifier.py` | **Exchange Filing Alerts** classifier — pure (stdlib `re`). `classify_filing(text, category, subcategory)` buckets a BSE announcement / catalyst headline into one of 9 material event types (promoter pledge / insider buy-sell / rating change / acquisition / resignation / order win / bonus / split / dividend) with `impact` (positive/negative/neutral), `severity`, a plain-English `explanation`, and extracted `detail` (₹/%/ratio/agency). No LLM. Feeds `/api/filings` |
 | `signals/prediction_models.py` | 5-model ensemble predictor — sentiment, historical, sector, event, aggregation |
 | `signals/technical_analysis.py` | RSI, SMA, Bollinger Bands, volume analysis, market regime detection. Now also returns `avg_volume_20d` (for the liquidity filter) |
 | `signals/calibration.py` | Maps ensemble score → empirical P(target before stop); meta-label gate (levers #1/#4). Loads `calibration_map.json`; gate OFF by default (`CALIBRATION_GATE_ENABLED`) |
@@ -686,6 +689,65 @@ a major upgrade — all still **deterministic, EOD, zero keys**:
   `tests/test_fno_advanced.py` (directional conviction, max-pain tie, basis/rollover, IV
   attach, FII net, setups, ranked walls).
 
+## The Exchange Filing Alerts (corporate-actions radar)
+
+A dedicated **Filings** tab — sitting in the nav **between Signal Terminal and Track
+Record** — that surfaces the market-moving corporate filings companies report to the
+exchange and **decodes each into plain English a normal investor understands**. Nine
+material event types are detected: **promoter pledge · insider buy/sell · resignation ·
+acquisition / M&A · order win · rating change · dividend · split · bonus**. Like Risk
+Radar / Ripple 2.0 / F&O it is **purely deterministic — NO Gemini/LLM call** (zero keys,
+reproducible, cacheable, never hallucinates a ticker).
+
+- **Classifier engine:** `newsproc/filing_classifier.py` — **pure** (stdlib `re` only).
+  `classify_filing(text, category, subcategory)` runs ordered, priority-ranked detectors
+  (most-specific first, so "board to consider dividend **and bonus**" buckets as the more
+  material *bonus*) and returns `{type, type_label, impact, severity, severity_rank,
+  explanation, detail, headline}` — or `None` if the line isn't one of the nine types.
+  **`impact`** (positive/negative/neutral) is the *typical* reaction to that **kind** of
+  event (pledge-created → negative, pledge-released → positive, insider-buy → positive,
+  rating-downgrade → negative-high, order-win → positive, etc.), framed in the UI as
+  "what this usually means", NOT advice/prediction; unknown directions resolve to neutral.
+  Best-effort `detail` extraction (₹ dividend per share, pledge %, order/deal value with
+  cr/lakh scaling, split/bonus ratio, rating agency + direction). Guards: a **SEBI/court/
+  NCLT order** is never mis-read as an "order win".
+- **Data sources (defensive, two-tier):**
+  1. **Primary — BSE structured corporate filings** (canonical). `fetch_bse_filings()` in
+     `app.py` pulls the same `api.bseindia.com` announcements API as
+     `fetch_bse_announcements` but returns the **structured** fields (company, scrip,
+     category, subcategory, datetime, PDF link) and does **not** pre-filter — the
+     classifier decides materiality. Links to the actual BSE filing PDF.
+  2. **Secondary — already-scraped catalyst news** (resilience). When BSE is flaky the feed
+     still populates from the `news` table (the regulatory / landmine RSS queries), each
+     headline run through the same classifier; **requires a mapped ticker** (precision over
+     recall) and links to a Google-News search. Marked `source:"News"` vs `"BSE Filing"`.
+  - Merge + **dedup** (same stock + type + day → keep the canonical filing over news, then
+    higher severity, then newer). Newest-first feed. Cross-source timestamps normalized to
+    absolute epoch (BSE NEWS_DT is **IST**, news `created_at` is **UTC**).
+- **Route:** `GET /api/filings?type=<key>&limit=N` (in `app.py`). Full classified set
+  cached `FILINGS_TTL_SECS` (600); filtering by type happens on read. Defensive — each
+  source isolated, returns a **safe shell (HTTP 200)** rather than 500, with a `degraded`
+  `{bse, news}` flag. Response also carries `types[]` (label + per-type count) for the
+  filter pills. **Route count is now 48.**
+- **Frontend:** `app-filings.js` (chunk 11/11) — `fetchFilings()` + render helpers +
+  `setFilingFilter()`. View `#view-filings`, lazy-loaded by `switchTab('filings')`, 60s
+  client throttle over the 10-min server cache. Hero (live-alert count + freshness),
+  type-filter pills with icons + counts, and a card grid (1-col → 2-col ≥980px): each card
+  has a left accent bar + impact chip colored by direction (green/red/amber), a type badge
+  with SVG icon, ticker chip, the raw filing headline, the plain-English explanation, an
+  extracted-detail chip, source label, and a "View filing"/"Read more" link. Honest
+  empty/error/filtered states (never a broken skeleton) + a "how to read this" disclaimer.
+  `.fil-*` CSS block (token-based, mobile card stack). Verified via the static-harness +
+  Claude Preview workflow.
+- **⚠️ Same BSE caveat as the news pipeline:** the live BSE announcements API could not be
+  exercised against live data in the build env — validate in production via the `[FILINGS]`
+  logs + `feed_stats['bse_filings']`; the news-table fallback guarantees the feed is never
+  empty when workers are running. Env knobs: `FILINGS_TTL_SECS` (600), `FILINGS_MAX` (90),
+  `FILINGS_NEWS_LOOKBACK_DAYS` (5), `BSE_ANNOUNCEMENTS_ENABLED` (shared with the news path).
+- **Tests:** `tests/test_filing_classifier.py` (23 cases — every type, buy-vs-sell &
+  upgrade-vs-downgrade direction, pledge release/invocation, priority/overlap, the
+  SEBI-order guard, category-hint use, figure extraction, empty/None safety).
+
 ## Development Workflow
 
 When you add or modify features in Alpha_Lens, follow this workflow:
@@ -745,7 +807,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **47 routes**. Then run the test suite (`python -m unittest discover -s tests`).
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **48 routes**. Then run the test suite (`python -m unittest discover -s tests`).
 
 ## Context7 MCP — Library Documentation
 

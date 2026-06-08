@@ -1148,6 +1148,65 @@ def fetch_bse_announcements(lookback_days=1, cap=60):
         _feed_stat("bse_announcements", "fail", err=e)
         return []
 
+
+def fetch_bse_filings(lookback_days=2, cap=200):
+    """STRUCTURED BSE corporate-filing rows for the Exchange Filing Alerts feed.
+
+    Unlike fetch_bse_announcements (which maps to the news-pipeline article dict
+    and keyword-filters), this returns the raw structured fields the filing
+    classifier needs and does NOT pre-filter — the classifier decides what is a
+    material event. Never raises → returns [] on any failure.
+
+    Each row: {company, scrip, subject, category, subcategory, dt_raw, url}.
+    """
+    if os.environ.get("BSE_ANNOUNCEMENTS_ENABLED", "1").lower() not in ("1", "true", "yes"):
+        return []
+    try:
+        _now_ist = datetime.now(_BSE_IST)
+        d_to = _now_ist.strftime("%Y%m%d")
+        d_from = (_now_ist - timedelta(days=lookback_days)).strftime("%Y%m%d")
+        url = ("https://api.bseindia.com/BseIndiaAPI/api/AnnGetData/w"
+               f"?pageno=1&strCat=-1&strPrevDate={d_from}&strScrip=&strSearch=P"
+               f"&strToDate={d_to}&strType=C&subcategory=-1")
+        hdrs = {"User-Agent": _ua(), "Accept": "application/json",
+                "Referer": "https://www.bseindia.com/corporates/ann.html",
+                "Origin": "https://www.bseindia.com"}
+        resp = HTTP_SESSION.get(url, headers=hdrs, timeout=12)
+        if resp.status_code != 200:
+            _feed_stat("bse_filings", "fail", err=f"HTTP {resp.status_code}")
+            return []
+        try:
+            data = resp.json()
+        except Exception:
+            _feed_stat("bse_filings", "fail", err="non-json")
+            return []
+        rows = data.get("Table", []) if isinstance(data, dict) else []
+        out = []
+        for r in rows:
+            company = str(r.get("SLONGNAME") or r.get("SHORTNAME") or "").strip()
+            subj = str(r.get("NEWSSUB") or r.get("HEADLINE") or "").strip()
+            if not company or not subj:
+                continue
+            _att = str(r.get("ATTACHMENTNAME") or "").strip()
+            _url = (f"https://www.bseindia.com/xml-data/corpfiling/AttachLive/{_att}"
+                    if _att else "https://www.bseindia.com/corporates/ann.html")
+            out.append({
+                "company": company,
+                "scrip": str(r.get("SCRIP_CD") or "").strip(),
+                "subject": subj,
+                "category": str(r.get("CATEGORYNAME") or "").strip(),
+                "subcategory": str(r.get("SUBCATNAME") or "").strip(),
+                "dt_raw": str(r.get("NEWS_DT") or r.get("DT_TM") or "").strip(),
+                "url": _url,
+            })
+            if len(out) >= cap:
+                break
+        _feed_stat("bse_filings", "ok", n_articles=len(out))
+        return out
+    except Exception as e:
+        _feed_stat("bse_filings", "fail", err=e)
+        return []
+
 # ── GDELT global near-real-time news (free, no-auth, ~15-min index) ──
 # Supplements the RSS feeds with broad Indian-market coverage. GDELT rate-limits
 # hard (HTTP 429), so this is called once per cycle and backs off for
@@ -2158,6 +2217,12 @@ from newsproc.news_rules import (
     CATEGORY_KEYWORDS, classify_category,
     STOCK_KEYWORD_MAP,
 )
+
+# Pure exchange-filing classifier — turns a raw BSE announcement / catalyst news
+# line into one of nine material event types (pledge / insider / rating / M&A /
+# resignation / order / bonus / split / dividend) with plain-English impact.
+# Powers the "Exchange Filing Alerts" feed (/api/filings).
+from newsproc.filing_classifier import classify_filing, FILING_TYPE_LABELS
 
 # Static news-engine data tables (macro impact map, materiality / noise keyword
 # lists, ticker-parsing sets) were extracted to news_data.py. Imported back so
@@ -5941,6 +6006,201 @@ def get_fno_option_chain(symbol):
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# EXCHANGE FILING ALERTS  (/api/filings)
+# Material corporate filings — promoter pledge, insider buy/sell, resignations,
+# acquisitions, order wins, rating changes, dividends, splits, bonuses — each
+# classified into a plain-English, normal-investor-friendly alert.
+#
+# Primary source: BSE structured corporate announcements (canonical exchange
+# filings). Secondary/resilient source: already-scraped catalyst news (the
+# regulatory / landmine RSS queries), so the feed stays populated even when the
+# BSE API is unreachable. Pure classifier (newsproc.filing_classifier) decides
+# what is material — no LLM, deterministic, cached.
+# ════════════════════════════════════════════════════════════════════════════
+FILINGS_TTL_SECS = int(os.environ.get('FILINGS_TTL_SECS', '600'))   # 10-min cache
+FILINGS_MAX = int(os.environ.get('FILINGS_MAX', '90'))
+FILINGS_NEWS_LOOKBACK_DAYS = int(os.environ.get('FILINGS_NEWS_LOOKBACK_DAYS', '5'))
+_FILINGS_CACHE = {'t': 0.0, 'data': None}
+_FILINGS_LOCK = threading.Lock()
+_FILINGS_IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _filing_ticker_for(text):
+    """Best-effort map a company name / headline to an NSE ticker via the static
+    STOCK_KEYWORD_MAP (longest keyword first, word-boundary). Pure, no network.
+    Returns (ticker_or_None, base_or_'')."""
+    if not text:
+        return None, ""
+    h = f" {str(text).lower()} "
+    for keyword, ticker in sorted(STOCK_KEYWORD_MAP.items(), key=lambda x: -len(x[0])):
+        if re.search(r'\b' + re.escape(keyword.lower()) + r'\b', h):
+            t = normalize_ticker(ticker)
+            if t:
+                return t, ticker_base(t)
+    return None, ""
+
+
+def _parse_filing_dt(s, assume_ist=False):
+    """Parse a BSE NEWS_DT (IST) or SQLite created_at (UTC) into absolute epoch
+    seconds so cross-source sorting is correct. 0.0 on unparseable input."""
+    s = str(s or '').strip()
+    if not s:
+        return 0.0
+    s2 = s.replace('T', ' ').replace('Z', '').strip()
+    tz = _FILINGS_IST if assume_ist else timezone.utc
+    for fmt in ('%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M',
+                '%Y-%m-%d', '%d %b %Y %H:%M:%S', '%b %d %Y %I:%M%p',
+                '%d-%m-%Y %H:%M:%S', '%d/%m/%Y %H:%M:%S'):
+        try:
+            return datetime.strptime(s2, fmt).replace(tzinfo=tz).timestamp()
+        except ValueError:
+            continue
+    return 0.0
+
+
+def _filings_rank(x):
+    """Dedup tie-break: canonical filing > news, then severity, then recency."""
+    return (1 if x['source_type'] == 'filing' else 0, x['severity_rank'], x['ts_ms'])
+
+
+def _collect_exchange_filings():
+    """Assemble, classify, dedup and rank the exchange-filing feed. Defensive —
+    each source is isolated; returns a safe shell (never raises) so the route
+    degrades to an honest empty state rather than 500."""
+    items = []
+    degraded = {'bse': False, 'news': False}
+
+    # ── Source A: BSE structured corporate filings (canonical) ──
+    try:
+        rows = fetch_bse_filings()
+        if not rows:
+            degraded['bse'] = True
+        for r in rows:
+            cls = classify_filing(r.get('subject'), r.get('category'), r.get('subcategory'))
+            if not cls:
+                continue
+            ticker, base = _filing_ticker_for(r.get('company'))
+            ts = _parse_filing_dt(r.get('dt_raw'), assume_ist=True)
+            items.append({**cls,
+                'company': r.get('company') or base,
+                'ticker': ticker,
+                'ticker_base': base or (ticker.rsplit('.', 1)[0] if ticker else ''),
+                'source': 'BSE Filing', 'source_type': 'filing',
+                'url': r.get('url'), 'ts_ms': int(ts * 1000),
+            })
+    except Exception as exc:
+        degraded['bse'] = True
+        print(f"[FILINGS] BSE source failed: {exc}")
+
+    # ── Source B: already-scraped catalyst news (resilient fallback) ──
+    # Requires a mapped ticker so generic market commentary is excluded —
+    # precision over recall on the secondary source.
+    try:
+        conn = connect_news_db()
+        c = conn.cursor()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=FILINGS_NEWS_LOOKBACK_DAYS)).strftime('%Y-%m-%d %H:%M:%S')
+        c.execute(
+            "SELECT headline, news_time, created_at FROM news WHERE created_at >= ? "
+            "ORDER BY created_at DESC LIMIT ?", (cutoff, 600))
+        news_rows = c.fetchall()
+        conn.close()
+        for headline, news_time, created_at in news_rows:
+            cls = classify_filing(headline)
+            if not cls:
+                continue
+            ticker, base = _filing_ticker_for(headline)
+            if not ticker:
+                continue   # need a concrete stock for a news-derived alert
+            ts = _parse_filing_dt(created_at, assume_ist=False)
+            items.append({**cls,
+                'company': base,
+                'ticker': ticker, 'ticker_base': base,
+                'source': 'News', 'source_type': 'news',
+                'url': 'https://news.google.com/search?q=' + requests.utils.quote(headline or ''),
+                'ts_ms': int(ts * 1000),
+            })
+    except Exception as exc:
+        degraded['news'] = True
+        print(f"[FILINGS] news source failed: {exc}")
+
+    # ── Dedup the same event reported by both sources (same stock + type + day) ──
+    best = {}
+    for it in items:
+        day = (it['ts_ms'] // 86400000) if it['ts_ms'] else 0
+        ident = (it['ticker_base'] or it['company'] or it['headline'] or '').lower()
+        key = f"{ident}|{it['type']}|{day}"
+        cur = best.get(key)
+        if cur is None or _filings_rank(it) > _filings_rank(cur):
+            best[key] = it
+    merged = sorted(best.values(), key=lambda x: x['ts_ms'], reverse=True)
+
+    counts = {}
+    for it in merged:
+        counts[it['type']] = counts.get(it['type'], 0) + 1
+    types = [{'key': k, 'label': v, 'count': counts.get(k, 0)}
+             for k, v in FILING_TYPE_LABELS.items()]
+
+    return {
+        'filings': merged,
+        'counts': counts,
+        'total': len(merged),
+        'types': types,
+        'degraded': degraded,
+        'as_of_ms': int(time.time() * 1000),
+    }
+
+
+@app.route('/api/filings', methods=['GET'])
+def get_filings():
+    """
+    Exchange Filing Alerts — material corporate filings classified into plain-
+    English investor alerts (pledge / insider / rating / M&A / resignation /
+    order win / dividend / split / bonus).
+
+    Query params:
+      ?type=<key>   filter to one event type (default 'all').
+      ?limit=N      cap returned rows (default FILINGS_MAX, hard max 200).
+
+    The full classified set is cached FILINGS_TTL_SECS; filtering happens on read.
+    Defensive: returns a safe shell (HTTP 200) rather than 500 on any failure.
+    """
+    try:
+        ftype = (request.args.get('type') or 'all').strip().lower()
+        try:
+            limit = min(int(request.args.get('limit', FILINGS_MAX)), 200)
+        except (ValueError, TypeError):
+            limit = FILINGS_MAX
+
+        now = time.time()
+        with _FILINGS_LOCK:
+            cached = _FILINGS_CACHE.get('data')
+            if cached and (now - _FILINGS_CACHE['t']) < FILINGS_TTL_SECS:
+                payload = cached
+            else:
+                payload = _collect_exchange_filings()
+                _FILINGS_CACHE['t'] = now
+                _FILINGS_CACHE['data'] = payload
+
+        items = payload['filings']
+        if ftype and ftype != 'all':
+            items = [f for f in items if f.get('type') == ftype]
+        items = items[:limit]
+
+        out = {k: v for k, v in payload.items() if k != 'filings'}
+        out['filings'] = items
+        out['filter'] = ftype
+        return jsonify(out)
+    except Exception as e:
+        import traceback
+        return jsonify({
+            'error': str(e), 'traceback': traceback.format_exc(),
+            'filings': [], 'counts': {}, 'total': 0, 'types': [],
+            'degraded': {'bse': True, 'news': True}, 'as_of_ms': 0,
+            'filter': 'all',
+        }), 200
 
 
 @app.route('/api/news/<int:news_id>/ripple', methods=['GET'])

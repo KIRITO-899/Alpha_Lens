@@ -175,7 +175,7 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v26-2026-06-08-fno2">
+    <link rel="stylesheet" href="/styles.css?v=al-v27-2026-06-08-filings">
 </head>
 
 <body class="antialiased">
@@ -387,6 +387,10 @@
                     class="nav-link text-white/50 hover:text-white transition flex items-center gap-2 stock-mode-element">
                     <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span>Signal Terminal
                 </a>
+                <a href="#" id="nav-filings" onclick="switchTab('filings'); return false;"
+                    class="nav-link text-slate-300 hover:text-white transition flex items-center gap-2 stock-mode-element">
+                    <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--amber);box-shadow:0 0 6px var(--amber)"></span>Filings
+                </a>
                 <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Track Record</a>
             </div>
@@ -427,6 +431,7 @@
             <a href="#" class="mtab stock-mode-element" data-mtab="calendar" onclick="switchTab('calendar'); return false;">Calendar</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="portfolio" onclick="switchTab('portfolio'); return false;">Portfolio</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="terminal" onclick="switchTab('terminal'); return false;">Signal Terminal</a>
+            <a href="#" class="mtab stock-mode-element" data-mtab="filings" onclick="switchTab('filings'); return false;">Filings</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="stocks" onclick="switchTab('stocks'); return false;">Track Record</a>
         </nav>
 
@@ -1363,6 +1368,66 @@
             </div>
 
             <!-- ============================================== -->
+            <!-- VIEW 7: EXCHANGE FILING ALERTS                 -->
+            <!-- ============================================== -->
+            <div id="view-filings" class="hidden max-w-7xl mx-auto w-full mt-4 stock-mode-element">
+
+                <!-- ── HERO ── -->
+                <div class="glass-panel p-7 md:p-10 rounded-2xl relative overflow-hidden mb-6 fil-hero">
+                    <div class="fil-hero-bloom"></div>
+                    <div class="flex flex-col md:flex-row md:items-end md:justify-between gap-5 relative z-10">
+                        <div>
+                            <div class="flex items-center gap-2 mb-3">
+                                <span class="fil-kicker-dot"></span>
+                                <span class="text-[10px] font-mono uppercase tracking-[0.22em] text-[color:var(--accent)]/85">Corporate Actions Radar</span>
+                            </div>
+                            <h1 class="font-display text-4xl md:text-5xl font-black text-white tracking-tight leading-none">
+                                Exchange Filing Alerts
+                            </h1>
+                            <p class="text-sm text-[color:var(--text-secondary)] mt-3 max-w-2xl">
+                                The market-moving filings companies report to the exchange &mdash; promoter pledges,
+                                insider trades, resignations, acquisitions, order wins, rating changes, dividends,
+                                splits and bonuses &mdash; each decoded into plain English so you know
+                                <span class="text-[color:var(--accent-bright)] font-semibold">what it actually means for the stock</span>.
+                            </p>
+                        </div>
+                        <div class="fil-hero-meta" id="fil-meta"></div>
+                    </div>
+                </div>
+
+                <!-- ── FILTER PILLS (rendered by JS from /api/filings types) ── -->
+                <div class="fil-filter" id="fil-filter" role="tablist" aria-label="Filing type filter">
+                    <span class="skel skel-cell" style="width:64px;height:30px;border-radius:var(--radius-pill)"></span>
+                    <span class="skel skel-cell" style="width:90px;height:30px;border-radius:var(--radius-pill)"></span>
+                    <span class="skel skel-cell" style="width:80px;height:30px;border-radius:var(--radius-pill)"></span>
+                    <span class="skel skel-cell" style="width:96px;height:30px;border-radius:var(--radius-pill)"></span>
+                </div>
+
+                <!-- ── FEED ── -->
+                <div id="fil-feed" class="fil-feed" aria-live="polite">
+                    <div class="fil-card fil-skel"><span class="skel skel-cell" style="width:30%;height:14px"></span><span class="skel skel-cell" style="width:90%;height:12px;margin-top:12px"></span><span class="skel skel-cell" style="width:70%;height:12px;margin-top:8px"></span></div>
+                    <div class="fil-card fil-skel"><span class="skel skel-cell" style="width:30%;height:14px"></span><span class="skel skel-cell" style="width:90%;height:12px;margin-top:12px"></span><span class="skel skel-cell" style="width:70%;height:12px;margin-top:8px"></span></div>
+                    <div class="fil-card fil-skel"><span class="skel skel-cell" style="width:30%;height:14px"></span><span class="skel skel-cell" style="width:90%;height:12px;margin-top:12px"></span><span class="skel skel-cell" style="width:70%;height:12px;margin-top:8px"></span></div>
+                </div>
+
+                <!-- ── METHODOLOGY / DISCLAIMER ── -->
+                <div class="glass-panel p-5 md:p-6 rounded-2xl fil-method mt-6">
+                    <div class="flex items-start gap-3">
+                        <svg class="w-4 h-4 mt-0.5 shrink-0" style="color:var(--accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <div class="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
+                            <span class="font-bold text-[color:var(--accent-bright)]">How to read this.</span>
+                            Alerts are sourced from <span class="text-[color:var(--text-primary)] font-semibold">BSE corporate filings</span>
+                            and verified market news. The <span class="text-[color:var(--green)] font-semibold">Positive</span> /
+                            <span class="text-[color:var(--red)] font-semibold">Negative</span> / Neutral tag is the <em>typical</em>
+                            market reaction to that <em>kind</em> of event &mdash; not a prediction or advice. Always open the source
+                            filing and consider the full context before acting.
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- ============================================== -->
         </main>
         <footer class="app-footer">
             <div class="app-footer-inner">
@@ -1451,16 +1516,17 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-news.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-stocks.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-market.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-premium.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-terminal.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-ripple.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-macro.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-fno.js?v=al-v26-2026-06-08-fno2" defer></script>
-    <script src="/app-calendar.js?v=al-v26-2026-06-08-fno2" defer></script>
+    <script src="/app-core.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-news.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-stocks.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-market.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-premium.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-terminal.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-ripple.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-macro.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-fno.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-calendar.js?v=al-v27-2026-06-08-filings" defer></script>
+    <script src="/app-filings.js?v=al-v27-2026-06-08-filings" defer></script>
 </body>
 
 </html>
