@@ -451,7 +451,7 @@ if (document.readyState === 'loading') {
 } else {
     fetchMacroPulse();
 }
-setInterval(() => { fetchMacroPulse(); }, 90 * 1000);
+setInterval(() => { if (!document.hidden) fetchMacroPulse(); }, 90 * 1000);
 
 window.openMacroRipple = openMacroRipple;
 window.fetchMacroPulse = fetchMacroPulse;

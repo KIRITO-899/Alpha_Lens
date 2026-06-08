@@ -7,6 +7,12 @@
       "runtimeArgs": ["app.py"],
       "cwd": "C:/Project rohan/Alpha_Lens/backend",
       "port": 5000
+    },
+    {
+      "name": "frontend-static",
+      "runtimeExecutable": "E:/experiments/Project/Alpha_Lens/venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "http.server", "8765", "--directory", "E:/experiments/Project/Alpha_Lens/frontend"],
+      "port": 8765
     }
   ]
 }

@@ -1,13 +1,31 @@
         function initPremiumFeatures() {
             updateTickerBar();
-            setInterval(updateTickerBar, 30000);
+            setInterval(() => { if (!document.hidden) updateTickerBar(); }, 30000);
             pollSignalNotifications();
-            setInterval(pollSignalNotifications, 30000);
+            setInterval(() => { if (!document.hidden) pollSignalNotifications(); }, 30000);
             initPremiumInteractions();
             // Live-pulse intensity stays (purposeful: reflects real worker activity).
             // Cursor-trail + scroll-parallax were removed — gimmicky, not premium.
             initLivePulseIntensity();
         }
+
+        // ── Tab-visibility gating ──────────────────────────────────────────
+        // While the browser tab is backgrounded: pause the always-on CSS
+        // background animations (via the body.is-hidden class — see styles.css)
+        // and skip the recurring poll fetches (each poll callback checks
+        // document.hidden). On return-to-visible, force ONE immediate refresh
+        // so the user sees fresh numbers instantly. We call the FETCH functions
+        // directly here — NEVER the recursive schedulers — so we don't spawn
+        // duplicate timer chains. Top-level registration so it's wired no
+        // matter the init order.
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) { document.body.classList.add('is-hidden'); return; }
+            document.body.classList.remove('is-hidden');
+            try { if (typeof fetchIndices === 'function') fetchIndices(); } catch (e) {}
+            try { if (typeof fetchLiveNews === 'function') fetchLiveNews(); } catch (e) {}
+            try { if (typeof updateTickerBar === 'function') updateTickerBar(); } catch (e) {}
+            try { if (typeof loadCommandBar === 'function') loadCommandBar(); } catch (e) {}
+        });
 
         // ══════════════════════════════════════════════════════════════
         // #3 — Cinematic onboarding ceremony
@@ -70,7 +88,7 @@
                 } catch (e) {/* swallow — non-critical */}
             }
             tick();
-            setInterval(tick, 30000);
+            setInterval(() => { if (!document.hidden) tick(); }, 30000);
         }
 
         // ══════════════════════════════════════════════════════════════

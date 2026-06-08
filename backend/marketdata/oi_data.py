@@ -98,7 +98,7 @@ def _fetch_bhavcopy(date_obj):
         f"BhavCopy_NSE_FO_0_0_0_{ymd}_F_0000.csv.zip"
     )
     try:
-        resp = requests.get(url, headers=_HEADERS, timeout=20)
+        resp = requests.get(url, headers=_HEADERS, timeout=8)
         if resp.status_code != 200 or len(resp.content) < 1000:
             return None
         zf = zipfile.ZipFile(io.BytesIO(resp.content))
@@ -298,9 +298,14 @@ def _ensure_cache() -> dict:
             if age_s < _CACHE_TTL_HOURS * 3600:
                 return {"futures": _CACHE["futures"], "options": _CACHE["options"]}
 
-    # Try the last 7 candidate trading days in case of holidays / stale CDN
+    # Try the last 4 candidate trading days in case of holidays / a stale CDN.
+    # Was 7: with the 8s per-attempt timeout, 7 misses on the equity-archive
+    # sources (2 hosts each) could push a cold F&O request past gunicorn's 90s
+    # --timeout, killing the single worker (wiping all in-memory state) and
+    # 504-ing the user. The bhavcopy is EOD-cached 4h and the board degrades
+    # gracefully, so a shallower scan is the right latency/coverage trade.
     target = _last_likely_bhavcopy_date()
-    for back in range(7):
+    for back in range(4):
         d = target - timedelta(days=back)
         while d.weekday() >= 5:
             d -= timedelta(days=1)
@@ -470,7 +475,7 @@ def _fetch_archive_csv(path: str, min_bytes: int = 100):
     """GET a CSV from the NSE equity archive CDN (tries both hosts). Text or None."""
     for host in _ARCHIVE_HOSTS:
         try:
-            resp = requests.get(host + path, headers=_HEADERS, timeout=20)
+            resp = requests.get(host + path, headers=_HEADERS, timeout=8)
             if resp.status_code == 200 and len(resp.content) >= min_bytes:
                 return resp.text
         except Exception as exc:
@@ -492,7 +497,7 @@ def get_delivery_map() -> dict:
                 return _DELIV_CACHE["data"]
 
     target = _last_likely_bhavcopy_date()
-    for back in range(7):
+    for back in range(4):  # was 7 — bounded so a cold miss can't stall the request thread (see _fetch_bhavcopy loop)
         d = target - timedelta(days=back)
         while d.weekday() >= 5:
             d -= timedelta(days=1)
@@ -668,7 +673,7 @@ def get_participant_oi() -> dict:
                 return _PARTICIPANT_CACHE["data"]
 
     target = _last_likely_bhavcopy_date()
-    for back in range(7):
+    for back in range(4):  # was 7 — bounded so a cold miss can't stall the request thread (see _fetch_bhavcopy loop)
         d = target - timedelta(days=back)
         while d.weekday() >= 5:
             d -= timedelta(days=1)

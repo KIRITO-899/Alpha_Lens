@@ -187,8 +187,13 @@
                 const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
                 const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
                 setTimeout(() => {
-                    fetchLiveNews();
-                    if (typeof loadCommandBar === 'function') loadCommandBar();
+                    // Skip the fetch while the tab is backgrounded, but ALWAYS
+                    // reschedule so the timer chain stays alive (see the
+                    // visibilitychange handler in app-premium.js).
+                    if (!document.hidden) {
+                        fetchLiveNews();
+                        if (typeof loadCommandBar === 'function') loadCommandBar();
+                    }
                     scheduleNewsPolling();
                 }, isOpen ? 30000 : 120000);
             }
@@ -198,7 +203,7 @@
                 const day = nowIST.getDay();
                 const mins = nowIST.getHours() * 60 + nowIST.getMinutes();
                 const isOpen = day >= 1 && day <= 5 && mins >= 555 && mins <= 930;
-                setTimeout(() => { fetchIndices(); updateWatchlistPrices(); scheduleIndexPolling(); }, isOpen ? 30000 : 60000);
+                setTimeout(() => { if (!document.hidden) { fetchIndices(); updateWatchlistPrices(); } scheduleIndexPolling(); }, isOpen ? 30000 : 60000);
             }
 
             // Kick off independent polling loops

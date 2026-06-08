@@ -20,7 +20,7 @@
 // Bump on every deploy that changes static assets. Activate handler purges
 // any cache whose key doesn't start with this version, so stale CSS/JS from
 // the previous deploy are evicted automatically.
-const CACHE_VERSION = 'al-v28-2026-06-08-earnings';
+const CACHE_VERSION = 'al-v29-2026-06-08-earnings';
 const STATIC_CACHE  = `${CACHE_VERSION}-static`;
 const API_CACHE     = `${CACHE_VERSION}-api`;
 const HTML_CACHE    = `${CACHE_VERSION}-html`;
@@ -72,6 +72,7 @@ function isStaticAsset(url) {
     url.pathname === '/app.js' ||
     /^\/app-(core|news|stocks|market|premium|terminal|earnings|ripple|macro|fno|calendar|filings)\.js$/.test(url.pathname) ||
     url.pathname === '/styles.css' ||
+    url.pathname === '/tailwind.built.css' ||
     url.pathname === '/manifest.json' ||
     url.pathname.endsWith('.svg') ||
     url.pathname.endsWith('.png') ||

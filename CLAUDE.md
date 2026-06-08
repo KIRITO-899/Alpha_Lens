@@ -49,11 +49,7 @@ first), and stop any server you were told to start when done.
 
 **Backend (Flask):** `C:/Project rohan/Alpha_Lens/.alpha-venv/Scripts/python.exe backend/app.py` — serves on port 5000
 
-<<<<<<< HEAD
-**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **12 ordered chunks** (`app-core.js` → `app-filings.js`, see below — `app-fno.js` is the F&O Smart-Money view, `app-earnings.js` is the Earnings & Results Intelligence view, `app-filings.js` is the Exchange Filing Alerts view) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
-=======
-**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No build step. The old monolithic `app.js` was split into **10 ordered chunks** (`app-core.js` → `app-calendar.js`, see below) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+**Frontend:** Single-file HTML (`frontend/index.html`) + vanilla JS. No deploy build step (Tailwind is precompiled offline to `frontend/tailwind.built.css` — see the ⚠️ note under Development Notes; the old `cdn.tailwindcss.com` Play-CDN was removed for first-paint speed). The old monolithic `app.js` was split into **12 ordered chunks** (`app-core.js` → `app-filings.js`, see below — `app-fno.js` is the F&O Smart-Money view, `app-earnings.js` is the Earnings & Results Intelligence view, `app-filings.js` is the Exchange Filing Alerts view) plus `frontend/stocks.js`. Flask serves these from `static_folder='../frontend'`.
 
 Open `http://127.0.0.1:5000` in your browser.
 
@@ -127,17 +123,8 @@ Alpha_Lens/
 │   │   ├── market_calendar.py   #   Pure NSE calendar/market-hours helpers
 │   │   ├── macro_tracker.py     #   MacroDataTracker — commodity/FX/rates snapshot + σ (vol-normalized) shock detection
 │   │   ├── ticker_utils.py      #   Ticker normalization + news-candidate screening helpers
-<<<<<<< HEAD
-<<<<<<< HEAD
-│   │   └── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals
-=======
-│   │   ├── oi_data.py           #   Open-interest data fetch (lazy-imported by signals/technical_analysis)
+│   │   ├── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals (lazy-imported)
 │   │   └── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
->>>>>>> 14c7a44 (commit)
-=======
-│   │   ├── oi_data.py           #   Open-interest data fetch (lazy-imported by signals/technical_analysis)
-│   │   └── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 │   ├── newsproc/                # ── Subpackage: news processing (pure) ──
 │   │   ├── news_rules.py        #   Rule-based news classification + STOCK_KEYWORD_MAP
 │   │   ├── news_data.py         #   Static data tables (MACRO_IMPACT_MAP, keyword lists, ticker sets)
@@ -166,36 +153,18 @@ Alpha_Lens/
 │   └── [serve_app.py, _diag.py, win_rate_check.py — dev/utility scripts]
 ├── frontend/
 │   ├── index.html               # Main dashboard (stocks ticker, news cards, signals)
-<<<<<<< HEAD
-<<<<<<< HEAD
-│   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/9)
-│   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive, Command Center (2/9)
-│   ├── app-stocks.js            # Watchlist search, portfolio assistant (3/9)
-│   ├── app-market.js            # Major stocks, indices, smart polling (4/9)
-│   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/9)
-│   ├── app-terminal.js          # Stock drawer, signal terminal, backtest, notifications (6/9)
-│   ├── app-ripple.js            # Ripple graph render (7/9)
-│   ├── app-macro.js             # Macro Pulse view (8/11)
-│   ├── app-fno.js               # F&O Smart-Money board + option-chain modal (9/11)
-│   ├── app-calendar.js          # Economic-events calendar (10/11)
-│   ├── app-filings.js           # Exchange Filing Alerts feed (11/11)
-=======
-=======
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
-│   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/10)
-│   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive, Command Center (2/10)
-│   ├── app-stocks.js            # Watchlist search, portfolio assistant, Risk Radar (3/10)
-│   ├── app-market.js            # Major stocks, indices, smart polling (4/10)
-│   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/10)
-│   ├── app-terminal.js          # Stock drawer, signal terminal, backtest, notifications (6/10)
-│   ├── app-earnings.js          # Earnings & Results Intelligence tab (7/10)
-│   ├── app-ripple.js            # Ripple graph render (8/10)
-│   ├── app-macro.js             # Macro Pulse view (9/10)
-│   ├── app-calendar.js          # Economic-events calendar (10/10)
-<<<<<<< HEAD
->>>>>>> 14c7a44 (commit)
-=======
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+│   ├── app-core.js              # Globals, Google/OTP auth, tab shell, date utils (chunk 1/12)
+│   ├── app-news.js              # fetchLiveNews, dashboard render, badges, hero, archive, Command Center (2/12)
+│   ├── app-stocks.js            # Watchlist search, portfolio assistant, Risk Radar (3/12)
+│   ├── app-market.js            # Major stocks, indices, smart polling (4/12)
+│   ├── app-premium.js           # Animations, cursor trail, parallax, flip, ticker hover (5/12)
+│   ├── app-terminal.js          # Stock drawer, signal terminal, backtest, notifications (6/12)
+│   ├── app-earnings.js          # Earnings & Results Intelligence tab (7/12)
+│   ├── app-ripple.js            # Ripple graph render (8/12)
+│   ├── app-macro.js             # Macro Pulse view (9/12)
+│   ├── app-fno.js               # F&O Smart-Money board + option-chain modal (10/12)
+│   ├── app-calendar.js          # Economic-events calendar (11/12)
+│   ├── app-filings.js           # Exchange Filing Alerts feed (12/12)
 │   ├── stocks.js                # NSE/BSE ticker lookup (~2150 entries, lazy-loaded)
 │   ├── sw.js                    # PWA service worker (cache-first static, network-first HTML/API)
 │   └── styles.css               # Dashboard styling
@@ -238,15 +207,8 @@ Alpha_Lens/
 | `marketdata/market_calendar.py` | Pure NSE calendar helpers — holidays, `is_market_open`, `has_market_traded_since` |
 | `marketdata/macro_tracker.py` | `MacroDataTracker` — live commodity/FX/rates snapshot + **volatility-normalized (σ/z-score) shock detection**. Pulls 6mo daily closes → realized vol → `sigma = move/vol`; pure helpers `daily_returns()`/`compute_vol_stats()`/`latest_daily_change()` (unit-tested). ⚠️ `latest_daily_change` computes the **TRUE 1-day change** from the last two daily closes — NOT Yahoo's `chartPreviousClose`, which on the 6mo chart is the close ~6 months ago (that bug made every "1d" move a 6-MONTH move → Nifty -10.77%, USD/INR +5.68%, and inflated every σ so the whole board flagged MAJOR) |
 | `marketdata/ticker_utils.py` | Ticker normalization + news-candidate screening — `normalize_ticker`, `candidate_quality_score`, etc. Imports `newsproc.news_rules`/`newsproc.news_data` |
-<<<<<<< HEAD
 | `marketdata/oi_data.py` | NSE F&O bhavcopy fetch+parse — **futures (STF) + options (STO/IDO)** from one ZIP → `get_oi_buildup_for_ticker` (technical model) + `get_fno_raw_snapshot`/`get_option_chain_raw` (Smart-Money board). Also defensive `get_delivery_map` (cash delivery%) + `get_bulk_block_deals`. Lazy-imported |
-=======
-| `marketdata/oi_data.py` | Open-interest fetch; lazy-imported by `signals/technical_analysis.py` |
 | `marketdata/earnings_data.py` | **Pure** earnings math (no I/O) — Indian fiscal-quarter labels, YoY/QoQ growth, margins (bps), EPS-surprise classification, rule-based quarter verdict, and `build_scorecard()`. Backs `/api/earnings/intelligence`; unit-tested in `tests/test_earnings_data.py` |
-<<<<<<< HEAD
->>>>>>> 14c7a44 (commit)
-=======
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
 | `newsproc/news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` |
 | `newsproc/news_data.py` | Pure static data tables — `MACRO_IMPACT_MAP`, materiality/noise keyword lists, ticker-parsing sets |
 | `newsproc/calendar_seed.py` | Pure static seed for the macro/economic-events calendar (`CALENDAR_EVENTS_SEED`) |
@@ -460,15 +422,7 @@ mirroring the dashboard's Command Center ("lead with value").
   is skipped and flagged in `degraded`; the route never 500s (returns a safe empty shell).
   Per-stock composite = weighted blend (technical .42 / news .26 / F&O .18 / valuation .14)
   renormalized over whichever dims a name has; overall =
-<<<<<<< HEAD
-<<<<<<< HEAD
-  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **47** (F&O layer + Nifty Outlook).
-=======
-  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. (This addition took the route count to 43.)
->>>>>>> 14c7a44 (commit)
-=======
-  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. (This addition took the route count to 43.)
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+  `0.55·avg_stock + 0.15·max_stock + 0.18·macro + 0.12·sector`. Route count is now **50**.
 - **Frontend:** `loadRiskRadar()` / `renderRiskRadar()` + helpers (`_rrDimTile`,
   `_rrStockRow`, `_rrMeter`, `_rrSkeleton`, `_rrErrorState`) in `app-stocks.js`. Renders a
   hero (big score + level + summary + a LOW→HIGH meter), 6 dimension tiles (each with a
@@ -652,7 +606,7 @@ correlations already in `compute_macro_effects()` and refined per name.
   imports `compute_ripple as compute_ripple2`). Computed on the fly — **no DB
   cache** (it's cheap and the portfolio dimension is per-watchlist). Defensive:
   404 on unknown event, safe shell on bad input, never 500s on known inputs.
-  **Route count is now 47.**
+  **Route count is now 50.**
 - **Frontend:** `openRipple2()` / `_renderRipple2()` + `_r2*` helpers in
   `app-ripple.js` render a dedicated `#ripple2-modal` (separate from the legacy
   `#ripple-modal`). The Macro Pulse alert cards (`app-macro.js`) call
@@ -695,7 +649,7 @@ keys, reproducible, instant).
   built from driver *agreement* + breadth + magnitude, floored 25 / **ceiled 80**.
 - **Route:** `GET /api/macro/nifty-outlook` (in `app.py`) — `MacroDataTracker.get_snapshot()`
   + `is_market_open()` → `compute_nifty_outlook`. Pure compute, no DB cache, safe shell on
-  failure. **Route count is now 47.**
+  failure. **Route count is now 50.**
 - **⚠️ 1-day-change fix (foundational):** `macro_tracker` previously used Yahoo's
   `chartPreviousClose` from a **6mo-range** chart as "prev" → every "1-day" move was actually
   a **6-MONTH** move (Nifty −10.77%, USD/INR +5.68%, Copper +17%…), which also inflated every
@@ -770,7 +724,7 @@ path that already feeds the technical model's `oi_buildup`).
   returns a **safe shell (HTTP 200)** rather than 500, so the UI degrades to an honest
   empty state.
 - `GET /api/fno/option-chain/<symbol>` — per-name strike ladder + PCR/max-pain/walls; 404
-  when the symbol has no F&O options. **Route count is now 47.**
+  when the symbol has no F&O options. **Route count is now 50.**
 
 **Frontend:** `fetchFnoSmartMoney()` + `_fno*` render helpers + `openFnoOptionChain()`
 modal in `app-fno.js`. Lazy-loaded by `switchTab('fno')`, 60s client throttle. Hero with a
@@ -862,7 +816,7 @@ reproducible, cacheable, never hallucinates a ticker).
   cached `FILINGS_TTL_SECS` (600); filtering by type happens on read. Defensive — each
   source isolated, returns a **safe shell (HTTP 200)** rather than 500, with a `degraded`
   `{bse, news}` flag. Response also carries `types[]` (label + per-type count) for the
-  filter pills. **Route count is now 48.**
+  filter pills. **Route count is now 50.**
 - **Frontend:** `app-filings.js` (chunk 11/11) — `fetchFilings()` + render helpers +
   `setFilingFilter()`. View `#view-filings`, lazy-loaded by `switchTab('filings')`, 60s
   client throttle over the 10-min server cache. Hero (live-alert count + freshness),
@@ -917,21 +871,18 @@ git commit -m "Add feature X and document in CLAUDE.md"
 
 ### Development Notes
 
-- **Frontend**: No build step. Edit `frontend/index.html`, the `frontend/app-*.js` chunks, `frontend/styles.css` directly. Flask serves via `static_folder`. Browser refresh fetches latest.
+- **Frontend**: No deploy build step. Edit `frontend/index.html`, the `frontend/app-*.js` chunks, `frontend/styles.css` directly. Flask serves via `static_folder`. Browser refresh fetches latest.
+  - ⚠️ **Tailwind is PRECOMPILED, not the Play CDN.** The render-blocking `cdn.tailwindcss.com` script (~115KB gzip of JS + a runtime DOM-scan/compile pass on every load) was replaced — commented out in `index.html` — by a committed static stylesheet **`frontend/tailwind.built.css`** (linked right AFTER `styles.css` to preserve the original cascade, where Tailwind utilities sit after styles.css and styles.css `!important` rules still win). **FOOTGUN:** if you add a NEW Tailwind utility class anywhere (HTML or a chunk), you MUST regenerate or it silently renders unstyled. Regenerate from the project root:
+    ```
+    npx tailwindcss@3 -c scratch/tailwind/tailwind.config.js -i scratch/tailwind/input.css -o frontend/tailwind.built.css --minify
+    ```
+    The generation config (`scratch/tailwind/`, gitignored) mirrors the old inline `tailwind.config` (cyan/blue/indigo/emerald/green/slate→champagne remap + Space Grotesk). Bump the `?v=` query + `sw.js` `CACHE_VERSION` after regenerating, and register the file in `sw.js` `isStaticAsset` (already done) + an `app.py` `_CACHE_RULES` entry (already `immutable`). **Rollback:** delete the `tailwind.built.css` `<link>` and un-comment the CDN block in `index.html`.
   - **Design system**: tokens live in `styles.css :root` — surfaces, borders, text-opacity steps, market semantics (`--green/--red/--amber`), a champagne brand accent (`--accent`), a radius scale (`--radius-sm…pill`), a **spacing scale** (`--space-1…8`, 8pt grid), a **type scale** (`--text-2xs…3xl`), motion (`--ease-out/--ease-spring/--duration-*`), and a **shadow elevation scale** (`--shadow-sm…xl`). **Prefer these tokens over raw px/hex.** `border-radius` was migrated onto the radius scale wherever a raw value matched a token exactly (6/8/12/16px → `--radius-sm/md/lg/xl`, 99px → `--radius-pill`); a few intentional one-off radii (10/14/22px) remain by design. The `--text-*` scale is the canonical set to adopt for **new** UI — existing font-sizes were **not** force-migrated (that changes visuals and there's no local preview to verify against). Keyboard focus uses one global `:focus-visible` ring (`--focus-ring`); don't reintroduce per-element `outline` hacks. Status dots use `.pill-dot` (inherits `currentColor`) instead of 🟢/🔴 emoji — keep iconography as **SVG/CSS, never emoji** (visible UI is emoji-free; only standard close glyphs / a hidden connection-error icon remain). `<head>` has favicon + apple-touch-icon + manifest + theme-color + **Open Graph/Twitter** link-preview meta. ⚠️ The ~67 `!important` rules were left intentionally — most override the Tailwind CDN utilities, and blind removal risks cascade regressions that can't be verified without a working preview (the in-repo Chrome MCP is a *remote* browser and can't reach `localhost`).
   - **Macro Pulse theming**: the Macro Pulse view (`#view-macro-pulse`, the `.mp-*` block in `styles.css`, rendered by `app-macro.js`) was rebranded off a legacy **violet/purple** palette onto the champagne `--accent` + market-semantic/text tokens, and its emoji (methodology bar, table legend, `⚠️`/`●`/`ⓘ` glyphs) replaced with inline SVG — so it now matches the rest of the app. The **alert cards** (`_mpRenderAlertCard`) were then rebuilt for balance: a left-aligned header (the `<button>`'s default `text-align:center` is reset on `.mp-alert-card`) with the % move as a tinted pill, a structured `LAST`/`PREV` stat strip (`.mp-alert-quote`, replacing the inline "Last: x | Prev: y" text), and a footer pinned via `margin-top:auto` so every card in a row is **equal-height and aligned** regardless of predictor count. `_mpFmtDetected()` fixes the old **"Detected Invalid Date"** (caused by appending `Z` to a space-separated datetime) — it normalizes the space→`T`, treats naive times as UTC, and renders true IST (`timeZone: 'Asia/Kolkata'`). **Shock detection is volatility-normalized (σ), not fixed-%:** `MacroDataTracker` computes each instrument's realized daily vol from 6mo of closes and a z-score `sigma = move/vol`, classified at **≥2.5σ (Significant) / ≥3.5σ (Major)** — one threshold correct across all asset classes (the old fixed-% `SHOCK_THRESHOLDS` is the automatic fallback when history is thin). Cards/table show the σ chip (red ≥3.5σ) + percentile-vs-history; `_mpFmtDetected()` fixes the old "Detected Invalid Date" (true IST). Env knobs (all revertable): `MACRO_SHOCK_MODE` (`sigma`|`pct`), `MACRO_SIGMA_SIGNIFICANT` (2.5), `MACRO_SIGMA_MAJOR` (3.5), `MACRO_VOL_WINDOW` (60), `MACRO_ABS_FLOOR_PCT` (0.1), `MACRO_HISTORY_RANGE` (6mo). ⚠️ This changes **live shock detection on Render** (workers run there) — set `MACRO_SHOCK_MODE=pct` to revert. The premium **Ripple 2.0** modal (`.r2-*`) is the deterministic cascade opened from its alert cards. ✅ A **local visual preview IS possible** (despite the remote-Chrome caveat above): render a static harness — real `styles.css` + the target `app-*.js` chunk + a stubbed `window.fetch` returning mock API JSON — served via `python -m http.server` and screenshotted through the **Claude Preview** MCP (add a `?v=` cache-bust on the asset links and `location.reload()` after editing). This is how the rebrand + Ripple 2.0 UI were verified.
   - **Empty / error states**: render an intentional state, never leave skeleton rows or a misleading message. The `.term-empty` pattern (centered icon + `.term-empty-title` + `.term-empty-sub`, token-styled) is the template — see `renderTerminal()` / the `fetchTerminalData()` catch in `app-terminal.js`, which distinguish **truly-empty** ("No active signals right now…") from **filtered-empty** ("No signals match this filter") from **fetch error** ("Couldn't reach the signal engine — retrying"). Perpetual skeletons on a failed/zero fetch read as *broken*; this is the biggest perceived-professionalism lever given free-tier sleep makes "empty" the common state.
   - **Numbers**: use `font-variant-numeric: tabular-nums` for any changing figure so columns/prices don't jitter — applied to `.font-mono` and `.terminal-table` cells. Prefer the `.font-mono` data utility for prices, %, P&L, confidence.
   - **Removed gimmick motion** (read as "vibe-coded", not premium): the cursor-glow trail and scroll-linked KPI parallax were deleted from `app-premium.js`, and the full-card 3D tilt + magnetic-button pull were removed from `initPremiumInteractions()`. The subtle per-panel glass spotlight, digit-flip, skeleton-swap, stagger, and ticker-hover preview were **kept** (purposeful micro-interactions). Don't re-add cursor trails / parallax.
-<<<<<<< HEAD
-<<<<<<< HEAD
-  - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree; `app-fno.js` is the F&O view, loaded between `app-macro.js` and `app-calendar.js`). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, the `sw.js` `isStaticAsset` regex (which **enumerates each chunk name** — add the new one), and the `/app-` rule in `app.py` `_CACHE_RULES` (a **prefix**, so it auto-covers new chunks). Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
-=======
-  - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
->>>>>>> 14c7a44 (commit)
-=======
-  - **app.js chunk split**: `app.js` was split into 10 ordered `app-*.js` chunks (see structure tree). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, `sw.js` `isStaticAsset` regex, and the `/app-` rule in `app.py` `_CACHE_RULES`. Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+  - **app.js chunk split**: `app.js` was split into 12 ordered `app-*.js` chunks (see structure tree; `app-fno.js` is the F&O view, loaded between `app-macro.js` and `app-calendar.js`). They are **classic scripts sharing one global scope**; `index.html` loads them with `defer` in document order, so concatenating them top-to-bottom reproduces the original `app.js` byte-for-byte. Functions may call across chunks (resolved at runtime), but **module-level state must stay in original load order** — don't reorder the `<script>` tags. When adding a chunk or renaming, update three places: `index.html` script tags, the `sw.js` `isStaticAsset` regex (which **enumerates each chunk name** — add the new one), and the `/app-` rule in `app.py` `_CACHE_RULES` (a **prefix**, so it auto-covers new chunks). Bump the `?v=` query + `sw.js CACHE_VERSION` on any chunk change so caches purge.
 - **Backend**: Reload Flask dev server to pick up Python changes (`CTRL+C`, restart `python backend/app.py`).
 - **`print()` is globally `safe_print`** (top of `app.py`): `_real_print = builtins.print` is captured first, then `builtins.print = safe_print` shadows it process-wide. So **every bare `print()` in any module** (workers, `performance_report`, etc.) is automatically guarded against I/O errors on a closed stdout (e.g. the Flask reloader / gunicorn worker recycle) — no need to hunt down call-sites. `safe_print` calls `_real_print` directly to avoid infinite recursion once `print` points back at itself.
 - **Database**: SQLite files (`news_cache.db`, `users.db`) are created on first run. Delete to reset.
@@ -949,15 +900,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-<<<<<<< HEAD
-<<<<<<< HEAD
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **48 routes**. Then run the test suite (`python -m unittest discover -s tests`).
-=======
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **44 routes**. Then run the test suite (`python -m unittest discover -s tests`).
->>>>>>> 14c7a44 (commit)
-=======
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **44 routes**. Then run the test suite (`python -m unittest discover -s tests`).
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **50 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **194 tests**.
 
 ## Context7 MCP — Library Documentation
 

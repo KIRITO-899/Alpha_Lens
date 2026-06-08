@@ -47,7 +47,6 @@ import requests
 from bs4 import BeautifulSoup
 import concurrent.futures
 from collections import deque
-from openai import OpenAI as OpenAIClient
 import angelone_shim as yf
 import logging
 from email.utils import parsedate_to_datetime
@@ -179,12 +178,19 @@ _CACHE_RULES = (
     # the index.html cache. Safe to cache aggressively.
     ("/stocks.js",                   "public, max-age=86400, stale-while-revalidate=86400"),
     # ── Newly-extracted frontend chunks (was inline in index.html) ──
-    # Use no-cache so browsers ALWAYS revalidate — avoids stale JS/CSS after
-    # deploys. The server returns 304 Not Modified quickly when unchanged.
-    ("/app.js",                      "no-cache, must-revalidate"),
-    # app.js was split into ordered app-*.js chunks; same revalidate policy.
-    ("/app-",                        "no-cache, must-revalidate"),
-    ("/styles.css",                  "no-cache, must-revalidate"),
+    # These are ?v=-versioned in index.html (the version query is bumped on
+    # every asset change — the same discipline the SW CACHE_VERSION already
+    # relies on), so the asset URL itself changes on every deploy. That makes
+    # them safe to cache as immutable for 1y: it eliminates a needless
+    # conditional-GET / 304 per asset on every first-load, hard-refresh, and
+    # SW-less navigation. A new deploy serves new URLs (?v=al-vN+1) which miss
+    # cache and fetch fresh, so users never get stale JS/CSS.
+    ("/app.js",                      "public, max-age=31536000, immutable"),
+    # app.js was split into ordered app-*.js chunks; same versioned policy.
+    ("/app-",                        "public, max-age=31536000, immutable"),
+    ("/styles.css",                  "public, max-age=31536000, immutable"),
+    # Precompiled Tailwind (?v=-versioned like the chunks) — cache immutably.
+    ("/tailwind.built.css",          "public, max-age=31536000, immutable"),
     # ── Macro Pulse — refresh moderately fast for live shock view ──
     ("/api/macro/events",            "public, max-age=60, stale-while-revalidate=120"),
     # ── Calendar — events change weekly; cache aggressively ──
@@ -4695,6 +4701,20 @@ def home():
     return resp
 
 
+@app.route('/healthz')
+def healthz():
+    # Lightweight LIVENESS probe for the platform (Render) health check.
+    # Intentionally trivial and always 200 while the web process is serving —
+    # it does NOT touch the DB or worker state. That's deliberate: /api/health
+    # is the READINESS/diagnostic probe and legitimately returns 503 on a DB
+    # blip or during cold start, so wiring Render's liveness gate to it would
+    # trigger needless restart loops on the constantly-cold-starting free tier.
+    # Pointed at by render.yaml healthCheckPath (was '/', which rendered the
+    # full ~119KB index.html template on every platform probe).
+    return ("ok", 200, {"Content-Type": "text/plain; charset=utf-8",
+                        "Cache-Control": "no-store"})
+
+
 # ── T3.13 Service Worker ──
 # Served from the site root so its scope is the whole origin.
 # Cache-Control no-cache forces every browser to revalidate /sw.js on each load
@@ -6305,6 +6325,7 @@ def get_news_ripple(news_id):
 
 
 @app.route('/api/news/all', methods=['GET'])
+@route_cache(ttl_seconds=20)
 def get_all_news():
     """
     Returns recent (last 7 days) news with their affected stock impacts.
@@ -8181,19 +8202,59 @@ def _compute_portfolio_risk(tickers):
     except Exception:
         degraded = True
 
-    # ── Per-stock pass ──
+    # ── Concurrent fetch (prime once, then fan out) ──
+    # The two per-stock yfinance calls (technical context + fundamentals)
+    # dominate this route's latency. Done serially over up to
+    # RISK_RADAR_MAX_TICKERS names, a cold Yahoo session could stall the
+    # response for tens of seconds (feels broken). Mirror the earnings route:
+    # prime the yfinance cookie/crumb handshake on ONE ticker, then fetch the
+    # rest concurrently under a wall-clock budget. Both helpers are read-only
+    # (network + pure compute, no shared mutable state), so this is safe to
+    # parallelize. The scoring pass below stays pure/serial.
+    def _rr_fetch_ctx(_nt):
+        try:
+            _tech = get_stock_technical_context(_nt)
+        except Exception:
+            _tech = None
+        try:
+            _fund = get_stock_fundamentals(_nt) or {}
+        except Exception:
+            _fund = {}
+        return _tech, _fund
+
+    ctx_by_ticker = {}
+    _rr_budget = float(os.environ.get("RISK_RADAR_FETCH_TIMEOUT_SECS", "18"))
+    _rr_start = time.monotonic()
+    _rr_ex = concurrent.futures.ThreadPoolExecutor(max_workers=min(len(norm), 8))
+    try:
+        _primer = norm[0]
+        try:
+            ctx_by_ticker[_primer] = _rr_ex.submit(_rr_fetch_ctx, _primer).result(timeout=_rr_budget)
+        except Exception:
+            ctx_by_ticker[_primer] = (None, {})
+        _rr_rest = norm[1:]
+        if _rr_rest:
+            _rr_remaining = max(1.0, _rr_budget - (time.monotonic() - _rr_start))
+            _rr_futs = {_rr_ex.submit(_rr_fetch_ctx, _nt): _nt for _nt in _rr_rest}
+            try:
+                for _fut in concurrent.futures.as_completed(_rr_futs, timeout=_rr_remaining):
+                    _nt = _rr_futs[_fut]
+                    try:
+                        ctx_by_ticker[_nt] = _fut.result()
+                    except Exception:
+                        ctx_by_ticker[_nt] = (None, {})
+            except concurrent.futures.TimeoutError:
+                print("[RiskRadar] fetch budget exceeded; returning partial")
+                degraded = True
+    finally:
+        _rr_ex.shutdown(wait=False, cancel_futures=True)
+
+    # ── Per-stock pass (pure scoring over the fetched contexts) ──
     per_stock = []
     sectors = []
     for nt in norm:
         base = ticker_base(nt)
-        try:
-            tech = get_stock_technical_context(nt)
-        except Exception:
-            tech = None
-        try:
-            fund = get_stock_fundamentals(nt) or {}
-        except Exception:
-            fund = {}
+        tech, fund = ctx_by_ticker.get(nt, (None, {}))
         if tech is None and not fund:
             degraded = True
 
@@ -8872,6 +8933,7 @@ def earnings_intelligence():
 # Returns all active/recent signals formatted for the terminal
 # ══════════════════════════════════════════════════════════════
 @app.route('/api/signal-terminal', methods=['GET'])
+@route_cache(ttl_seconds=15)
 def get_signal_terminal():
     try:
         conn = connect_news_db()

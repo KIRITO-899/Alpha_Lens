@@ -285,7 +285,7 @@ function _calStartCountdown() {
         if (clockEl) clockEl.innerText = label;
     };
     tick();
-    _calCountdownTimer = setInterval(tick, 1000);
+    _calCountdownTimer = setInterval(() => { if (!document.hidden) tick(); }, 1000);
 }
 
 async function fetchCalendar() {
@@ -311,7 +311,7 @@ if (typeof _origSwitchTabCal === 'function') {
         if (tab === 'calendar' && !_calBooted) {
             _calBooted = true;
             fetchCalendar();
-            setInterval(fetchCalendar, 5 * 60 * 1000);
+            setInterval(() => { if (!document.hidden) fetchCalendar(); }, 5 * 60 * 1000);
         }
     };
 }

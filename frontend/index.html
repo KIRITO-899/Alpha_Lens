@@ -15,6 +15,14 @@
     <meta name="twitter:card"        content="summary">
     <meta name="twitter:title"       content="Alpha Lens — Next-Gen Macro AI">
     <meta name="twitter:description" content="AI-analyzed market news, conviction-scored equity signals, and macro shock propagation for Indian markets.">
+    <!-- Tailwind is now PRECOMPILED offline to /tailwind.built.css (linked
+         below, right after styles.css so the original cascade is preserved).
+         This removes the render-blocking Play-CDN compiler (~115KB gzip of JS
+         plus a runtime DOM scan + compile pass on every load) from the
+         critical path. Regenerate via the command in scratch/tailwind/
+         (tailwindcss@3 with that config + input). ROLLBACK: delete the
+         /tailwind.built.css link below, then un-comment the block beneath. -->
+    <!--
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -54,6 +62,7 @@
         }
       }
     </script>
+    -->
     <!-- ── T1.4 Network hints: preconnect + dns-prefetch for every host the
          page will hit, so TCP/TLS handshakes happen in parallel with HTML
          parsing rather than after. Saves 100-300ms on first paint. ── -->
@@ -103,11 +112,6 @@
     <meta name="msapplication-TileColor"                    content="#050507">
     <script src="https://accounts.google.com/gsi/client" async defer></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js" async></script>
-    <!-- D3.js for "The Ripple" force-directed propagation graph. Loaded on
-         demand: the script tag is here for preconnect/DNS resolution, but
-         openRipple() lazy-imports it only when the user actually clicks
-         "View Ripple". Saves ~80 KB on pages that never open the graph. -->
-    <link rel="preconnect" href="https://cdn.jsdelivr.net">
     <!-- T2.7: stocks.js lazy-loaded on first search-input focus.
          Saves ~29 KB (br-compressed) on every page that doesn't use search. -->
     <script>
@@ -175,11 +179,11 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-<<<<<<< HEAD
-    <link rel="stylesheet" href="/styles.css?v=al-v28-2026-06-08-earnings">
-=======
-    <link rel="stylesheet" href="/styles.css?v=al-v19-2026-06-08-earnings">
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+    <link rel="stylesheet" href="/styles.css?v=al-v29-2026-06-08-earnings">
+    <!-- Precompiled Tailwind utilities (replaces the Play-CDN script above).
+         AFTER styles.css to preserve the original cascade (Tailwind sits after
+         styles.css; styles.css !important rules still override it). -->
+    <link rel="stylesheet" href="/tailwind.built.css?v=al-v29-2026-06-08-earnings">
 </head>
 
 <body class="antialiased">
@@ -391,13 +395,10 @@
                     class="nav-link text-white/50 hover:text-white transition flex items-center gap-2 stock-mode-element">
                     <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--green);box-shadow:0 0 6px var(--green)"></span>Signal Terminal
                 </a>
-<<<<<<< HEAD
                 <a href="#" id="nav-filings" onclick="switchTab('filings'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition flex items-center gap-2 stock-mode-element">
                     <span class="w-1.5 h-1.5 rounded-full animate-pulse" style="background:var(--amber);box-shadow:0 0 6px var(--amber)"></span>Filings
                 </a>
-=======
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
                 <a href="#" id="nav-earnings" onclick="switchTab('earnings'); return false;"
                     class="nav-link text-slate-300 hover:text-white transition stock-mode-element">Earnings</a>
                 <a href="#" id="nav-stocks" onclick="switchTab('stocks'); return false;"
@@ -440,10 +441,7 @@
             <a href="#" class="mtab stock-mode-element" data-mtab="calendar" onclick="switchTab('calendar'); return false;">Calendar</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="portfolio" onclick="switchTab('portfolio'); return false;">Portfolio</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="terminal" onclick="switchTab('terminal'); return false;">Signal Terminal</a>
-<<<<<<< HEAD
             <a href="#" class="mtab stock-mode-element" data-mtab="filings" onclick="switchTab('filings'); return false;">Filings</a>
-=======
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
             <a href="#" class="mtab stock-mode-element" data-mtab="earnings" onclick="switchTab('earnings'); return false;">Earnings</a>
             <a href="#" class="mtab stock-mode-element" data-mtab="stocks" onclick="switchTab('stocks'); return false;">Track Record</a>
         </nav>
@@ -1381,7 +1379,6 @@
             </div>
 
             <!-- ============================================== -->
-<<<<<<< HEAD
             <!-- VIEW 7: EXCHANGE FILING ALERTS                 -->
             <!-- ============================================== -->
             <div id="view-filings" class="hidden max-w-7xl mx-auto w-full mt-4 stock-mode-element">
@@ -1442,9 +1439,6 @@
 
             <!-- ============================================== -->
             <!-- VIEW 8: EARNINGS & RESULTS INTELLIGENCE          -->
-=======
-            <!-- VIEW 6.5: EARNINGS & RESULTS INTELLIGENCE        -->
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
             <!-- Sits between Signal Terminal and Track Record.   -->
             <!-- ============================================== -->
             <div id="view-earnings" class="hidden max-w-7xl mx-auto w-full mt-4 stock-mode-element">
@@ -1488,8 +1482,8 @@
     <!-- ──────────────────────────────────────────────────────────────────
          "THE RIPPLE" — propagation graph modal
          Mounted at root so it can overlay every view. Hidden by default;
-         openRipple(newsId) populates it and fades in. d3.js is lazy-
-         loaded on first open (saves ~80 KB on pages that never use it).
+         openRipple(newsId) populates it and fades in. The graph is drawn
+         with hand-rolled inline SVG (no external chart library).
          ────────────────────────────────────────────────────────────────── -->
     <div id="ripple-modal" class="ripple-modal hidden" role="dialog" aria-modal="true" aria-hidden="true">
         <div class="ripple-modal-backdrop" data-close-ripple></div>
@@ -1555,31 +1549,18 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-<<<<<<< HEAD
-    <script src="/app-core.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-news.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-stocks.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-market.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-premium.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-terminal.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-earnings.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-ripple.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-macro.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-fno.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-calendar.js?v=al-v28-2026-06-08-earnings" defer></script>
-    <script src="/app-filings.js?v=al-v28-2026-06-08-earnings" defer></script>
-=======
-    <script src="/app-core.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-news.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-stocks.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-market.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-premium.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-terminal.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-earnings.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-ripple.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-macro.js?v=al-v19-2026-06-08-earnings" defer></script>
-    <script src="/app-calendar.js?v=al-v19-2026-06-08-earnings" defer></script>
->>>>>>> 14c7a44ad235ed1291ad46ae1b0bc82e60aba212
+    <script src="/app-core.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-news.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-stocks.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-market.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-premium.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-terminal.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-earnings.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-ripple.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-macro.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-fno.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-calendar.js?v=al-v29-2026-06-08-earnings" defer></script>
+    <script src="/app-filings.js?v=al-v29-2026-06-08-earnings" defer></script>
 </body>
 
 </html>
