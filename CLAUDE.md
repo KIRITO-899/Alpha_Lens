@@ -125,7 +125,8 @@ Alpha_Lens/
 │   │   ├── ticker_utils.py      #   Ticker normalization + news-candidate screening helpers
 │   │   ├── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals + snapshot persistence (lazy-imported)
 │   │   ├── angel_fno.py         #   Angel One INTRADAY F&O source (#5) — live opnInterest → same snapshot shape, EOD fallback (SWR)
-│   │   └── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
+│   │   ├── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
+│   │   └── price_resolver.py    #   Pure price rules — select_fresh_close (kills stale-close bug) + atr_stop_target (ATR/2, ATR)
 │   ├── newsproc/                # ── Subpackage: news processing (pure) ──
 │   │   ├── news_rules.py        #   Rule-based news classification + STOCK_KEYWORD_MAP
 │   │   ├── news_data.py         #   Static data tables (MACRO_IMPACT_MAP, keyword lists, ticker sets)
@@ -212,6 +213,7 @@ Alpha_Lens/
 | `marketdata/oi_data.py` | NSE F&O bhavcopy fetch+parse — **futures (STF) + options (STO/IDO)** from one ZIP → `get_oi_buildup_for_ticker` (technical model) + `get_fno_raw_snapshot`/`get_option_chain_raw` (Smart-Money board). Also defensive `get_delivery_map` (cash delivery%) + `get_bulk_block_deals`. **Persists each snapshot to `fno_snapshot`** (cold-start restore + `get_prev_snapshot` diff baseline) and overlays the Angel intraday source when enabled. Lazy-imported |
 | `marketdata/angel_fno.py` | **Angel One intraday F&O OI (#5)** — builds the EOD snapshot shape from live FULL-mode `opnInterest` (futures for all underlyings + index option chains), OI-change vs the persisted EOD baseline. Pure `assemble_futures`/`assemble_index_chain` + stale-while-revalidate background build. OFF unless `ANGEL_FNO_ENABLED=1` + creds; auto-falls back to EOD (Angel blocks datacenter IPs) |
 | `marketdata/earnings_data.py` | **Pure** earnings math (no I/O) — Indian fiscal-quarter labels, YoY/QoQ growth, margins (bps), EPS-surprise classification, rule-based quarter verdict, and `build_scorecard()`. Backs `/api/earnings/intelligence`; unit-tested in `tests/test_earnings_data.py` |
+| `marketdata/price_resolver.py` | **Pure** price rules (no I/O) — `select_fresh_close(daily, reg_price, reg_time_ist)` reconciles the daily-close series vs Yahoo `regularMarketPrice`/`regularMarketTime` to **kill the "stale close" bug** (daily bar is null right after the bell → the close lagged a session; e.g. IOC showed 138.26 when the real close was 135.6). `atr_stop_target(atr_pct)` = **stop ATR/2, target ATR**, flat 1%/2% fallback. Unit-tested in `tests/test_price_resolver.py` |
 | `newsproc/news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` |
 | `newsproc/news_data.py` | Pure static data tables — `MACRO_IMPACT_MAP`, materiality/noise keyword lists, ticker-parsing sets |
 | `newsproc/calendar_seed.py` | Pure static seed for the macro/economic-events calendar (`CALENDAR_EVENTS_SEED`) |
@@ -239,7 +241,7 @@ all reversible:
 | Knob | Default | Effect |
 |------|---------|--------|
 | `MIN_SIGNAL_PRICE` / `MIN_TURNOVER_CR` | 20 / 1.0 | **Liquidity filter** — skip penny (<₹20) & illiquid (<₹1cr/day turnover) names before the ensemble. Uses `tech_data['avg_volume_20d']`. |
-| `ATR_STOP_MULT` / `ATR_TARGET_MULT` (+ `ATR_STOP_CAP_PCT` / `ATR_TARGET_CAP_PCT`) | 1.0 / 2.0 (2.5 / 5.0) | ATR stop & target width (2:1 R:R by default). Raise `ATR_STOP_MULT` to stop noise-whipsaw. |
+| `ATR_STOP_MULT` / `ATR_TARGET_MULT` (+ `ATR_STOP_CAP_PCT` / `ATR_TARGET_CAP_PCT`) | 0.5 / 1.0 (10 / 20) | **Stop = ATR/2, Target = ATR** (2:1 R:R). No-ATR → flat **1%/2%** fallback (`REQUIRE_ATR=0` now — it no longer *skips*). Wide caps only guard a corrupt ATR. Math lives in the pure, unit-tested `marketdata/price_resolver.atr_stop_target()`. |
 | `REQUIRE_TECH_CONFIRM` / `TECH_CONFIRM_MIN` | 1 / 50 | Require the technical model (s3) to **actively confirm** the direction, not just "not veto". |
 | `W_AI` `W_TECHNICAL` `W_HISTORICAL` `W_SECTOR` `W_INDIAN` | 0.30 / 0.30 / 0.20 / 0.05 / 0.15 | Ensemble weights (AI **down-weighted** from 0.40; final score normalized by total weight). |
 | `REGIME_HARD_BLOCK` | 0 | Hard-reject counter-regime trades (vs the soft `REGIME_PENALTY`). |
@@ -328,6 +330,51 @@ curl -X POST "http://127.0.0.1:5000/api/admin/reset-all-news?confirm=YES_WIPE_EV
   -H "X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>"
 ```
 Wipes `stock_impact`, `news`, both `*_archive` tables, and `historical_patterns`, and clears the in-memory dedup/bias caches so the worker restarts blank. Requires the `?confirm=YES_WIPE_EVERYTHING` guard.
+
+## Price correctness & Track-Record recompute
+
+Two defects made stock prices (and therefore the Track Record) wrong; both are fixed
+and the historical data was recomputed in place.
+
+1. **The "stale close" bug (root cause).** Yahoo's daily candle series (`interval=1d`)
+   does NOT finalize *today's* bar until ~15–20 min after the 15:30 IST close — right
+   after the bell the last daily bar has `close=None`. So any "last close" taken purely
+   from the daily series **lagged a full session** (e.g. IOC showed **138.26**, Friday's
+   close, when the real Monday close was **135.6**). Meanwhile Yahoo's `regularMarketPrice`
+   (stamped `regularMarketTime` ~15:30:01) already carries the genuine latest close.
+   Different code paths picked different sources → the **same stock showed different
+   prices across the UI**. Fixed by the pure `marketdata/price_resolver.select_fresh_close`
+   (uses `regularMarketPrice` only when its timestamp is a completed NSE session ≥ 15:30
+   IST AND not older than the newest daily bar; else the daily bar). It is now the single
+   source of truth wired into `get_last_closed_session_quote` (via a new
+   `_yahoo_daily_and_meta` one-call+120s-cache helper) **and** `_get_yahoo_official_close`,
+   so every market-closed display path (`get_price_with_range`, `get_stock_market_change_quote`,
+   `/api/stock-price`, Signal Terminal re-price, watchlist, Command Center) agrees.
+   ⚠️ This is the **stock-price analogue of the `macro_tracker` `chartPreviousClose` fix** —
+   never trust the daily series' last bar blindly; reconcile against `regularMarketTime`.
+2. **ATR rule:** stop = **ATR/2**, target = **ATR** (was 1×/2× with 1%/2% floors). No-ATR
+   now falls back to a flat **1% stop / 2% target** instead of *skipping* the signal
+   (`REQUIRE_ATR` default flipped 1→0). Math is the pure `atr_stop_target()`; mirrored in
+   `eval_loop.py`.
+3. **Realistic bracket fills (honest P&L):** `check_historical_hits` (the shared resolver
+   used by the yfinance worker, the repair pass, and the recompute) now records the **fill
+   at the target/stop level**, or the **gap-open** when a bar gapped *through* a level —
+   NOT the candle extreme. Recording the raw high/low overstated both wins and losses
+   (e.g. a −5.23% candle low booked against a 1% stop). The worker's live-intraday section
+   was clamped to match.
+
+**Recompute the whole Track Record in place** (after the fixes, or any future ATR-rule
+change) — re-derives each signal's stop/target (ATR recovered from the stored
+`technical_context.atr_pct`), re-resolves status from real OHLC, recomputes `current_price`
+(fresh-close resolver) + `estimated_change_percent`, and rewrites the `reason`'s
+`ATR stop: X% | target: Y%` marker. **No LLM; only UPDATEs (never deletes); idempotent.**
+`/api/backtest-stats` reads straight off these rows, so it auto-corrects.
+```bash
+curl -X POST "http://127.0.0.1:5000/api/admin/recompute-signals" \
+  -H "X-Alpha-Lens-Token: <SQL_RUNNER_SECRET>"   # optional ?days=N&limit=N
+```
+Implemented by `recompute_all_signals()` / `admin_recompute_signals()` in `app.py`
+(**route #51**). Local one-shot: `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 python -c "import app; print(app.recompute_all_signals())"`.
 
 ## Health & worker liveness
 
@@ -1023,7 +1070,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **50 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **194 tests**.
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **51 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **227 tests**.
 
 ## Context7 MCP — Library Documentation
 

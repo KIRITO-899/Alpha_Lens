@@ -106,6 +106,7 @@ from marketdata.market_calendar import (
     is_market_holiday, is_market_open, published_after_market_hours,
     has_market_traded_since,
 )
+from marketdata.price_resolver import select_fresh_close, atr_stop_target
 
 
 _TICKER_CACHE = {}
@@ -2666,10 +2667,13 @@ _YAHOO_CLOSE_CACHE_TTL = 300  # 5 minutes
 
 def _get_yahoo_official_close(ticker):
     """
-    Fetch the most recent official closing price from Yahoo Finance.
-    Uses the last non-null daily close from the chart endpoint. Do not prefer
-    meta.regularMarketPrice here; for NSE symbols it can diverge from the
-    completed-session close after hours.
+    Fetch the most recent COMPLETED-session close from Yahoo Finance.
+
+    Uses the SAME fresh-close rule as get_last_closed_session_quote
+    (_yahoo_daily_and_meta + select_fresh_close) so this fallback can never
+    re-introduce the "stale daily-series close" bug: right after the bell the
+    daily series' today-bar is still null, but regularMarketPrice (stamped
+    >= 15:30 IST) already carries the real close — select_fresh_close prefers it.
     Results cached for 5 minutes.
     """
     import time as _time
@@ -2680,31 +2684,12 @@ def _get_yahoo_official_close(ticker):
         return cached[0]
 
     try:
-        _h = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=5d&interval=1d"
-        resp = requests.get(url, headers=_h, timeout=8)
-        data = resp.json()
-        result = data.get('chart', {}).get('result', [{}])[0]
-        meta = result.get('meta', {})
-        quote = result.get('indicators', {}).get('quote', [{}])[0]
-        closes = quote.get('close', [])
-
-        for close in reversed(closes):
-            try:
-                close_price = round(float(close), 2)
-            except Exception:
-                continue
-            if close_price > 0:
-                _YAHOO_CLOSE_CACHE[ticker] = (close_price, now_ts)
-                return close_price
-
-        # Fallback: meta close fields, then regularMarketPrice as a last resort.
-        prev = meta.get('chartPreviousClose') or meta.get('previousClose') or meta.get('regularMarketPrice')
-        if prev and prev > 0:
-            close_price = round(float(prev), 2)
+        daily, reg_price, reg_time_ist = _yahoo_daily_and_meta(ticker)
+        last_close, _prev = select_fresh_close(daily, reg_price, reg_time_ist)
+        if last_close and last_close > 0:
+            close_price = round(float(last_close), 2)
             _YAHOO_CLOSE_CACHE[ticker] = (close_price, now_ts)
             return close_price
-
     except Exception:
         pass  # Silent fail — caller will use Angel One fallback
 
@@ -3768,41 +3753,40 @@ Return ONLY valid JSON matching this shape:
 
             # ── ATR-BASED DYNAMIC STOP & TARGET ──
             # ATR (Average True Range) measures a stock's typical daily price swing.
-            # Stop = atr_pct * 1.0 (capped 1.0-2.5%), Target = atr_pct * 2.0 (capped 2-5%).
-            # Locks the R:R at ~2:1 while scaling with each stock's actual volatility.
+            # RULE: Stop = ATR/2, Target = ATR (a 2:1 reward:risk that scales with
+            # each stock's own volatility). When ATR data isn't available we fall
+            # back to a flat 1% stop / 2% target (NOT a skip). The exact math lives
+            # in the pure, unit-tested marketdata.price_resolver.atr_stop_target().
             #
-            # No-ATR policy: REQUIRE_ATR=1 (default) skips the signal entirely if
-            # ATR data isn't available. Previously we fell back to the static
-            # 1%/2% defaults — but on a high-vol stock that means we were
-            # setting a stop INSIDE intraday noise, which explains a chunk of
-            # the 100% stop-hit rate in the live data. Set REQUIRE_ATR=0 to
-            # restore the old fallback behaviour.
+            # Multipliers/caps/fallback are env-tunable; defaults encode the rule
+            # above (0.5x / 1.0x, 1%/2% fallback, wide sanity caps that never bind
+            # for a real liquid stock). REQUIRE_ATR=1 restores the old "skip when
+            # no ATR" behaviour (default 0 now — we want the 1%/2% fallback).
             _atr_pct = 0.0
             if tech_data and tech_data.get('atr_pct'):
                 _atr_pct = float(tech_data['atr_pct'])
-            if _atr_pct > 0:
-                # Lever #2: ATR multipliers + caps are env-tunable so the stop
-                # can be widened (e.g. ATR_STOP_MULT=1.5) to stop getting
-                # whipsawed out by intraday noise, without a code change.
-                # Defaults reproduce the original 1x/2x, 1-2.5%/2-5% behaviour.
-                _stop_mult = float(os.environ.get('ATR_STOP_MULT', '1.0'))
-                _tgt_mult  = float(os.environ.get('ATR_TARGET_MULT', '2.0'))
-                _stop_cap  = float(os.environ.get('ATR_STOP_CAP_PCT', '2.5'))
-                _tgt_cap   = float(os.environ.get('ATR_TARGET_CAP_PCT', '5.0'))
-                _dynamic_stop   = round(min(_stop_cap, max(1.0, _atr_pct * _stop_mult)), 2)
-                _dynamic_target = round(min(_tgt_cap, max(2.0, _atr_pct * _tgt_mult)), 2)
-                print(f"   [ATR] {ticker}: ATR={_atr_pct:.2f}% → stop={_dynamic_stop:.2f}% target={_dynamic_target:.2f}%")
+
+            if _atr_pct <= 0 and os.environ.get("REQUIRE_ATR", "0").lower() in ("1", "true", "yes"):
+                print(f"   [ATR] {ticker}: no ATR data — SKIPPING signal (REQUIRE_ATR=1).")
+                SELECTION_FUNNEL['atr_skip'] += 1
+                eval_loop.log_decision('rejected_atr', ticker, base_direction,
+                                       news_id=news_id, headline=headline,
+                                       base_price=(tech_data.get('current_price') if tech_data else None),
+                                       news_time=_pub_dt_utc_str)
+                continue
+
+            _dynamic_stop, _dynamic_target, _used_atr = atr_stop_target(
+                _atr_pct,
+                stop_mult=float(os.environ.get('ATR_STOP_MULT', '0.5')),
+                target_mult=float(os.environ.get('ATR_TARGET_MULT', '1.0')),
+                fallback_stop_pct=TRADE_STOP_PCT,
+                fallback_target_pct=TRADE_TARGET_PCT,
+                stop_cap_pct=float(os.environ.get('ATR_STOP_CAP_PCT', '10.0')),
+                target_cap_pct=float(os.environ.get('ATR_TARGET_CAP_PCT', '20.0')),
+            )
+            if _used_atr:
+                print(f"   [ATR] {ticker}: ATR={_atr_pct:.2f}% → stop={_dynamic_stop:.2f}% (ATR/2) target={_dynamic_target:.2f}% (ATR)")
             else:
-                if os.environ.get("REQUIRE_ATR", "1").lower() in ("1", "true", "yes"):
-                    print(f"   [ATR] {ticker}: no ATR data — SKIPPING signal (REQUIRE_ATR=1).")
-                    SELECTION_FUNNEL['atr_skip'] += 1
-                    eval_loop.log_decision('rejected_atr', ticker, base_direction,
-                                           news_id=news_id, headline=headline,
-                                           base_price=(tech_data.get('current_price') if tech_data else None),
-                                           news_time=_pub_dt_utc_str)
-                    continue
-                _dynamic_stop   = TRADE_STOP_PCT
-                _dynamic_target = TRADE_TARGET_PCT
                 print(f"   [ATR] {ticker}: no ATR — falling back to static {_dynamic_stop:.1f}%/{_dynamic_target:.1f}%")
 
             # ── News-quality context for AI prompt ──
@@ -4246,16 +4230,29 @@ def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is
 
             h_pct = ((h - base_price) / base_price) * 100
             l_pct = ((l - base_price) / base_price) * 100
+            o_pct = ((o - base_price) / base_price) * 100  # open gap, for realistic fills
+
+            # Record a REALISTIC bracket fill, not the candle extreme: you exit AT
+            # your target/stop level — unless the bar gapped THROUGH the level at
+            # the open, in which case you fill at the (worse/better) open. Recording
+            # the raw high/low overstates both wins and losses (e.g. a -5% candle
+            # low on a -1% stop) and corrupts the track record. _fill() clamps a
+            # touched level to the level, but honours a gap-through open.
+            def _fill_long_up(level):   # favourable side hit at +level (target for longs)
+                return o_pct if o_pct >= level else level
+            def _fill_long_down(level):  # adverse side hit at -level (stop for longs)
+                return o_pct if o_pct <= -level else -level
+
             if is_bullish:
                 # Bug #18 fix: Check target before stop for bullish signals.
                 # If both levels are breached in the same candle (gap day), assume
                 # the target was hit first (benefit of the doubt for long positions).
-                if h_pct >= target_pct: return 'Predicted Target Hit', round(h_pct, 2)
-                if l_pct <= -stop_pct:  return 'Stop Loss Hit',       round(l_pct, 2)
+                if h_pct >= target_pct: return 'Predicted Target Hit', round(_fill_long_up(target_pct), 2)
+                if l_pct <= -stop_pct:  return 'Stop Loss Hit',        round(_fill_long_down(stop_pct), 2)
             else:
                 # For bearish signals, check target first (downside).
-                if l_pct <= -target_pct: return 'Predicted Target Hit', round(l_pct, 2)
-                if h_pct >= stop_pct:    return 'Stop Loss Hit',       round(h_pct, 2)
+                if l_pct <= -target_pct: return 'Predicted Target Hit', round(_fill_long_down(target_pct), 2)
+                if h_pct >= stop_pct:    return 'Stop Loss Hit',        round(_fill_long_up(stop_pct), 2)
         return None, None
     except Exception:
         return None, None
@@ -4399,6 +4396,165 @@ def repair_existing_signal_statuses(days=14):
 
     conn.close()
     print(f"[REPAIR] Completed. Fixed {fixed} signal rows out of {len(rows)} reviewed.")
+
+
+def recompute_all_signals(days=None, limit=None):
+    """One-shot data-correction pass over the WHOLE stock_impact table.
+
+    For every signal it:
+      1. Recovers the signal-time ATR% from the stored technical_context.
+      2. Re-derives stop/target under the CURRENT rule (stop=ATR/2, target=ATR;
+         flat 1%/2% when ATR is unknown) via the pure atr_stop_target().
+      3. Re-resolves the outcome (Target/Stop/Expired/Active) by scanning real
+         daily OHLC from the correct first tradable session (next session for
+         after-hours news) with check_historical_hits().
+      4. Recomputes current_price from the FIXED fresh-close resolver (so no
+         stock is left showing a stale/one-session-lagged close) and the signed
+         estimated_change_percent.
+      5. Rewrites the reason's "ATR stop: X% | target: Y%" marker so future live
+         re-pricing parses the new levels.
+
+    Pure data fix — NO Gemini/LLM calls. base_price (the news-time entry captured
+    live at signal creation) is preserved when valid; only filled when missing.
+    The Track Record (/api/backtest-stats) reads straight off these rows, so it
+    auto-corrects once this writes. Returns a summary dict (counts + before/after
+    status histogram). Safe to re-run (idempotent given stable market data).
+    """
+    import re as _re
+    IST = timezone(timedelta(hours=5, minutes=30))
+    print("[RECOMPUTE] Starting full signal recompute (price + ATR-rule + status)...")
+
+    conn = connect_news_db()
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    q = ("SELECT id, news_id, ticker, impact, base_price, current_price, status, "
+         "created_at, estimated_change_percent, reason, technical_context "
+         "FROM stock_impact")
+    params = []
+    if days:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=int(days))).strftime('%Y-%m-%d %H:%M:%S')
+        q += " WHERE created_at >= ?"
+        params.append(cutoff)
+    q += " ORDER BY created_at DESC"
+    if limit:
+        q += f" LIMIT {int(limit)}"
+    c.execute(q, params)
+    rows = c.fetchall()
+    conn.close()
+
+    before_hist, after_hist = {}, {}
+    ohlc_cache = {}
+    close_cache = {}
+    updates = []
+    reviewed = 0
+
+    for row in rows:
+        reviewed += 1
+        sid = row['id']
+        ticker = row['ticker']
+        impact = (row['impact'] or '')
+        is_bullish = 'bullish' in impact.lower()
+        base_price = _positive_float(row['base_price']) or 0.0
+        old_status = row['status'] or 'Active View'
+        before_hist[old_status] = before_hist.get(old_status, 0) + 1
+
+        created_dt = _parse_created_at(row['created_at'])
+        if not created_dt:
+            continue
+
+        # 1. recover signal-time ATR% from stored technical_context
+        atr_pct = None
+        try:
+            tc = json.loads(row['technical_context'] or "{}")
+            if isinstance(tc.get('atr_pct'), (int, float)):
+                atr_pct = float(tc['atr_pct'])
+        except Exception:
+            atr_pct = None
+
+        # 2. new stop/target rule (ATR/2, ATR | fallback 1%/2%)
+        stop_pct, target_pct, _used_atr = atr_stop_target(
+            atr_pct,
+            stop_mult=float(os.environ.get('ATR_STOP_MULT', '0.5')),
+            target_mult=float(os.environ.get('ATR_TARGET_MULT', '1.0')),
+            fallback_stop_pct=TRADE_STOP_PCT,
+            fallback_target_pct=TRADE_TARGET_PCT,
+            stop_cap_pct=float(os.environ.get('ATR_STOP_CAP_PCT', '10.0')),
+            target_cap_pct=float(os.environ.get('ATR_TARGET_CAP_PCT', '20.0')),
+        )
+
+        # base_price: keep the live-captured news-time entry; only fill if missing
+        if base_price <= 0:
+            if ticker not in close_cache:
+                close_cache[ticker] = (get_last_closed_session_quote(ticker)[0] or 0.0)
+            base_price = close_cache[ticker] or 0.0
+        if base_price <= 0:
+            continue  # cannot price this row — leave it untouched
+
+        # 3. re-resolve status from OHLC (start from next session for after-hours)
+        start_date = None
+        if not _published_during_nse_hours(created_dt):
+            if ticker not in ohlc_cache:
+                ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=120)
+            nxt_open, nxt_date = _next_session_open_price(ticker, created_dt, ohlc_cache[ticker])
+            if nxt_open and nxt_open > 0:
+                start_date = nxt_date
+        if start_date is None:
+            start_date = created_dt.astimezone(IST).date()
+
+        if ticker not in ohlc_cache:
+            ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=120)
+
+        hist_status, hist_diff = check_historical_hits(
+            ticker, created_dt, base_price, target_pct, stop_pct, is_bullish,
+            ohlc_rows=ohlc_cache.get(ticker), start_date=start_date
+        )
+
+        if hist_status:
+            new_status = hist_status
+            diff_percent = hist_diff
+            current_price = round(base_price * (1 + diff_percent / 100.0), 2)
+        else:
+            # 4. unresolved → mark expired/active and price at the fresh close
+            if ticker not in close_cache:
+                close_cache[ticker] = (get_last_closed_session_quote(ticker)[0] or 0.0)
+            current_price = close_cache[ticker] or base_price
+            diff_percent = round(((current_price - base_price) / base_price) * 100, 2) if base_price > 0 else 0.0
+            age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600.0
+            new_status = 'Expired' if age_hours >= SIGNAL_EXPIRY_HOURS else 'Active View'
+
+        # 5. rewrite the ATR stop/target marker so live re-pricing parses new levels
+        reason = (row['reason'] or '')
+        reason = _re.sub(r'ATR stop:\s*[0-9.]+%\s*\|\s*target:\s*[0-9.]+%\.?', '', reason).strip()
+        reason = (reason + f" ATR stop: {stop_pct:.2f}% | target: {target_pct:.2f}%.").strip()
+
+        after_hist[new_status] = after_hist.get(new_status, 0) + 1
+        updates.append((round(current_price, 2), round(base_price, 2), new_status,
+                        round(diff_percent, 2), reason, sid))
+
+    if updates:
+        _u = updates
+        def _apply(conn_inner, c_inner):
+            c_inner.executemany(
+                """UPDATE stock_impact
+                   SET current_price = ?, base_price = ?, status = ?,
+                       estimated_change_percent = ?, reason = ?
+                   WHERE id = ?""",
+                _u
+            )
+        db_write(_apply)
+
+    summary = {
+        "reviewed": reviewed,
+        "updated": len(updates),
+        "status_before": before_hist,
+        "status_after": after_hist,
+        "hits": after_hist.get('Predicted Target Hit', 0),
+        "stops": after_hist.get('Stop Loss Hit', 0) + after_hist.get('Reacted Against Prediction', 0),
+        "expired": after_hist.get('Expired', 0),
+        "active": after_hist.get('Active View', 0),
+    }
+    print(f"[RECOMPUTE] Done. Reviewed {reviewed}, updated {len(updates)}. After: {after_hist}")
+    return summary
 
 
 def yfinance_worker():
@@ -4583,20 +4739,25 @@ def yfinance_worker():
                         high_pct = ((eval_high - base_price) / base_price) * 100
                         low_pct  = ((eval_low  - base_price) / base_price) * 100
 
+                        # Record the realistic bracket fill (you exit AT your
+                        # stop/target during live monitoring), not the candle
+                        # extreme — keeps P&L honest and consistent with
+                        # check_historical_hits. A gap-through-open is caught by
+                        # the historical OHLC pass (section 1) on the next cycle.
                         if is_bullish:
                             if low_pct <= -stop_pct:
                                 new_status = 'Stop Loss Hit'
-                                diff_percent = low_pct
+                                diff_percent = -stop_pct
                             elif high_pct >= target_pct:
                                 new_status = 'Predicted Target Hit'
-                                diff_percent = high_pct
+                                diff_percent = target_pct
                         else:  # BEARISH
                             if high_pct >= stop_pct:
                                 new_status = 'Stop Loss Hit'
-                                diff_percent = high_pct
+                                diff_percent = stop_pct
                             elif low_pct <= -target_pct:
                                 new_status = 'Predicted Target Hit'
-                                diff_percent = low_pct
+                                diff_percent = -target_pct
 
                     # ── 3. Current price evaluation (MARKET HOURS ONLY) ──
                     # Only evaluate SL/TP from current price during trading hours.
@@ -7797,24 +7958,92 @@ def search_stocks():
 def _positive_float(value):
     return _market_quote_float(value)
 
-def get_last_closed_session_quote(ticker):
-    """Return (last_close, previous_close) from daily candles."""
+# ── Yahoo daily-bars + meta in ONE call (cached) ──────────────────────────────
+# Pulls the daily close series AND the meta (regularMarketPrice/Time) together so
+# get_last_closed_session_quote() can reconcile them via select_fresh_close().
+# This kills the "stale close" bug where the daily series lags one session (its
+# today-bar is null right after the bell) while regularMarketPrice already holds
+# the genuine latest close. 120s cache so the worker pre-warm + per-row reuse
+# don't each hit Yahoo.
+_YQUOTE_META_CACHE = {}
+_YQUOTE_META_TTL = 120  # seconds
+
+
+def _yahoo_daily_and_meta(ticker):
+    """Return (daily:[(date_ist, close)], reg_price, reg_time_ist) from one Yahoo
+    chart call. Defensive: ([], None, None) on any failure."""
+    now = time.time()
+    hit = _YQUOTE_META_CACHE.get(ticker)
+    if hit and (now - hit[0]) < _YQUOTE_META_TTL:
+        return hit[1]
+    out = ([], None, None)
     try:
-        hist = yf.Ticker(ticker).history(period='10d', interval='1d')
-        if hist is None or hist.empty or 'Close' not in hist:
-            return None, None
-        closes = []
-        for value in hist['Close'].dropna().tolist():
-            close = _positive_float(value)
-            if close:
-                closes.append(close)
-        if len(closes) >= 2:
-            return closes[-1], closes[-2]
-        if len(closes) == 1:
-            return closes[-1], None
-    except Exception as e:
-        print(f"[Stock Price] Daily close fallback failed for {ticker}: {e}")
-    return None, None
+        IST = timezone(timedelta(hours=5, minutes=30))
+        url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}?range=15d&interval=1d"
+        resp = HTTP_SESSION.get(url, timeout=8)
+        result = resp.json()['chart']['result'][0]
+        meta = result.get('meta', {}) or {}
+        reg_price = _positive_float(meta.get('regularMarketPrice'))
+        reg_time_ist = None
+        rmt = meta.get('regularMarketTime')
+        if rmt:
+            try:
+                reg_time_ist = datetime.fromtimestamp(int(rmt), tz=timezone.utc).astimezone(IST)
+            except Exception:
+                reg_time_ist = None
+        tss = result.get('timestamp', []) or []
+        quote = (result.get('indicators', {}).get('quote', [{}]) or [{}])[0] or {}
+        closes = quote.get('close', []) or []
+        daily = []
+        for t0, c0 in zip(tss, closes):
+            c = _positive_float(c0)
+            if not c:
+                continue
+            try:
+                d = datetime.fromtimestamp(int(t0), tz=timezone.utc).astimezone(IST).date()
+            except Exception:
+                continue
+            daily.append((d, c))
+        out = (daily, reg_price, reg_time_ist)
+    except Exception:
+        out = ([], None, None)
+    _YQUOTE_META_CACHE[ticker] = (now, out)
+    return out
+
+
+def get_last_closed_session_quote(ticker):
+    """Return (last_close, previous_close) — the most recent COMPLETED session's
+    close and the one before it.
+
+    Robust to the daily-history "today's bar is still null right after the bell"
+    lag: when Yahoo's regularMarketPrice carries a fresher completed close (its
+    regularMarketTime is at/after 15:30 IST), select_fresh_close() uses that, so
+    the value never lags a session behind the live quote. Falls back to the shim
+    daily history (Angel/Yahoo) when the Yahoo chart call returns nothing."""
+    daily, reg_price, reg_time_ist = _yahoo_daily_and_meta(ticker)
+
+    if not daily:
+        # Secondary: shim history (Angel primary, Yahoo fallback); meta unknown.
+        try:
+            hist = yf.Ticker(ticker).history(period='10d', interval='1d')
+            if hist is not None and not hist.empty and 'Close' in hist:
+                IST = timezone(timedelta(hours=5, minutes=30))
+                for idx, value in zip(hist.index, hist['Close'].tolist()):
+                    close = _positive_float(value)
+                    if not close:
+                        continue
+                    try:
+                        d = idx.tz_convert(IST).date() if getattr(idx, 'tzinfo', None) else idx.date()
+                    except Exception:
+                        try:
+                            d = idx.to_pydatetime().date()
+                        except Exception:
+                            continue
+                    daily.append((d, close))
+        except Exception as e:
+            print(f"[Stock Price] Daily close fallback failed for {ticker}: {e}")
+
+    return select_fresh_close(daily, reg_price, reg_time_ist)
 
 def get_cached_stock_close_from_db(ticker):
     """Fallback to the most recent saved signal when network quotes are unavailable."""
@@ -10492,6 +10721,34 @@ def admin_prune_news():
             return jsonify({"status": "error", "error": "prune returned None (db_write likely failed — check server logs)"}), 500
         dn, di = result
         return jsonify({"status": "success", "deleted_news": dn, "deleted_impacts": di})
+    except Exception as e:
+        import traceback
+        return jsonify({"status": "error", "error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route('/api/admin/recompute-signals', methods=['POST', 'GET'])
+def admin_recompute_signals():
+    """Re-derive prices, the ATR-rule stop/target, status and percentages for
+    every signal, then write them back. Use after the pricing fix / ATR-rule
+    change to correct the historical Track Record in place (no LLM, non-
+    destructive — only UPDATEs existing rows; never deletes).
+
+    Auth: X-Alpha-Lens-Token: <SQL_RUNNER_SECRET> OR ?token=<secret>
+    Optional: ?days=N (limit to last N days; default ALL), ?limit=N.
+    """
+    secret = os.environ.get("SQL_RUNNER_SECRET")
+    token = request.headers.get("X-Alpha-Lens-Token") or request.args.get("token")
+    if not secret or token != secret:
+        return jsonify({"error": "Unauthorized"}), 401
+    try:
+        body = request.get_json(silent=True) or {}
+        days = request.args.get("days") or body.get("days")
+        limit = request.args.get("limit") or body.get("limit")
+        summary = recompute_all_signals(
+            days=int(days) if days else None,
+            limit=int(limit) if limit else None,
+        )
+        return jsonify({"status": "success", **summary})
     except Exception as e:
         import traceback
         return jsonify({"status": "error", "error": str(e), "traceback": traceback.format_exc()}), 500

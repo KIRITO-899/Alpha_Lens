@@ -33,8 +33,8 @@ HORIZON_DAYS = int(os.environ.get("EVAL_HORIZON_DAYS", "4"))  # ~3 trading sessi
 # win rate can be compared across config changes over time.
 _CONFIG_DEFAULTS = {
     "MIN_SIGNAL_PRICE": "20", "MIN_TURNOVER_CR": "1.0",
-    "ATR_STOP_MULT": "1.0", "ATR_TARGET_MULT": "2.0",
-    "ATR_STOP_CAP_PCT": "2.5", "ATR_TARGET_CAP_PCT": "5.0",
+    "ATR_STOP_MULT": "0.5", "ATR_TARGET_MULT": "1.0",
+    "ATR_STOP_CAP_PCT": "10.0", "ATR_TARGET_CAP_PCT": "20.0",
     "REQUIRE_TECH_CONFIRM": "1", "TECH_CONFIRM_MIN": "50",
     "W_AI": "0.30", "W_TECHNICAL": "0.30", "W_HISTORICAL": "0.20",
     "W_SECTOR": "0.05", "W_INDIAN": "0.15",
@@ -130,12 +130,14 @@ def _label_one(ticker, anchor_ist, direction):
             return None
         atr_pct = round(atr / ref_price * 100, 2)
 
-        s_mult = float(os.environ.get("ATR_STOP_MULT", "1.0"))
-        t_mult = float(os.environ.get("ATR_TARGET_MULT", "2.0"))
-        s_cap = float(os.environ.get("ATR_STOP_CAP_PCT", "2.5"))
-        t_cap = float(os.environ.get("ATR_TARGET_CAP_PCT", "5.0"))
-        stop_pct = round(min(s_cap, max(1.0, atr_pct * s_mult)), 2)
-        target_pct = round(min(t_cap, max(2.0, atr_pct * t_mult)), 2)
+        # Stop = ATR/2, Target = ATR (matches the live signal path; no 1%/2%
+        # floor — that flat pair is only the *no-ATR* fallback, and here ATR>0).
+        s_mult = float(os.environ.get("ATR_STOP_MULT", "0.5"))
+        t_mult = float(os.environ.get("ATR_TARGET_MULT", "1.0"))
+        s_cap = float(os.environ.get("ATR_STOP_CAP_PCT", "10.0"))
+        t_cap = float(os.environ.get("ATR_TARGET_CAP_PCT", "20.0"))
+        stop_pct = round(min(s_cap, atr_pct * s_mult), 2)
+        target_pct = round(min(t_cap, atr_pct * t_mult), 2)
 
         # forward scan: prefer 15m, fall back to daily
         scan_src = None
