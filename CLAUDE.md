@@ -439,9 +439,25 @@ mirroring the dashboard's Command Center ("lead with value").
   news empty state references it too). **Degradation:** a zero-data/error fetch with a
   populated watchlist shows a retrying message (never a broken shell). Styles: `.rr-*` block
   in `styles.css` (token-based, level-colored
-  green/amber/red, responsive 2-col→1-col < 600px). **No holdings sizes** exist (the
-  watchlist is `{ticker, name}` only), so the model is **equal-weight** — a quantity-aware
-  weighting would be a follow-up. Env knobs: `RISK_RADAR_TTL_SECS`, `RISK_RADAR_MAX_TICKERS`.
+  green/amber/red, responsive 2-col→1-col < 600px). Env knobs: `RISK_RADAR_TTL_SECS`,
+  `RISK_RADAR_MAX_TICKERS`.
+
+  **Holdings + live P&L + value-weighted radar (added).** The watchlist entry now carries
+  optional **`qty` + `avgPrice`** (client-side localStorage, same key, with a load-time
+  normalize so old `{ticker,name}` rows default to `null`). `renderWatchlistPanel`
+  (`app-stocks.js`) renders inline Qty / Avg ₹ inputs + a per-card **unrealized P&L** badge
+  + a **portfolio total tile** (mark-to-market, avg-cost, unrealized — labelled; `price==0`
+  → "price unavailable"; implausible avg vs live → "check avg vs price"). Prices reuse
+  `/api/stock-price/<t>` → `watchlistPrices` (no new endpoint). The **Risk Radar is now
+  value-weighted**: `loadRiskRadar` **POSTs** `{holdings:[{ticker,qty,avgPrice}]}` (was
+  GET `?tickers=`); `/api/portfolio/risk-radar` accepts **GET (equal-weight, back-compat) OR
+  POST (value-weighted)**, folds the per-ticker weight into the `_RISK_RADAR_CACHE` key (so
+  a 10-share vs 1000-share portfolio of the same names doesn't collide), and
+  `_compute_portfolio_risk(tickers, weights=)` uses `_rr_weighted_mean` (pure, unit-smoked)
+  for `avg_stock` + each dimension (weight = `qty×avgPrice`; unsized names default to the
+  mean position size; no sizes → equal-weight). `max_stock` + per-stock composite unchanged.
+  ⚠️ **Sector concentration is still count-based** (not value-weighted) — a noted follow-up.
+  Route count stays **50** (method added to the existing route). Still deterministic / no-LLM.
 
 ### Signal Terminal — mobile card view
 

@@ -741,9 +741,13 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 _riskRadarLastKey = '';
                 return;
             }
-            const key = watchlist.map(s => s.ticker).sort().join(',');
+            // POST holdings (ticker + qty + avgPrice) so the score is VALUE-WEIGHTED
+            // by position size. The throttle/skip key includes qty+avg so editing a
+            // holding re-runs the radar.
+            const holdings = watchlist.map(s => ({ ticker: s.ticker, qty: s.qty, avgPrice: s.avgPrice }));
+            const key = holdings.map(h => `${h.ticker}:${h.qty || 0}:${h.avgPrice || 0}`).sort().join(',');
             const now = Date.now();
-            // Same watchlist within 60s → skip (server caches 30m anyway).
+            // Same holdings within 60s → skip (server caches 30m anyway).
             if (!force && key === _riskRadarLastKey && (now - _riskRadarLastTs) < 60000) return;
             if (_riskRadarInflight) return;
             _riskRadarInflight = true;
@@ -755,7 +759,11 @@ ${relatedNews.slice(0, 3).map(news => `- ${news.headline}`).join('\n')}`;
                 section.innerHTML = _rrSkeleton();
             }
             try {
-                const res = await fetch('/api/portfolio/risk-radar?tickers=' + encodeURIComponent(key));
+                const res = await fetch('/api/portfolio/risk-radar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ holdings }),
+                });
                 if (!res.ok) throw new Error('http ' + res.status);
                 const data = await res.json();
                 _riskRadarLastKey = key;

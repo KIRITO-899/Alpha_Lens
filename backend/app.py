@@ -8214,8 +8214,26 @@ def _score_sector_concentration(sectors):
     return _clamp_score(score), reasons
 
 
-def _compute_portfolio_risk(tickers):
-    """Build the full risk-radar payload for a list of tickers. Pure/quantitative."""
+def _rr_weighted_mean(items):
+    """Weighted mean of (value, weight) pairs (skips value None / weight<=0).
+    Returns None when nothing contributes. Pure — unit-tested."""
+    num = den = 0.0
+    for v, w in items:
+        if v is None:
+            continue
+        w = max(float(w or 0), 0.0)
+        num += v * w
+        den += w
+    return (num / den) if den > 0 else None
+
+
+def _compute_portfolio_risk(tickers, weights=None):
+    """Build the full risk-radar payload for a list of tickers. Pure/quantitative.
+
+    weights: optional {normalized_ticker: invested_value (qty×avgPrice)}. When
+    given, the overall score + dimension tiles are VALUE-WEIGHTED (a bigger
+    position pulls the score more); holdings without a size default to the mean
+    position size so they still count. Absent → equal-weight (unchanged)."""
     degraded = False
     norm = []
     for t in tickers:
@@ -8225,6 +8243,19 @@ def _compute_portfolio_risk(tickers):
     if not norm:
         return {"holdings_count": 0, "overall": None, "dimensions": [], "by_stock": [],
                 "degraded": False, "notes": ["No valid tickers."]}
+
+    # Per-ticker weight: invested value when provided, else the mean of provided
+    # weights (so unsized names count as an average position); equal-weight when
+    # no sizes were given at all.
+    _provided = {normalize_ticker(k): float(v) for k, v in (weights or {}).items()
+                 if v and float(v) > 0 and normalize_ticker(k)}
+    if _provided:
+        _default_w = sum(_provided.values()) / len(_provided)
+        def _w_of(nt):
+            return _provided.get(nt, _default_w)
+    else:
+        def _w_of(nt):
+            return 1.0
 
     # ── Recent bearish/bullish signals (one DB query for all tickers) ──
     sig_by_base = {}
@@ -8372,8 +8403,10 @@ def _compute_portfolio_risk(tickers):
                 "level": _risk_level(score), "drivers": drivers}
 
     def _avg_dim(per_stock_key):
-        vals = [s["dims"][per_stock_key] for s in per_stock if s["dims"].get(per_stock_key) is not None]
-        return _clamp_score(sum(vals) / len(vals)) if vals else None
+        # Value-weighted mean of this dimension across holdings (equal-weight when
+        # no sizes were entered — _w_of returns 1.0 then).
+        m = _rr_weighted_mean([(s["dims"].get(per_stock_key), _w_of(s["ticker"])) for s in per_stock])
+        return _clamp_score(m) if m is not None else None
 
     dimensions = [
         _dim_tile("technical", "Technical Weakness", _avg_dim("technical"), per_stock_key="technical"),
@@ -8386,7 +8419,11 @@ def _compute_portfolio_risk(tickers):
 
     # ── Overall portfolio score ──
     stock_scores = [s["score"] for s in per_stock]
-    avg_stock = sum(stock_scores) / len(stock_scores) if stock_scores else 0
+    # Value-weighted average single-name risk (a bigger position weighs more);
+    # max_stock stays the single riskiest name regardless of size.
+    avg_stock = _rr_weighted_mean([(s["score"], _w_of(s["ticker"])) for s in per_stock])
+    if avg_stock is None:
+        avg_stock = (sum(stock_scores) / len(stock_scores)) if stock_scores else 0
     max_stock = max(stock_scores) if stock_scores else 0
     macro_c = macro_s if macro_s is not None else 25
     sector_c = sector_s if sector_s is not None else 25
@@ -8423,20 +8460,52 @@ def _compute_portfolio_risk(tickers):
     }
 
 
-@app.route('/api/portfolio/risk-radar', methods=['GET'])
+@app.route('/api/portfolio/risk-radar', methods=['GET', 'POST'])
 def portfolio_risk_radar():
-    raw = (request.args.get('tickers') or '').strip()
-    if not raw:
+    # Two shapes:
+    #   GET  ?tickers=A,B,C                      → equal-weight (back-compat)
+    #   POST {"holdings":[{ticker,qty,avgPrice}]} → value-weighted by qty×avgPrice
+    tickers, weights = [], {}
+    if request.method == 'POST':
+        body = request.get_json(silent=True) or {}
+        holdings = body.get('holdings') if isinstance(body, dict) else None
+        if holdings is None and isinstance(body, list):
+            holdings = body
+        for h in (holdings or []):
+            if not isinstance(h, dict):
+                continue
+            t = (h.get('ticker') or '').strip()
+            if not t:
+                continue
+            tickers.append(t)
+            try:
+                qty = float(h.get('qty') or 0)
+                avg = float(h.get('avgPrice') or 0)
+                if qty > 0 and avg > 0:
+                    weights[normalize_ticker(t) or t] = qty * avg
+            except (ValueError, TypeError):
+                pass
+    else:
+        raw = (request.args.get('tickers') or '').strip()
+        tickers = [t.strip() for t in raw.split(',') if t.strip()]
+
+    if not tickers:
         return jsonify({"holdings_count": 0, "overall": None, "dimensions": [],
                         "by_stock": [], "degraded": False, "notes": []})
-    tickers = [t.strip() for t in raw.split(',') if t.strip()][:_RISK_RADAR_MAX_TICKERS]
-    cache_key = ",".join(sorted(normalize_ticker(t) or t for t in tickers))
+    tickers = tickers[:_RISK_RADAR_MAX_TICKERS]
+
+    # Cache key includes the per-ticker weight so a 10-share and a 1000-share
+    # portfolio of the same names don't collide on the same cached (equal-weight)
+    # result. Weights rounded to ₹ keep the key stable across re-renders.
+    tkey = ",".join(sorted(normalize_ticker(t) or t for t in tickers))
+    wkey = ",".join(f"{k}:{int(v)}" for k, v in sorted(weights.items())) if weights else "eq"
+    cache_key = tkey + "|" + wkey
     now = time.time()
     cached = _RISK_RADAR_CACHE.get(cache_key)
     if cached and (now - cached["ts"]) < _RISK_RADAR_TTL:
         return jsonify(cached["data"])
     try:
-        data = _compute_portfolio_risk(tickers)
+        data = _compute_portfolio_risk(tickers, weights=weights or None)
     except Exception as e:
         print(f"[RiskRadar] compute failed: {e}")
         return jsonify({"holdings_count": len(tickers), "overall": None, "dimensions": [],
