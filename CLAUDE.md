@@ -337,7 +337,7 @@ Two endpoints expose background-worker state:
 | `GET /api/health` | One-glance "is anything broken right now?". Returns `overall: "ok"\|"degraded"\|"down"` + a per-worker state (`ok`/`not_started`/`running`/`silent`/`stalled`) judged against a per-worker stall budget, plus Gemini-key counts and a DB probe. HTTP **503** when `overall=down` so uptime monitors can latch on the status. Use this for cron monitors and quick eyeball checks. |
 | `GET /api/debug-worker-status` | Full per-worker dump — raw heartbeat fields, last cycle metrics (`last_scrape_count`, `last_save_count`, `last_news_moved`, `last_pruned_count`, etc.), last error + age. Use this when `/api/health` says something's wrong and you need the detail. |
 
-Both read from the in-process `WORKER_HEARTBEAT` dict in `app.py`, populated by each worker per cycle (`_heartbeat(name, **fields)`). All seven workers — `ai_news`, `yfinance`, `macro_shock`, `archival`, `news_prune`, `eval_labeler`, `calendar` — write their start/finish/error timestamps. Per-worker stall budgets live in `_WORKER_STALL_BUDGET_SECS` and are tuned to each worker's natural cadence (e.g. archival's budget is 36h because it runs every 24h; calendar's is 3h for its 30m cadence).
+Both read from the in-process `WORKER_HEARTBEAT` dict in `app.py`, populated by each worker per cycle (`_heartbeat(name, **fields)`). All eight workers — `ai_news`, `yfinance`, `macro_shock`, `archival`, `news_prune`, `eval_labeler`, `calendar`, `filings` — write their start/finish/error timestamps. Per-worker stall budgets live in `_WORKER_STALL_BUDGET_SECS` and are tuned to each worker's natural cadence (e.g. archival's budget is 36h because it runs every 24h; calendar's is 3h for its 30m cadence).
 
 ## The Economic Calendar (forward catalysts)
 
@@ -882,6 +882,28 @@ reproducible, cacheable, never hallucinates a ticker).
 - **Tests:** `tests/test_filing_classifier.py` (23 cases — every type, buy-vs-sell &
   upgrade-vs-downgrade direction, pledge release/invocation, priority/overlap, the
   SEBI-order guard, category-hint use, figure extraction, empty/None safety).
+
+### Filings: 24/7 pull + click-to-explain (added)
+
+- **24/7 background pull.** `filings_worker()` (in `app.py`, registered in
+  `start_background_workers`, heartbeat key `filings`, stall budget 2h) re-runs
+  `_collect_exchange_filings()` every `FILINGS_REFRESH_MIN` (15m) and stores it in
+  `_FILINGS_CACHE`, so the feed stays warm and refreshes **without** a tab open (instead of
+  pulling only on-demand). No Gemini keys. ⚠️ On the Render free tier the process sleeps when
+  idle, so "24/7" = "whenever the instance is awake" (the market-hours keep-alive covers the
+  session); a truly always-on feed needs the paid plan. Disable with `FILINGS_WORKER_DISABLED=1`.
+  The frontend also **auto-polls** every 3 min while the Filings tab is visible (paused when
+  hidden) — `switchTab` wrapper like F&O/Calendar.
+- **Click-to-explain ("why this matters").** Each alert is now clickable → a **detail modal**
+  (`openFilingDetail` / `_filEnsureModal` in `app-filings.js`, `.fil-modal`/`.film-*` CSS).
+  It shows the plain-English meaning, the **cause→effect mechanism** (how that event type
+  actually moves the stock), a **"what to watch next"** checklist, a key-figure chip, the
+  source-filing link, and an honesty disclaimer. Content is **deterministic, no LLM**:
+  `filing_classifier.explain_filing(type)` returns `{mechanism, watch[], caveat}` from the
+  module-level `FILING_MECHANISMS` table (one entry per type) + a shared `FILING_DISCLAIMER`.
+  `/api/filings` now also returns `explainers` (per-type deep map) + `disclaimer`, so the
+  modal needs no extra request. Tested in `tests/test_filing_explain.py`. New env knobs:
+  `FILINGS_WORKER_DISABLED`, `FILINGS_REFRESH_MIN` (15).
 
 ## Development Workflow
 

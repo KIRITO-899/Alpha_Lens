@@ -14,7 +14,8 @@ let _filData = null;
 let _filLastFetch = 0;
 let _filLoading = false;
 let _filActiveType = 'all';
-const _FIL_THROTTLE_MS = 60000;   // client throttle over the 10-min server cache
+let _filRendered = [];            // the currently-rendered (filtered) feed, for the click modal
+const _FIL_THROTTLE_MS = 60000;   // client throttle over the server cache
 
 // ── per-type icons (inline SVG, 14×14, currentColor) ──────────────────────
 const _FIL_ICONS = {
@@ -124,14 +125,16 @@ function _filRenderFeed(d) {
     if (_filActiveType !== 'all') items = items.filter(f => f.type === _filActiveType);
 
     if (!items.length) {
+        _filRendered = [];
         const both = (d.degraded || {}).bse && (d.degraded || {}).news;
         feed.innerHTML = _filEmpty(d.total ? 'filtered' : (both ? 'down' : 'empty'));
         return;
     }
-    feed.innerHTML = items.map(_filCard).join('');
+    _filRendered = items;
+    feed.innerHTML = items.map((f, i) => _filCard(f, i)).join('');
 }
 
-function _filCard(f) {
+function _filCard(f, i) {
     const imp = _filImpactMeta(f.impact);
     const co = escapeHtml(f.company || f.ticker_base || '—');
     const tick = f.ticker_base ? `<span class="fil-ticker">${escapeHtml(f.ticker_base)}</span>` : '';
@@ -140,13 +143,14 @@ function _filCard(f) {
     const sev = f.severity === 'high'
         ? `<span class="fil-sev sev-high"><span class="fil-sev-dot"></span>High impact</span>` : '';
     const srcCls = f.source_type === 'filing' ? 'src-filing' : 'src-news';
+    // The source link must NOT bubble up to the card's "open details" handler.
     const link = f.url
-        ? `<a class="fil-src-link" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">`
+        ? `<a class="fil-src-link" href="${escapeHtml(f.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">`
           + `${f.source_type === 'filing' ? 'View filing' : 'Read more'} `
           + `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg></a>`
         : '';
 
-    return `<article class="fil-card ${imp.cls}">
+    return `<article class="fil-card ${imp.cls}" onclick="openFilingDetail(${i})" role="button" tabindex="0" aria-label="Open: why this matters">
         <div class="fil-card-bar"></div>
         <div class="fil-card-main">
             <div class="fil-card-top">
@@ -163,6 +167,8 @@ function _filCard(f) {
             <div class="fil-foot">
                 ${detail}
                 <span class="fil-src ${srcCls}">${escapeHtml(f.source || '')}</span>
+                <span class="fil-why">Why it matters
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
                 ${link}
             </div>
         </div>
@@ -204,3 +210,129 @@ function _filRenderError(err) {
     const meta = document.getElementById('fil-meta');
     if (meta) meta.innerHTML = '';
 }
+
+/* ===========================================================================
+ * DETAIL MODAL — "why this matters" (deterministic cause→effect, no LLM)
+ *
+ * Clicking any alert opens this: the plain-English meaning, the cause→effect
+ * MECHANISM (how the event actually moves the stock), a "what to watch next"
+ * checklist, the source filing, and an honesty disclaimer. The per-type deep
+ * content rides in /api/filings → `explainers`, so no extra request is needed.
+ * ======================================================================== */
+function _filEnsureModal() {
+    let m = document.getElementById('fil-modal');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'fil-modal';
+    m.className = 'fil-modal hidden';
+    m.setAttribute('aria-hidden', 'true');
+    m.innerHTML =
+        '<div class="fil-modal-backdrop" onclick="closeFilingDetail()"></div>'
+        + '<div class="fil-modal-panel" role="dialog" aria-modal="true" aria-label="Filing detail">'
+        + '<button class="fil-modal-close" onclick="closeFilingDetail()" aria-label="Close">'
+        + '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
+        + '<div id="fil-modal-body"></div></div>';
+    document.body.appendChild(m);
+    return m;
+}
+
+function openFilingDetail(i) {
+    const f = _filRendered[i];
+    if (!f) return;
+    const deep = ((_filData && _filData.explainers) || {})[f.type] || {};
+    const disclaimer = (_filData && _filData.disclaimer) || '';
+    const imp = _filImpactMeta(f.impact);
+    const co = escapeHtml(f.company || f.ticker_base || '—');
+    const tick = f.ticker_base ? `<span class="fil-ticker">${escapeHtml(f.ticker_base)}</span>` : '';
+    const sev = f.severity === 'high'
+        ? '<span class="fil-sev sev-high"><span class="fil-sev-dot"></span>High impact</span>' : '';
+    const when = escapeHtml(_filAgo(f.ts_ms));
+    const detail = f.detail
+        ? `<div class="film-detail"><span class="film-detail-lbl">Key figure</span><span class="film-detail-val">${escapeHtml(f.detail)}</span></div>` : '';
+    const watch = (deep.watch || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
+    const link = f.url
+        ? `<a class="film-src-btn" href="${escapeHtml(f.url)}" target="_blank" rel="noopener">`
+          + `${f.source_type === 'filing' ? 'View source filing' : 'Read the news'} `
+          + '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17L17 7M9 7h8v8"/></svg></a>'
+        : '';
+
+    _filEnsureModal();
+    document.getElementById('fil-modal-body').innerHTML = `
+        <div class="film-head ${imp.cls}">
+            <div class="film-head-top">
+                <span class="fil-type">${_filIcon(f.type)}${escapeHtml(f.type_label || '')}</span>
+                <span class="fil-impact ${imp.cls}">${imp.label} for the stock</span>
+                ${sev}
+                ${when ? `<span class="fil-when">${when}</span>` : ''}
+            </div>
+            <div class="film-co">${co}${tick}</div>
+            <h2 class="film-headline">${escapeHtml(f.headline || '')}</h2>
+        </div>
+        <div class="film-body">
+            <p class="film-lead">${escapeHtml(f.explanation || '')}</p>
+            ${detail}
+            ${deep.mechanism ? `<div class="film-sec"><div class="film-sec-h">How it works &amp; why it matters</div><p class="film-sec-p">${escapeHtml(deep.mechanism)}</p></div>` : ''}
+            ${watch ? `<div class="film-sec"><div class="film-sec-h">What to watch next</div><ul class="film-watch">${watch}</ul></div>` : ''}
+            ${deep.caveat ? `<div class="film-caveat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg><span>${escapeHtml(deep.caveat)}</span></div>` : ''}
+            <div class="film-foot">${link}</div>
+            ${disclaimer ? `<p class="film-disclaimer">${escapeHtml(disclaimer)}</p>` : ''}
+        </div>`;
+
+    const m = _filEnsureModal();
+    m.classList.remove('hidden');
+    m.setAttribute('aria-hidden', 'false');
+    document.body.style.overflow = 'hidden';
+}
+
+function closeFilingDetail() {
+    const m = document.getElementById('fil-modal');
+    if (!m) return;
+    m.classList.add('hidden');
+    m.setAttribute('aria-hidden', 'true');
+    document.body.style.overflow = '';
+}
+
+// Keyboard: Esc closes the modal; Enter/Space opens a focused card.
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        const m = document.getElementById('fil-modal');
+        if (m && !m.classList.contains('hidden')) { closeFilingDetail(); return; }
+    }
+    if ((e.key === 'Enter' || e.key === ' ')) {
+        const card = document.activeElement;
+        if (card && card.classList && card.classList.contains('fil-card')) {
+            e.preventDefault();
+            card.click();
+        }
+    }
+});
+
+/* ===========================================================================
+ * AUTO-POLL while the Filings tab is open
+ *
+ * switchTab('filings') already does the first fetch. This adds a
+ * visibility-aware refresh so new alerts appear without a manual reload, paused
+ * when the tab is hidden. Wraps window.switchTab (order-independent chaining).
+ * ======================================================================== */
+const _FIL_POLL_MS = 180000;   // 3 min — server cache + worker absorb it
+let _filPollTimer = null;
+
+function _filStartPolling() {
+    if (_filPollTimer) return;
+    _filPollTimer = setInterval(() => { if (!document.hidden) fetchFilings(); }, _FIL_POLL_MS);
+}
+function _filStopPolling() {
+    if (_filPollTimer) { clearInterval(_filPollTimer); _filPollTimer = null; }
+}
+(function _filHookTabLifecycle() {
+    const _origSwitchTabFil = window.switchTab;
+    if (typeof _origSwitchTabFil !== 'function') return;
+    window.switchTab = function (tab) {
+        _origSwitchTabFil.apply(this, arguments);
+        if (tab === 'filings') _filStartPolling();
+        else _filStopPolling();
+    };
+})();
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && _filPollTimer) fetchFilings();
+});

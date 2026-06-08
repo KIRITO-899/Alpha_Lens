@@ -672,6 +672,15 @@ WORKER_HEARTBEAT = {
         "last_error_at": None,
         "cycles_completed": 0,
     },
+    "filings": {
+        "last_cycle_started_at": None,
+        "last_cycle_finished_at": None,
+        "last_filings_count": None,
+        "last_degraded": None,
+        "last_error": None,
+        "last_error_at": None,
+        "cycles_completed": 0,
+    },
 }
 
 
@@ -2228,7 +2237,9 @@ from newsproc.news_rules import (
 # line into one of nine material event types (pledge / insider / rating / M&A /
 # resignation / order / bonus / split / dividend) with plain-English impact.
 # Powers the "Exchange Filing Alerts" feed (/api/filings).
-from newsproc.filing_classifier import classify_filing, FILING_TYPE_LABELS
+from newsproc.filing_classifier import (
+    classify_filing, FILING_TYPE_LABELS, explain_filing, FILING_DISCLAIMER,
+)
 
 # Static news-engine data tables (macro impact map, materiality / noise keyword
 # lists, ticker-parsing sets) were extracted to news_data.py. Imported back so
@@ -6189,6 +6200,10 @@ def _collect_exchange_filings():
         'types': types,
         'degraded': degraded,
         'as_of_ms': int(time.time() * 1000),
+        # Deep per-type cause→effect explainers (the "why this matters" shown when
+        # a user clicks an alert) + the honesty disclaimer. Deterministic, no LLM.
+        'explainers': {k: explain_filing(k) for k in FILING_TYPE_LABELS},
+        'disclaimer': FILING_DISCLAIMER,
     }
 
 
@@ -9479,6 +9494,7 @@ _WORKER_STALL_BUDGET_SECS = {
     "news_prune":  3 * 3600,   # runs hourly; 3h budget
     "eval_labeler": 9 * 3600,  # runs every 6h; 9h budget
     "calendar":     3 * 3600,  # runs every 30m; 3h budget
+    "filings":      2 * 3600,  # runs every ~15m; 2h budget (BSE can be flaky)
 }
 
 
@@ -10920,6 +10936,49 @@ def news_prune_worker():
             _heartbeat("news_prune", last_error=str(e)[:200], last_error_at=time.time())
 
 
+def filings_worker():
+    """
+    Continuously refresh the Exchange Filing Alerts feed so it's pulled 24/7 and
+    always warm — instead of only when someone opens the tab.
+
+    Each cycle re-runs _collect_exchange_filings() (live BSE corporate filings +
+    catalyst-news fallback, classified by the pure filing_classifier) and stores
+    the result in _FILINGS_CACHE, so the /api/filings route serves instantly and
+    the data stays fresh even with no traffic. No Gemini/LLM keys are used.
+
+    Cadence: FILINGS_REFRESH_MIN (default 15m). On the Render free tier the
+    process sleeps when idle, so "24/7" means "whenever the instance is awake"
+    (the market-hours keep-alive covers the session) — a dedicated always-on
+    worker would need the paid plan. Disable with FILINGS_WORKER_DISABLED=1.
+    """
+    if os.environ.get("FILINGS_WORKER_DISABLED", "").lower() in ("1", "true", "yes"):
+        print("[FILINGS] Worker disabled via FILINGS_WORKER_DISABLED.", flush=True)
+        return
+
+    refresh_min = max(2, int(os.environ.get("FILINGS_REFRESH_MIN", "15")))
+    print(f"[FILINGS] Worker started — refreshes every {refresh_min}m.", flush=True)
+    time.sleep(30)  # warm-up so the rest of startup finishes first
+
+    while True:
+        try:
+            _heartbeat("filings", last_cycle_started_at=time.time())
+            payload = _collect_exchange_filings()
+            with _FILINGS_LOCK:
+                _FILINGS_CACHE['t'] = time.time()
+                _FILINGS_CACHE['data'] = payload
+            _heartbeat("filings",
+                       last_cycle_finished_at=time.time(),
+                       last_filings_count=int(payload.get('total', 0)),
+                       last_degraded=payload.get('degraded'),
+                       cycles_completed=WORKER_HEARTBEAT["filings"].get("cycles_completed", 0) + 1)
+            print(f"[FILINGS] Refreshed: {payload.get('total', 0)} alerts "
+                  f"(degraded={payload.get('degraded')}).", flush=True)
+        except Exception as e:
+            print(f"[FILINGS] Refresh failed: {e}", flush=True)
+            _heartbeat("filings", last_error=str(e)[:200], last_error_at=time.time())
+        time.sleep(refresh_min * 60)
+
+
 def eval_labeler_worker():
     """Background labeler for the eval loop — fills outcomes for logged
     decisions (kept AND rejected) once the horizon has elapsed. Runs every
@@ -11071,6 +11130,11 @@ def start_background_workers():
     # the forward calendar stays clean (an event drops off after it's done).
     cal_thread = threading.Thread(target=calendar_worker, name="CalendarWorker", daemon=True)
     cal_thread.start()
+
+    # Exchange Filing Alerts — pull material BSE filings 24/7 (keeps the feed
+    # warm so it refreshes without a tab open). No Gemini keys used.
+    filings_thread = threading.Thread(target=filings_worker, name="FilingsWorker", daemon=True)
+    filings_thread.start()
 
     # MacroDataTracker warm-up + quantitative shock detector.
     macro_warm = threading.Thread(target=_macro_data_warmer, name="MacroWarmer", daemon=True)

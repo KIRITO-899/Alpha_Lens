@@ -358,6 +358,186 @@ _DETECTORS = [
 ]
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# DEEP EXPLAINERS — the "why this matters" shown when a user CLICKS an alert.
+#
+# Per-type cause→effect MECHANISM (how the event actually moves the stock) +
+# WHAT-TO-WATCH bullets + an honest CAVEAT. Deterministic, no LLM, keyed only by
+# the 9 filing types (the direction nuance is already in each row's `impact` +
+# one-line `explanation`). Surfaced via /api/filings → `explainers`.
+# ──────────────────────────────────────────────────────────────────────────
+FILING_DISCLAIMER = (
+    "This explains the typical meaning of this kind of filing — it is general "
+    "education, NOT advice or a price prediction. The real market reaction "
+    "depends on the size of the move, the price already paid, and the wider "
+    "context."
+)
+
+FILING_MECHANISMS = {
+    "promoter_pledge": {
+        "mechanism": (
+            "Promoters pledge their OWN shares as collateral to borrow money. If "
+            "the price falls below an agreed level (or dues aren't paid), the "
+            "lender can sell — 'invoke' — those pledged shares to recover the "
+            "loan. That ties the promoter's borrowing to the share price: a "
+            "falling stock can trigger forced selling by lenders, which pushes "
+            "the price down further in a self-reinforcing spiral. Heavy or rising "
+            "pledging also hints the promoter group is short of cash."
+        ),
+        "watch": [
+            "Pledged % of total promoter holding — above ~50% is a serious red flag",
+            "Whether the pledge is RISING over successive quarters",
+            "Any 'invocation' news — lenders actually selling the shares",
+            "The company's debt load and whether cash flows cover it",
+        ],
+        "caveat": "Some pledging funds genuine expansion — judge it by size, trend and the promoter's track record.",
+    },
+    "insider_trading": {
+        "mechanism": (
+            "Promoters, directors and 'designated persons' must disclose their "
+            "share dealings under SEBI rules. They understand the business better "
+            "than anyone, so the market reads their trades as a confidence signal "
+            "— insiders tend to buy when they think the stock is cheap and sell "
+            "when they need cash or see less upside. A CLUSTER of insiders buying "
+            "is historically far more meaningful than a single trade."
+        ),
+        "watch": [
+            "Buying vs selling, and the rupee size relative to their existing holding",
+            "Whether MULTIPLE insiders act the same way (a cluster)",
+            "Buying near lows (stronger signal) vs selling near highs",
+            "Open-market purchase (own money) vs ESOP / pledge-driven moves",
+        ],
+        "caveat": "Insiders sell for many innocent reasons (tax, liquidity, diversification) — selling alone isn't bearish.",
+    },
+    "rating_change": {
+        "mechanism": (
+            "Credit-rating agencies (CRISIL, ICRA, CARE…) grade how safely a "
+            "company can repay its debt. A DOWNGRADE means they see higher default "
+            "risk — which raises the interest rate the company pays on loans and "
+            "bonds, squeezes profit, and can make lenders demand more security. An "
+            "UPGRADE does the opposite. Ratings usually move after fundamentals "
+            "change, so they confirm a trend, but a surprise downgrade can still "
+            "jolt both the stock and the bonds."
+        ),
+        "watch": [
+            "Direction AND the new rating level (investment-grade vs junk)",
+            "Outlook change (negative/positive) — it often precedes the actual move",
+            "The agency's stated reason — leverage, liquidity or earnings",
+            "Whether several agencies agree",
+        ],
+        "caveat": "A reaffirmed / stable rating means no change in view — only up or down moves are real catalysts.",
+    },
+    "acquisition": {
+        "mechanism": (
+            "When the company is the TARGET (especially via an 'open offer'), the "
+            "acquirer usually must offer shareholders a price ABOVE the market — so "
+            "the target's stock often jumps toward that offer price. When the "
+            "company is the ACQUIRER, the effect depends on price and funding: a "
+            "sensibly-priced deal adds growth and scale, but overpaying or piling "
+            "on debt to fund it can hurt. Demergers/spin-offs can unlock value by "
+            "letting each business be valued on its own."
+        ),
+        "watch": [
+            "Is the company the target (usually positive) or the acquirer?",
+            "Offer price vs the current price — the premium on the table",
+            "How the deal is funded — cash, debt, or new shares (dilution)",
+            "Regulatory / CCI approval risk and whether the deal can collapse",
+        ],
+        "caveat": "Acquirer deals can destroy value if overpriced — bigger isn't automatically better.",
+    },
+    "resignation": {
+        "mechanism": (
+            "A sudden exit of a key person — CEO, CFO, MD, or especially the "
+            "AUDITOR — can signal problems outsiders can't yet see (strategy "
+            "disputes, governance issues, or concerns about the accounts). Auditor "
+            "resignations are the biggest red flag because auditors sign off on the "
+            "financials; an unexplained mid-term exit raises questions about what "
+            "they found. Planned retirements with clear succession are usually minor."
+        ),
+        "watch": [
+            "The ROLE — auditor / CFO exits are the most serious",
+            "Sudden departure vs a planned, well-communicated transition",
+            "A CLUSTER of exits in a short window",
+            "Whether a credible replacement is named quickly + the stated reason",
+        ],
+        "caveat": "Many exits are genuinely routine — weigh the role, the timing and the explanation together.",
+    },
+    "order_win": {
+        "mechanism": (
+            "A new order/contract adds to the company's future revenue 'order "
+            "book' — it improves earnings visibility for coming quarters and shows "
+            "the company is winning business. The bigger the order relative to "
+            "annual revenue, the more it matters. Markets reward large, "
+            "high-margin or marquee-client wins, especially for capital-goods, "
+            "EPC, defence and IT names."
+        ),
+        "watch": [
+            "Order value vs the company's ANNUAL revenue (the bigger, the better)",
+            "Margin / profitability of the work, not just the headline size",
+            "Execution timeline and any conditions or financing",
+            "Whether order inflow is a consistent trend or a one-off",
+        ],
+        "caveat": "An order is future revenue, not booked profit — execution and margins decide the real benefit.",
+    },
+    "bonus": {
+        "mechanism": (
+            "A bonus issue gives existing shareholders extra FREE shares from the "
+            "company's reserves (e.g. 1:1 = one free share per share held). Your "
+            "share COUNT rises and the price adjusts DOWN proportionally, so your "
+            "total value is unchanged on day one. It's an accounting move, but it "
+            "capitalises reserves, signals management confidence, and improves "
+            "liquidity by lowering the per-share price — which the market often "
+            "takes positively."
+        ),
+        "watch": [
+            "The ratio (e.g. 1:1, 2:1) — how many free shares you get",
+            "The record date that decides who is eligible",
+            "Whether earnings can support the larger share count",
+            "It's value-neutral mechanically — don't overpay for the 'free shares' headline",
+        ],
+        "caveat": "Bonus shares don't create value by themselves; the price adjusts down to match.",
+    },
+    "split": {
+        "mechanism": (
+            "A stock split cuts the face value (e.g. ₹10 → ₹2), multiplying the "
+            "number of shares and dividing the price proportionally. Like a bonus, "
+            "your total holding value is unchanged — it just makes each share "
+            "cheaper and more liquid, widening the pool of buyers. It's typically a "
+            "neutral, cosmetic action, sometimes read as mild confidence."
+        ),
+        "watch": [
+            "The split ratio / the new face value",
+            "The record date for eligibility",
+            "Liquidity and retail interest after the price drops",
+            "Don't confuse a split with value creation — it's value-neutral",
+        ],
+        "caveat": "Splits change the share count and price, not the company's underlying worth.",
+    },
+    "dividend": {
+        "mechanism": (
+            "A dividend is a cash payout to shareholders from profits. A steady or "
+            "growing dividend signals healthy, dependable cash flows and "
+            "shareholder-friendly management. The stock typically drops by roughly "
+            "the dividend amount on the ex-date (you receive that cash instead). A "
+            "'special' one-off dividend returns surplus cash but isn't necessarily "
+            "repeatable."
+        ),
+        "watch": [
+            "Amount per share and the dividend yield (payout ÷ price)",
+            "Regular vs one-off 'special' dividend",
+            "The ex-date / record date — buy BEFORE the ex-date to be eligible",
+            "Whether the payout is funded by earnings, not borrowing",
+        ],
+        "caveat": "The price usually falls by about the dividend on the ex-date — it isn't free money.",
+    },
+}
+
+
+def explain_filing(ftype):
+    """Deep cause→effect explainer for a filing `type` key, or {} if unknown."""
+    return FILING_MECHANISMS.get(ftype, {})
+
+
 def classify_filing(text, category=None, subcategory=None):
     """
     Classify a single filing/announcement line.
