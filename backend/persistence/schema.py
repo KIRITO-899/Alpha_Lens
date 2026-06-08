@@ -276,3 +276,26 @@ def init_news_db():
     run_query_safe("ALTER TABLE news_archive ADD COLUMN body TEXT DEFAULT ''")
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_news_archive_created_at  ON news_archive(created_at)")
     run_query_safe("CREATE INDEX IF NOT EXISTS idx_stockimpact_archive_news ON stock_impact_archive(news_id)")
+
+    # ── F&O snapshot persistence (#2) ──
+    # The parsed NSE F&O bhavcopy {futures, options} stored as a JSON payload,
+    # keyed by trading day. Two purposes:
+    #   (a) COLD-START: on a Render free-tier wake-up the in-memory cache is
+    #       wiped, so marketdata.oi_data loads the last good snapshot from here
+    #       instead of re-downloading+re-parsing (instant board, survives an
+    #       NSE-unreachable window).
+    #   (b) DIFF BASELINE: the previous trading day's snapshot is the baseline
+    #       for the day-over-day "what changed" diffing (#4) and the intraday
+    #       OI-change baseline for the Angel One source (#5).
+    # `id` column is intentional — the PG translation layer appends RETURNING id
+    # to inserts, so a table without it would break on Postgres. Upsert is
+    # delete-then-insert keyed on bhavcopy_date; oi_data prunes to the last few.
+    run_query_safe('''
+        CREATE TABLE IF NOT EXISTS fno_snapshot (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            bhavcopy_date TEXT,
+            payload       TEXT,
+            fetched_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    run_query_safe("CREATE UNIQUE INDEX IF NOT EXISTS idx_fno_snapshot_date ON fno_snapshot(bhavcopy_date)")

@@ -5937,9 +5937,19 @@ def get_fno_smart_money():
         watchlist = [t.strip() for t in raw_tickers.split(',') if t.strip()] if raw_tickers else []
         key = ','.join(sorted(_fno_norm(t) for t in watchlist))
         now = time.time()
+        # When the Angel One intraday source is live the underlying OI refreshes
+        # every few minutes, so the assembled board must NOT be held for the full
+        # 10-min EOD cache — shorten it so intraday updates actually flow through.
+        board_ttl = FNO_BOARD_TTL_SECS
+        try:
+            from marketdata import angel_fno
+            if angel_fno.is_enabled():
+                board_ttl = int(os.environ.get('FNO_BOARD_TTL_LIVE_SECS', '60'))
+        except Exception:
+            pass
         with _FNO_BOARD_LOCK:
             hit = _FNO_BOARD_CACHE.get(key)
-            if hit and (now - hit['t']) < FNO_BOARD_TTL_SECS:
+            if hit and (now - hit['t']) < board_ttl:
                 return jsonify(hit['board'])
 
         from marketdata import oi_data
@@ -5967,9 +5977,18 @@ def get_fno_smart_money():
         except Exception:
             india_vix = None
 
+        # Previous trading day's snapshot → day-over-day diff (#4). Best-effort:
+        # absent on first run / when persistence is disabled, in which case the
+        # board simply omits the change tags.
+        prev_snap = {}
+        try:
+            prev_snap = oi_data.get_prev_snapshot(before_date=snap.get('bhavcopy_date'))
+        except Exception as exc:
+            print(f"[FNO] prev snapshot fetch failed: {exc}")
+
         board = build_smart_money_board(
             snap, watchlist=watchlist, delivery=delivery, deals=deals,
-            participant=participant, india_vix=india_vix,
+            participant=participant, india_vix=india_vix, prev_snapshot=prev_snap,
         )
         board['degraded'] = {
             'futures': not snap.get('futures'),

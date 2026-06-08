@@ -540,6 +540,134 @@ def download(tickers, period="7d", interval="1m", progress=False, auto_adjust=Tr
     return Ticker(ticker_str).history(period=period, interval=interval)
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# NFO (F&O) SCRIP MASTER + BATCH QUOTES — primitives for the intraday OI source
+#
+# The EQ scrip loader above only indexes NSE/BSE cash symbols. The F&O intraday
+# source (marketdata/angel_fno.py) needs the NFO derivatives universe — futures
+# + option contracts with their strike / expiry / type — plus a way to pull live
+# open interest (opnInterest) in bulk via the FULL-mode quote API (≤50 tokens /
+# request). Both are lazy: nothing here runs unless the F&O intraday source is
+# actually enabled. Defensive — every failure degrades to empty, the caller then
+# falls back to the EOD bhavcopy.
+# ════════════════════════════════════════════════════════════════════════════
+_nfo_fut = {}        # underlying -> [{token, expiry(iso), symbol}]
+_nfo_opt = {}        # underlying -> {expiry(iso): [{token, strike, opt_type, symbol}]}
+_nfo_loaded = False
+_nfo_lock = threading.Lock()
+
+FNO_INDEX_UNDERLYINGS = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"}
+
+
+def angel_configured():
+    """Public: are all four Angel One credentials present?"""
+    return _angel_one_configured()
+
+
+def _parse_nfo_expiry(s):
+    """'28OCT2025' -> '2025-10-28' (ISO). None on any parse failure."""
+    try:
+        return datetime.strptime((s or "").strip().upper(), "%d%b%Y").date().isoformat()
+    except Exception:
+        return None
+
+
+def load_fno_scrip(force=False):
+    """Download + index the NFO segment of the Angel One scrip master (once)."""
+    global _nfo_loaded
+    with _nfo_lock:
+        if _nfo_loaded and not force:
+            return
+        try:
+            resp = requests.get(_SCRIP_URL, timeout=25)
+            data = resp.json()
+            fut, opt = {}, {}
+            for e in data:
+                if e.get("exch_seg") != "NFO":
+                    continue
+                it = (e.get("instrumenttype") or "").upper()
+                name = (e.get("name") or "").upper().strip()
+                token = e.get("token")
+                sym = e.get("symbol") or ""
+                if not token or not name:
+                    continue
+                exp = _parse_nfo_expiry(e.get("expiry"))
+                if not exp:
+                    continue
+                if it in ("FUTSTK", "FUTIDX"):
+                    fut.setdefault(name, []).append(
+                        {"token": str(token), "expiry": exp, "symbol": sym})
+                elif it in ("OPTSTK", "OPTIDX"):
+                    try:
+                        strike = float(e.get("strike") or 0) / 100.0   # paise -> ₹
+                    except (ValueError, TypeError):
+                        strike = 0.0
+                    otp = ("CE" if sym.endswith("CE")
+                           else "PE" if sym.endswith("PE") else None)
+                    if strike <= 0 or not otp:
+                        continue
+                    opt.setdefault(name, {}).setdefault(exp, []).append(
+                        {"token": str(token), "strike": round(strike, 2),
+                         "opt_type": otp, "symbol": sym})
+            _nfo_fut.clear(); _nfo_fut.update(fut)
+            _nfo_opt.clear(); _nfo_opt.update(opt)
+            _nfo_loaded = True
+            print(f"[AngelOne] NFO scrip loaded: {len(fut)} future underlyings, "
+                  f"{len(opt)} option underlyings")
+        except Exception as e:
+            print(f"[AngelOne] NFO scrip load failed: {e}")
+
+
+def nfo_front_future_tokens():
+    """{underlying: (token, expiry_iso)} for each underlying's NEAREST-expiry future."""
+    load_fno_scrip()
+    out = {}
+    for name, lst in _nfo_fut.items():
+        valid = [x for x in lst if x.get("expiry")]
+        if not valid:
+            continue
+        front = min(valid, key=lambda x: x["expiry"])
+        out[name] = (front["token"], front["expiry"])
+    return out
+
+
+def nfo_front_option_tokens(underlying):
+    """(front_expiry_iso, [{token, strike, opt_type}]) for one underlying, or (None, [])."""
+    load_fno_scrip()
+    by_exp = _nfo_opt.get((underlying or "").upper().strip())
+    if not by_exp:
+        return None, []
+    front = min(by_exp.keys())
+    return front, list(by_exp[front])
+
+
+def get_full_quotes(exchange, tokens):
+    """
+    Batch FULL-mode market quotes (≤50 tokens/request). Returns the flat list of
+    'fetched' dicts (each with ltp, close, opnInterest, tradeVolume, …) or [] on
+    failure. Reuses the daily Angel One session.
+    """
+    if not _ensure_session() or not tokens:
+        return []
+    toks = [str(t) for t in tokens]
+    out = []
+    for i in range(0, len(toks), 50):
+        chunk = toks[i:i + 50]
+        try:
+            payload = {"mode": "FULL", "exchangeTokens": {exchange: chunk}}
+            resp = requests.post(
+                f"{AO_BASE_URL}/rest/secure/angelbroking/market/v1/quote/",
+                headers=_ao_auth_headers(), json=payload, timeout=10,
+            )
+            data = resp.json()
+            fetched = (data.get("data") or {}).get("fetched")
+            if data.get("status") and fetched:
+                out.extend(fetched)
+        except Exception as e:
+            print(f"[AngelOne] batch FULL quote failed ({exchange}, {len(chunk)} tokens): {e}")
+    return out
+
+
 # ── Auto-initialize session on import ─────────────────────────────────────────
 def _bg_init():
     """Boot Angel One session and scrip master in background thread."""

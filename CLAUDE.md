@@ -123,7 +123,8 @@ Alpha_Lens/
 │   │   ├── market_calendar.py   #   Pure NSE calendar/market-hours helpers
 │   │   ├── macro_tracker.py     #   MacroDataTracker — commodity/FX/rates snapshot + σ (vol-normalized) shock detection
 │   │   ├── ticker_utils.py      #   Ticker normalization + news-candidate screening helpers
-│   │   ├── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals (lazy-imported)
+│   │   ├── oi_data.py           #   F&O bhavcopy fetch+parse (futures+options) + delivery%/bulk-block deals + snapshot persistence (lazy-imported)
+│   │   ├── angel_fno.py         #   Angel One INTRADAY F&O source (#5) — live opnInterest → same snapshot shape, EOD fallback (SWR)
 │   │   └── earnings_data.py     #   Pure earnings math — quarter labels, YoY/QoQ, margins, verdict, scorecard
 │   ├── newsproc/                # ── Subpackage: news processing (pure) ──
 │   │   ├── news_rules.py        #   Rule-based news classification + STOCK_KEYWORD_MAP
@@ -207,7 +208,8 @@ Alpha_Lens/
 | `marketdata/market_calendar.py` | Pure NSE calendar helpers — holidays, `is_market_open`, `has_market_traded_since` |
 | `marketdata/macro_tracker.py` | `MacroDataTracker` — live commodity/FX/rates snapshot + **volatility-normalized (σ/z-score) shock detection**. Pulls 6mo daily closes → realized vol → `sigma = move/vol`; pure helpers `daily_returns()`/`compute_vol_stats()`/`latest_daily_change()` (unit-tested). ⚠️ `latest_daily_change` computes the **TRUE 1-day change** from the last two daily closes — NOT Yahoo's `chartPreviousClose`, which on the 6mo chart is the close ~6 months ago (that bug made every "1d" move a 6-MONTH move → Nifty -10.77%, USD/INR +5.68%, and inflated every σ so the whole board flagged MAJOR) |
 | `marketdata/ticker_utils.py` | Ticker normalization + news-candidate screening — `normalize_ticker`, `candidate_quality_score`, etc. Imports `newsproc.news_rules`/`newsproc.news_data` |
-| `marketdata/oi_data.py` | NSE F&O bhavcopy fetch+parse — **futures (STF) + options (STO/IDO)** from one ZIP → `get_oi_buildup_for_ticker` (technical model) + `get_fno_raw_snapshot`/`get_option_chain_raw` (Smart-Money board). Also defensive `get_delivery_map` (cash delivery%) + `get_bulk_block_deals`. Lazy-imported |
+| `marketdata/oi_data.py` | NSE F&O bhavcopy fetch+parse — **futures (STF) + options (STO/IDO)** from one ZIP → `get_oi_buildup_for_ticker` (technical model) + `get_fno_raw_snapshot`/`get_option_chain_raw` (Smart-Money board). Also defensive `get_delivery_map` (cash delivery%) + `get_bulk_block_deals`. **Persists each snapshot to `fno_snapshot`** (cold-start restore + `get_prev_snapshot` diff baseline) and overlays the Angel intraday source when enabled. Lazy-imported |
+| `marketdata/angel_fno.py` | **Angel One intraday F&O OI (#5)** — builds the EOD snapshot shape from live FULL-mode `opnInterest` (futures for all underlyings + index option chains), OI-change vs the persisted EOD baseline. Pure `assemble_futures`/`assemble_index_chain` + stale-while-revalidate background build. OFF unless `ANGEL_FNO_ENABLED=1` + creds; auto-falls back to EOD (Angel blocks datacenter IPs) |
 | `marketdata/earnings_data.py` | **Pure** earnings math (no I/O) — Indian fiscal-quarter labels, YoY/QoQ growth, margins (bps), EPS-surprise classification, rule-based quarter verdict, and `build_scorecard()`. Backs `/api/earnings/intelligence`; unit-tested in `tests/test_earnings_data.py` |
 | `newsproc/news_rules.py` | Pure rule-based classification — keyword filter, sentiment lists, `classify_category`, `STOCK_KEYWORD_MAP` |
 | `newsproc/news_data.py` | Pure static data tables — `MACRO_IMPACT_MAP`, materiality/noise keyword lists, ticker-parsing sets |
@@ -739,6 +741,51 @@ verified via the static-harness + Claude Preview workflow (see Development Notes
 conviction, sector map, board assembly, safety, + the bhavcopy parser vs a synthetic UDiFF
 sample). Env knob: `FNO_BOARD_TTL_SECS` (600); the engine's caps are module constants in
 `fno_engine.py` (kept there to keep it import-pure).
+
+### F&O freshness layer — persistence + day-over-day diff + Angel One intraday OI
+
+The base board is **end-of-day** (the bhavcopy changes once/day, ~7-8 PM IST). Five
+features make it feel live **honestly** (no fake intraday jitter). All reversible/defensive.
+
+1. **Snapshot persistence (`#2`).** After a successful parse, `oi_data` upserts the parsed
+   `{futures, options}` JSON into the **`fno_snapshot`** table (keyed by `bhavcopy_date`,
+   last `FNO_SNAPSHOT_KEEP`=3 kept). On a cold start / NSE-unreachable window,
+   `_load_latest_persisted()` restores the last good snapshot so the board renders instantly
+   (source flips to `eod_restored`, NSE retried after `FNO_PERSIST_RETRY_SECS`=1800 instead
+   of the full 4h). `get_prev_snapshot()` exposes the **previous trading day** as the diff
+   baseline. Disable with `FNO_PERSIST_DISABLED=1`.
+2. **Day-over-day diff (`#4`).** `fno_engine.diff_snapshots(curr, prev)` (pure) tags each
+   futures name `vs_prev = {flipped, is_new, buildup_prev, oi_delta_pct}` and a top-level
+   `changes` summary. `build_smart_money_board(..., prev_snapshot=)` attaches these to rows
+   (the route passes `oi_data.get_prev_snapshot(before_date=...)`). Frontend shows **NEW /
+   FLIPPED** chips + a "N flipped · M new vs <date>" pill. Tested in `tests/test_fno_diff.py`.
+3. **Honest labeling + countdown + auto-poll (`#1`/`#3`).** `app-fno.js` `_fnoRenderMeta`
+   shows an **END-OF-DAY** pill + "As of <date> close" + a **live countdown** to tonight's
+   ~19:30 IST publish (or a green **LIVE · HH:MM IST** pill when intraday is on). The F&O tab
+   **auto-polls** every 3 min while visible (paused when hidden; `switchTab` wrapper, like
+   `app-calendar.js`).
+4. **Angel One intraday OI (`#5`) — `marketdata/angel_fno.py`.** When **enabled**, replaces
+   the EOD futures with **live `opnInterest`** from Angel One SmartAPI FULL-mode quotes and
+   overlays live **index** option chains (NIFTY/BANKNIFTY/FINNIFTY/MIDCPNIFTY); stock option
+   chains stay EOD. Intraday **OI change** is measured vs the persisted EOD baseline (#2), so
+   buildups/bias/unusual-OI move through the session. **Stale-while-revalidate**: a request
+   never blocks on Angel — it serves the cached intraday snapshot (`ANGEL_FNO_TTL_SECS`=180)
+   and triggers ONE background refresh; the first poll shows EOD, the next shows LIVE. The
+   board cache shortens to `FNO_BOARD_TTL_LIVE_SECS`=60 when live so updates flow.
+   - **Primitives** live in `angelone_shim.py`: `load_fno_scrip()` indexes the **NFO** segment
+     of the scrip master (futures/options tokens, **strike is ÷100 paise**, expiry `DDMMMYYYY`),
+     `nfo_front_future_tokens()` / `nfo_front_option_tokens()`, and `get_full_quotes()` (batch
+     FULL quote, **≤50 tokens/request**). The pure `assemble_futures` / `assemble_index_chain`
+     are unit-tested (`tests/test_angel_fno.py`).
+   - **OFF by default.** Needs the four `ANGELONE_*` creds **and** `ANGEL_FNO_ENABLED=1`.
+     ⚠️ **Angel One blocks datacenter IPs** (same reason the shim falls back to Yahoo), so
+     intraday works on a **local/residential IP** but **auto-falls back to EOD on Render**.
+     `get_fno_raw_snapshot()` returns `source: 'intraday'|'eod'|'eod_restored'` + `as_of`
+     so the UI (and a curl) can tell which is live.
+
+**New env knobs:** `ANGELONE_API_KEY/CLIENT_ID/PIN/TOTP_SECRET` (Angel creds),
+`ANGEL_FNO_ENABLED` (0), `ANGEL_FNO_TTL_SECS` (180), `FNO_BOARD_TTL_LIVE_SECS` (60),
+`FNO_PERSIST_DISABLED` (0), `FNO_SNAPSHOT_KEEP` (3), `FNO_PERSIST_RETRY_SECS` (1800).
 
 ### F&O v2 — institutional upgrades (best-in-class pass)
 

@@ -41,6 +41,8 @@ fetch / 4h serves the entire process).
 """
 import csv as _csv
 import io
+import json
+import os
 import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
@@ -288,6 +290,120 @@ def _parse_bhavcopy_full(csv_text: str) -> dict:
     return {"futures": futures, "options": options}
 
 
+# ════════════════════════════════════════════════════════════════════════════
+# SNAPSHOT PERSISTENCE (#2) — store the parsed bhavcopy in SQLite/Postgres
+#
+# Why: on the Render free tier the web instance sleeps and every wake-up wipes
+# the in-memory _CACHE, forcing a slow NSE re-download (and showing an empty
+# board during a transient NSE outage). Persisting the last good snapshot lets
+# a cold start serve instantly from the DB, and gives the day-over-day diff (#4)
+# and the Angel intraday OI change (#5) a previous-day BASELINE to compare to.
+#
+# Fully defensive: every DB touch is wrapped — a missing/locked DB never breaks
+# the (network) fetch path. Disable with FNO_PERSIST_DISABLED=1.
+# ════════════════════════════════════════════════════════════════════════════
+_PERSIST_DISABLED = os.environ.get("FNO_PERSIST_DISABLED", "0") == "1"
+_SNAPSHOT_KEEP = int(os.environ.get("FNO_SNAPSHOT_KEEP", "3"))
+# When we fall back to a DB-persisted snapshot (NSE unreachable), retry NSE again
+# after this many seconds rather than holding the stale copy for the full 4h TTL.
+_PERSIST_RETRY_SECS = int(os.environ.get("FNO_PERSIST_RETRY_SECS", "1800"))
+
+
+def _persist_snapshot(date_obj, futures, options):
+    """Best-effort upsert of one trading day's {futures, options} JSON payload."""
+    if _PERSIST_DISABLED or not date_obj:
+        return
+    try:
+        from persistence.db import db_write
+        date_iso = date_obj.isoformat()
+        payload = json.dumps({"futures": futures, "options": options})
+        now_iso = datetime.now(timezone.utc).isoformat()
+        keep = max(2, _SNAPSHOT_KEEP)
+
+        def _do(conn, c):
+            c.execute("DELETE FROM fno_snapshot WHERE bhavcopy_date = ?", (date_iso,))
+            c.execute(
+                "INSERT INTO fno_snapshot (bhavcopy_date, payload, fetched_at) VALUES (?, ?, ?)",
+                (date_iso, payload, now_iso),
+            )
+            # Keep only the newest `keep` trading days.
+            c.execute(
+                "DELETE FROM fno_snapshot WHERE bhavcopy_date NOT IN "
+                "(SELECT bhavcopy_date FROM fno_snapshot ORDER BY bhavcopy_date DESC LIMIT ?)",
+                (keep,),
+            )
+
+        db_write(_do)
+    except Exception as exc:
+        print(f"[OI] snapshot persist failed: {exc}")
+
+
+def _read_persisted(order_desc_offset=0):
+    """Read a persisted snapshot row (0 = latest, 1 = previous, …). None if absent."""
+    if _PERSIST_DISABLED:
+        return None
+    try:
+        from persistence.db import connect_news_db
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute(
+            "SELECT bhavcopy_date, payload FROM fno_snapshot "
+            "ORDER BY bhavcopy_date DESC LIMIT 1 OFFSET ?",
+            (order_desc_offset,),
+        )
+        row = c.fetchone()
+        conn.close()
+        if not row:
+            return None
+        date_str = row[0]
+        data = json.loads(row[1]) if row[1] else {}
+        return {
+            "bhavcopy_date": date_str,
+            "futures": data.get("futures") or {},
+            "options": data.get("options") or {},
+        }
+    except Exception as exc:
+        print(f"[OI] snapshot read failed: {exc}")
+        return None
+
+
+def _load_latest_persisted():
+    """Latest persisted snapshot as a cache-shaped dict, or None."""
+    rec = _read_persisted(0)
+    if not rec or not (rec["futures"] or rec["options"]):
+        return None
+    try:
+        d = datetime.strptime(rec["bhavcopy_date"], "%Y-%m-%d").date()
+    except Exception:
+        d = None
+    return {"futures": rec["futures"], "options": rec["options"], "date": d}
+
+
+def get_prev_snapshot(before_date=None):
+    """
+    The previous trading day's snapshot — the BASELINE for diffing (#4) and the
+    intraday OI-change reference (#5).
+
+    before_date: ISO 'YYYY-MM-DD' or a date — return the newest stored snapshot
+    strictly BEFORE it. When None, returns the 2nd-newest stored snapshot.
+    Returns {"bhavcopy_date", "futures", "options"} or {} when unavailable.
+    """
+    try:
+        if before_date is None:
+            rec = _read_persisted(1)
+            return rec or {}
+        ref = before_date.isoformat() if hasattr(before_date, "isoformat") else str(before_date)
+        # Latest is usually == ref (today); the one before it is the baseline.
+        for off in (0, 1):
+            rec = _read_persisted(off)
+            if rec and rec["bhavcopy_date"] < ref:
+                return rec
+        return {}
+    except Exception as exc:
+        print(f"[OI] get_prev_snapshot failed: {exc}")
+        return {}
+
+
 def _ensure_cache() -> dict:
     """Return {"futures":..., "options":...}, fetching if not cached or stale."""
     now_utc = datetime.now(timezone.utc)
@@ -295,7 +411,10 @@ def _ensure_cache() -> dict:
     with _CACHE_LOCK:
         if _CACHE["futures"] is not None and _CACHE["fetched_at"] is not None:
             age_s = (now_utc - _CACHE["fetched_at"]).total_seconds()
-            if age_s < _CACHE_TTL_HOURS * 3600:
+            # A snapshot served from the DB (NSE was unreachable) is retried sooner
+            # so we don't sit on a stale copy for the full 4h.
+            ttl = _PERSIST_RETRY_SECS if _CACHE.get("from_persist") else _CACHE_TTL_HOURS * 3600
+            if age_s < ttl:
                 return {"futures": _CACHE["futures"], "options": _CACHE["options"]}
 
     # Try the last 4 candidate trading days in case of holidays / a stale CDN.
@@ -319,20 +438,41 @@ def _ensure_cache() -> dict:
                 _CACHE["options"] = parsed["options"]
                 _CACHE["date"] = d
                 _CACHE["fetched_at"] = now_utc
+                _CACHE["from_persist"] = False
             print(
                 f"[OI] Loaded F&O bhavcopy {d}: "
                 f"{len(parsed['futures'])} futures, "
                 f"{len(parsed['options'])} option symbols"
             )
+            # Persist the fresh snapshot (cold-start cache + diff baseline).
+            _persist_snapshot(d, parsed["futures"], parsed["options"])
             return {"futures": parsed["futures"], "options": parsed["options"]}
 
-    # All candidates failed — cache a brief empty so we don't hammer NSE
+    # All candidates failed — fall back to the last good DB-persisted snapshot
+    # (cold start / transient NSE outage) before giving up to empty.
+    restored = _load_latest_persisted()
+    if restored:
+        with _CACHE_LOCK:
+            _CACHE["futures"] = restored["futures"]
+            _CACHE["options"] = restored["options"]
+            _CACHE["date"] = restored["date"]
+            _CACHE["fetched_at"] = now_utc
+            _CACHE["from_persist"] = True
+        print(
+            f"[OI] NSE unreachable — restored persisted F&O snapshot "
+            f"({restored['date']}): {len(restored['futures'])} futures, "
+            f"{len(restored['options'])} option symbols"
+        )
+        return {"futures": restored["futures"], "options": restored["options"]}
+
+    # Nothing persisted either — cache a brief empty so we don't hammer NSE
     print("[OI] No bhavcopy reachable — OI/F&O features will return UNKNOWN/empty")
     with _CACHE_LOCK:
         _CACHE["futures"] = {}
         _CACHE["options"] = {}
         _CACHE["date"] = None
         _CACHE["fetched_at"] = now_utc
+        _CACHE["from_persist"] = False
     return {"futures": {}, "options": {}}
 
 
@@ -409,15 +549,45 @@ def get_fno_raw_snapshot() -> dict:
     with _CACHE_LOCK:
         date = _CACHE.get("date")
         fetched = _CACHE.get("fetched_at")
+        from_persist = bool(_CACHE.get("from_persist"))
 
     age = (datetime.now(timezone.utc) - fetched).total_seconds() if fetched else None
-    return {
+    eod = {
         "bhavcopy_date": (date.isoformat() if date else None),
         "fetched_at": (fetched.isoformat() if fetched else None),
         "age_seconds": age,
+        # 'eod' = freshly downloaded today; 'eod_restored' = served from the DB
+        # snapshot because NSE was unreachable (still end-of-day data). The Angel
+        # intraday source (#5) overrides this to 'intraday' below.
+        "source": ("eod_restored" if from_persist else "eod"),
         "futures": snap.get("futures") or {},
         "options": snap.get("options") or {},
     }
+
+    # ── Angel One intraday OI overlay (#5) ──
+    # When enabled + market hours + Angel reachable, replace the EOD futures with
+    # live (opnInterest) futures and overlay the live INDEX option chains; stock
+    # option chains stay EOD. Stale-while-revalidate, so this never blocks. Any
+    # failure leaves the EOD snapshot untouched.
+    try:
+        from marketdata import angel_fno
+        if angel_fno.is_enabled():
+            intra = angel_fno.get_intraday_snapshot(eod)
+            if intra and intra.get("futures"):
+                merged_opts = dict(eod["options"])
+                merged_opts.update(intra.get("options") or {})
+                eod = {
+                    **eod,
+                    "futures": intra["futures"],
+                    "options": merged_opts,
+                    "source": "intraday",
+                    "as_of": intra.get("as_of"),
+                    "intraday_scope": "futures+index_options",
+                }
+    except Exception as exc:
+        print(f"[FNO] intraday overlay skipped: {exc}")
+
+    return eod
 
 
 def get_option_chain_raw(symbol: str) -> dict:

@@ -382,6 +382,63 @@ def option_chain_view(symbol, opt_entry, futures_entry=None, asof_date=None):
     }
 
 
+# ── Day-over-day diffing (#4) ──────────────────────────────────────────────
+def diff_snapshots(curr_snapshot, prev_snapshot):
+    """
+    Compare two F&O snapshots' FUTURES maps and surface what changed since the
+    previous trading day — the honest way to make end-of-day data feel alive.
+
+    Returns {"by_symbol": {SYM: vs_prev}, "summary": {...}} where vs_prev is:
+        {is_new, buildup_prev, buildup_prev_label, flipped, oi_delta_pct}
+      • flipped     — the buildup direction switched bullish↔bearish vs prev day
+      • is_new      — the symbol wasn't in the previous snapshot
+      • oi_delta_pct— day-over-day change in total OI (%), None if no baseline
+
+    Pure / never raises — a malformed snapshot yields an empty diff.
+    """
+    curr_fut = (curr_snapshot or {}).get("futures") or {}
+    prev_fut = (prev_snapshot or {}).get("futures") or {}
+    by_symbol, flipped, newly = {}, [], []
+    for sym, cf in curr_fut.items():
+        try:
+            s = normalize_ticker(sym)
+            if not s or cf.get("is_index"):
+                continue
+            cb = classify_buildup(cf.get("px_chg_pct"), cf.get("oi_chg_total"))
+            cdir = BUILDUP_META.get(cb, {}).get("dir")
+            pf = prev_fut.get(sym) or prev_fut.get(s)
+            if not pf:
+                by_symbol[s] = {"is_new": True, "buildup_prev": None,
+                                "buildup_prev_label": None, "flipped": False,
+                                "oi_delta_pct": None}
+                if cdir in ("bullish", "bearish"):
+                    newly.append(s)
+                continue
+            pb = classify_buildup(pf.get("px_chg_pct"), pf.get("oi_chg_total"))
+            pdir = BUILDUP_META.get(pb, {}).get("dir")
+            c_oi = cf.get("oi_total") or 0
+            p_oi = pf.get("oi_total") or 0
+            oi_delta = round((c_oi - p_oi) / p_oi * 100, 1) if p_oi > 0 else None
+            is_flip = (cdir in ("bullish", "bearish") and pdir in ("bullish", "bearish")
+                       and cdir != pdir)
+            by_symbol[s] = {"is_new": False, "buildup_prev": pb,
+                            "buildup_prev_label": BUILDUP_META.get(pb, {}).get("label"),
+                            "flipped": is_flip, "oi_delta_pct": oi_delta}
+            if is_flip:
+                flipped.append({"symbol": s, "from": pdir, "to": cdir,
+                                "buildup": cb, "buildup_label": BUILDUP_META[cb]["label"]})
+        except Exception:
+            continue
+    summary = {
+        "prev_date": (prev_snapshot or {}).get("bhavcopy_date"),
+        "flipped_count": len(flipped),
+        "flipped": flipped[:8],
+        "new_count": len(newly),
+        "new_names": newly[:8],
+    }
+    return {"by_symbol": by_symbol, "summary": summary}
+
+
 # ── Board assembly ────────────────────────────────────────────────────────
 def _fmt_pct(v):
     try:
@@ -687,16 +744,19 @@ def _narrative(bias, buildups, index_matrix, sectors, unusual, participant=None)
 
 
 def build_smart_money_board(snapshot, watchlist=None, delivery=None, deals=None,
-                            participant=None, india_vix=None):
+                            participant=None, india_vix=None, prev_snapshot=None):
     """
     Assemble the full F&O Smart-Money board from a raw bhavcopy snapshot.
 
-    snapshot   : {"bhavcopy_date","fetched_at","futures":{...},"options":{...}}
-    watchlist  : optional list of tickers to flag/highlight.
-    delivery   : optional {SYM: deliv_pct} from cash bhavdata (conviction + spikes).
-    deals      : optional bulk/block deal dicts (passed through).
-    participant: optional {COHORT: {...}} from oi_data.get_participant_oi().
-    india_vix  : optional float (India VIX level) for the volatility context tile.
+    snapshot     : {"bhavcopy_date","fetched_at","futures":{...},"options":{...}}
+    watchlist    : optional list of tickers to flag/highlight.
+    delivery     : optional {SYM: deliv_pct} from cash bhavdata (conviction + spikes).
+    deals        : optional bulk/block deal dicts (passed through).
+    participant  : optional {COHORT: {...}} from oi_data.get_participant_oi().
+    india_vix    : optional float (India VIX level) for the volatility context tile.
+    prev_snapshot: optional previous trading day's snapshot — when supplied, every
+                   row gets a `vs_prev` diff (flipped / new / OI delta) and the
+                   board carries a top-level `changes` summary (#4 day-over-day).
 
     Returns a JSON-safe board dict. Never raises.
     """
@@ -707,6 +767,16 @@ def build_smart_money_board(snapshot, watchlist=None, delivery=None, deals=None,
     delivery = {normalize_ticker(k): v for k, v in (delivery or {}).items()}
     watchset = {normalize_ticker(t) for t in (watchlist or [])}
 
+    # Day-over-day diff (optional). Attach vs_prev to every row by symbol; because
+    # the buildup tables reference the SAME row dicts, the tags propagate there too.
+    diff = None
+    if prev_snapshot and (prev_snapshot.get("futures")):
+        try:
+            diff = diff_snapshots({"futures": futures}, prev_snapshot)
+        except Exception:
+            diff = None
+    diff_by_sym = (diff or {}).get("by_symbol") or {}
+
     rows = []
     for sym, fut in futures.items():
         sym = normalize_ticker(sym)
@@ -716,7 +786,10 @@ def build_smart_money_board(snapshot, watchlist=None, delivery=None, deals=None,
             continue                        # index futures → index matrix, not buildup
         opt_entry = options.get(sym) or {}
         deliv = delivery.get(sym)
-        rows.append(_build_row(sym, fut, opt_entry, deliv, watchset))
+        row = _build_row(sym, fut, opt_entry, deliv, watchset)
+        if diff_by_sym:
+            row["vs_prev"] = diff_by_sym.get(sym)
+        rows.append(row)
 
     # Buildup tables (drop thin, ranked by conviction)
     buildups = {k: [] for k in
@@ -770,6 +843,13 @@ def build_smart_money_board(snapshot, watchlist=None, delivery=None, deals=None,
         "bhavcopy_date": snapshot.get("bhavcopy_date"),
         "fetched_at": snapshot.get("fetched_at"),
         "age_seconds": snapshot.get("age_seconds"),
+        # Source/as-of provenance (set by oi_data: 'eod' | 'eod_restored' |
+        # 'intraday'). The frontend uses this to label LIVE vs END-OF-DAY honestly.
+        "source": snapshot.get("source", "eod"),
+        "as_of": snapshot.get("as_of"),
+        # Day-over-day change summary (#4): None when no previous snapshot exists.
+        "changes": (diff["summary"] if diff else None),
+        "changes_since": ((diff["summary"].get("prev_date") if diff else None)),
         "universe_count": len(rows),
         "india_vix": india_vix,
         "market_bias": bias,

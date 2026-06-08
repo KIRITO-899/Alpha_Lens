@@ -143,21 +143,71 @@ function _fnoRenderStats(d) {
         `${i ? '<div class="fno-stat-divider"></div>' : ''}<div class="fno-stat-cell"><div class="fno-stat-value ${x[2]}">${x[0]}</div><div class="fno-stat-label">${x[1]}</div></div>`
     ).join('');
 }
+// Small inline swap icon (emoji-free, per the design system).
+const _FNO_SWAP_SVG = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l-4 4 4 4"/><path d="M3 14h12"/><path d="M17 14l4-4-4-4"/><path d="M21 10H9"/></svg>';
+
+function _fnoFmtAsOfIST(iso) {
+    try {
+        return new Date(iso).toLocaleTimeString('en-IN',
+            { hour: '2-digit', minute: '2-digit', timeZone: 'Asia/Kolkata' });
+    } catch (e) { return ''; }
+}
+// ms until the next ~19:30 IST F&O bhavcopy publish (skips weekends).
+function _fnoNextBhavcopyMs() {
+    try {
+        const istNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+        const target = new Date(istNow);
+        target.setHours(19, 30, 0, 0);
+        if (istNow >= target) target.setDate(target.getDate() + 1);
+        while (target.getDay() === 0 || target.getDay() === 6) target.setDate(target.getDate() + 1);
+        return Math.max(0, target.getTime() - istNow.getTime());
+    } catch (e) { return 0; }
+}
+function _fnoFmtDur(ms) {
+    if (!isFinite(ms) || ms < 0) ms = 0;
+    const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
+    return h >= 1 ? `${h}h ${m}m` : `${m}m`;
+}
+function _fnoTickCountdown() {
+    const el = document.getElementById('fno-countdown');
+    if (el) el.textContent = _fnoFmtDur(_fnoNextBhavcopyMs());
+}
+
 function _fnoRenderMeta(d) {
     const el = document.getElementById('fno-meta');
     if (!el) return;
-    const date = d.bhavcopy_date ? `Bhavcopy ${escapeHtml(d.bhavcopy_date)}` : 'Bhavcopy pending';
+    const src = d.source || 'eod';
+    const live = src.indexOf('intraday') === 0;
     const wl = (d.watchlist || []).length;
-    let age = '';
-    const s = Number(d.age_seconds);
-    if (isFinite(s) && s >= 0) {
-        const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
-        age = h >= 1 ? `Updated ${h}h ago` : `Updated ${m}m ago`;
+    let pills = '';
+
+    if (live) {
+        // Angel One intraday OI (#5): live during market hours, OI deltas vs the
+        // previous close. Honest green pill + the as-of time.
+        const asof = d.as_of ? _fnoFmtAsOfIST(d.as_of) : '';
+        pills += `<span class="fno-meta-pill fno-live"><span class="pill-dot"></span>LIVE${asof ? ' · ' + asof + ' IST' : ''}</span>`;
+        if (d.bhavcopy_date) pills += `<span class="fno-meta-pill">OI vs ${escapeHtml(d.bhavcopy_date)} close</span>`;
+    } else {
+        // End-of-day bhavcopy: label "as of <date> close" + a live countdown to
+        // tonight's publish so the board visibly flips the moment it lands.
+        const cached = src === 'eod_restored';
+        const dateTxt = d.bhavcopy_date ? `As of ${escapeHtml(d.bhavcopy_date)} close` : 'Bhavcopy pending';
+        pills += `<span class="fno-meta-pill fno-eod">END-OF-DAY${cached ? ' · CACHED' : ''}</span>`;
+        pills += `<span class="fno-meta-pill"><span class="pill-dot"></span>${dateTxt}</span>`;
+        pills += `<span class="fno-meta-pill">Next update in <span id="fno-countdown">${_fnoFmtDur(_fnoNextBhavcopyMs())}</span></span>`;
     }
-    el.innerHTML = `<span class="fno-meta-pill fno-eod">END-OF-DAY</span>`
-        + `<span class="fno-meta-pill"><span class="pill-dot"></span>${date}</span>`
-        + (age ? `<span class="fno-meta-pill">${age}</span>` : '')
-        + (wl ? `<span class="fno-meta-pill">${wl} in your watchlist</span>` : '');
+
+    // Day-over-day change summary (#4).
+    const ch = d.changes;
+    if (ch && (ch.flipped_count || ch.new_count)) {
+        const bits = [];
+        if (ch.flipped_count) bits.push(`${ch.flipped_count} flipped`);
+        if (ch.new_count) bits.push(`${ch.new_count} new`);
+        pills += `<span class="fno-meta-pill fno-changed">${_FNO_SWAP_SVG} ${bits.join(' · ')}${ch.prev_date ? ' vs ' + escapeHtml(ch.prev_date) : ''}</span>`;
+    }
+
+    if (wl) pills += `<span class="fno-meta-pill">${wl} in your watchlist</span>`;
+    el.innerHTML = pills;
 }
 function _fnoRenderNarrative(d) {
     const el = document.getElementById('fno-narrative');
@@ -257,11 +307,22 @@ const _FNO_QUADS = [
     ['SHORT_COVERING', 'Short Covering', 'bull', 'Shorts exiting · price ↑ OI ↓'],
     ['LONG_UNWINDING', 'Long Unwinding', 'bear', 'Longs exiting · price ↓ OI ↓'],
 ];
+// A NEW (just entered F&O positioning) / FLIPPED (direction switched vs the
+// previous day) chip — the day-over-day "what changed" tag (#4).
+function _fnoChangeTag(vp) {
+    if (!vp) return '';
+    if (vp.is_new) return '<span class="fno-tag new" title="New vs previous session">NEW</span>';
+    if (vp.flipped) {
+        const t = vp.buildup_prev_label ? `Flipped from ${vp.buildup_prev_label}` : 'Direction flipped vs previous session';
+        return `<span class="fno-tag flip" title="${escapeHtml(t)}">FLIPPED</span>`;
+    }
+    return '';
+}
 function _fnoRowTable(rows) {
     if (!rows.length) return `<div class="fno-quad-empty">No names in this bucket today.</div>`;
     return `<table class="fno-table"><thead><tr><th>Symbol</th><th class="fno-th-num">Price</th><th class="fno-th-num">OI Δ</th><th>Conviction</th></tr></thead><tbody>` + rows.map(r => `
         <tr onclick="openFnoOptionChain('${escapeHtml(r.symbol)}')">
-            <td class="fno-td-sym">${_fnoStar(r.in_watchlist)}<span class="fno-sym">${escapeHtml(r.symbol)}</span><span class="fno-sec">${escapeHtml(r.sector)}</span></td>
+            <td class="fno-td-sym">${_fnoStar(r.in_watchlist)}<span class="fno-sym">${escapeHtml(r.symbol)}</span>${_fnoChangeTag(r.vs_prev)}<span class="fno-sec">${escapeHtml(r.sector)}</span></td>
             <td class="fno-td-num" data-label="Price">${_fnoMove(r.px_chg_pct)}</td>
             <td class="fno-td-num" data-label="OI Δ">${_fnoMove(r.oi_chg_pct)}</td>
             <td class="fno-td-conv" data-label="Conviction">${_fnoConvBar(r.conviction, r.direction)}</td>
@@ -486,4 +547,48 @@ document.addEventListener('keydown', (e) => {
         const m = document.getElementById('fno-modal');
         if (m && !m.classList.contains('hidden')) closeFnoModal();
     }
+});
+
+/* ===========================================================================
+ * AUTO-POLL while the F&O tab is open (#3)
+ *
+ * switchTab('fno') already does the first fetch (app-core.js). Here we add a
+ * visibility-aware refresh so the board re-checks for tonight's bhavcopy (or,
+ * with Angel intraday on, the live OI) WITHOUT a manual reload — and a 60s
+ * countdown ticker. Polling pauses when the tab is hidden or backgrounded, so
+ * it never hammers the server cache. We wrap window.switchTab the same way
+ * app-calendar.js does; wrapper chaining is order-independent.
+ * ======================================================================== */
+const _FNO_POLL_MS = 180000;   // 3 min — server cache (board 10m / intraday TTL) absorbs it
+let _fnoPollTimer = null, _fnoCountdownTimer = null;
+
+function _fnoStartPolling() {
+    if (!_fnoPollTimer) {
+        _fnoPollTimer = setInterval(() => {
+            if (!document.hidden) fetchFnoSmartMoney();
+        }, _FNO_POLL_MS);
+    }
+    if (!_fnoCountdownTimer) {
+        _fnoCountdownTimer = setInterval(_fnoTickCountdown, 60000);
+    }
+}
+function _fnoStopPolling() {
+    if (_fnoPollTimer) { clearInterval(_fnoPollTimer); _fnoPollTimer = null; }
+    if (_fnoCountdownTimer) { clearInterval(_fnoCountdownTimer); _fnoCountdownTimer = null; }
+}
+
+(function _fnoHookTabLifecycle() {
+    const _origSwitchTabFno = window.switchTab;
+    if (typeof _origSwitchTabFno !== 'function') return;
+    window.switchTab = function (tab) {
+        _origSwitchTabFno.apply(this, arguments);
+        if (tab === 'fno') _fnoStartPolling();
+        else _fnoStopPolling();
+    };
+})();
+
+// Refresh once when the tab/window regains focus while F&O is the open view
+// (covers the "left it open overnight" case so the morning shows fresh data).
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && _fnoPollTimer) fetchFnoSmartMoney();
 });
