@@ -40,8 +40,27 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'), override=True
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 import feedparser
-from google import genai
-from google.genai import types
+# ── Lazy Gemini import (shaves ~1.5s off every cold-start boot) ───────────────
+# `google.genai` pulls in grpc/protobuf and costs ~1.5s to import, but it is ONLY
+# touched at the AI-call sites (genai.Client / types.GenerateContentConfig) — never
+# on the first-paint, /api/health, or any read-endpoint path. This transparent
+# proxy defers the real import to the first attribute access, so gunicorn serves
+# its first byte (and every non-AI endpoint) without paying that cost on a cold
+# start. Behaviour is identical the moment any AI path runs.
+class _LazyModule:
+    def __init__(self, name):
+        self.__dict__["_name"] = name
+        self.__dict__["_mod"] = None
+    def __getattr__(self, attr):  # only fires for attrs not in __dict__
+        mod = self.__dict__["_mod"]
+        if mod is None:
+            import importlib
+            mod = importlib.import_module(self.__dict__["_name"])
+            self.__dict__["_mod"] = mod
+        return getattr(mod, attr)
+
+genai = _LazyModule("google.genai")
+types = _LazyModule("google.genai.types")
 from difflib import SequenceMatcher
 import requests
 from bs4 import BeautifulSoup
@@ -797,7 +816,18 @@ def _bootstrap_gemini_client():
     return _set_active_gemini_client(idx)
 
 current_key_idx = 0
-client = _bootstrap_gemini_client()
+# Built lazily on first AI use (NOT at import). google.genai pulls in grpc/protobuf
+# and the Client() construction costs ~1.5s — keeping it off the import path means
+# gunicorn serves its first byte (and every non-AI endpoint) that much faster on a
+# cold start. The first AI worker cycle builds it; behaviour is otherwise identical.
+client = None
+
+def _ensure_gemini_client():
+    """Return the active Gemini client, building it on first use (deferred from import)."""
+    global client
+    if client is None and API_KEYS:
+        _bootstrap_gemini_client()
+    return client
 
 
 def _try_switch_to_list2():
@@ -1885,7 +1915,7 @@ Return STRICT valid JSON, no markdown fences:
     for _key_idx in try_order:
         try:
             _set_active_gemini_client(_key_idx)
-            resp = client.models.generate_content(
+            resp = _ensure_gemini_client().models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
@@ -2047,7 +2077,7 @@ Return STRICT valid JSON, no markdown fences:
     for _key_idx in try_order:
         try:
             _set_active_gemini_client(_key_idx)
-            resp = client.models.generate_content(
+            resp = _ensure_gemini_client().models.generate_content(
                 model=MODEL_NAME,
                 contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
@@ -3827,7 +3857,7 @@ Return ONLY valid JSON matching this shape:
                 tech_data=tech_data,
                 market_regime=market_regime,
                 db_connect_fn=connect_news_db,
-                api_client=client,
+                api_client=_ensure_gemini_client(),
                 model_name=MODEL_NAME,
                 min_score=MIN_CONFIDENCE,
                 get_client_fn=get_and_rotate_client,
@@ -5503,7 +5533,7 @@ Return ONLY:
         for _key_idx in try_order:
             try:
                 _set_active_gemini_client(_key_idx)
-                resp = client.models.generate_content(
+                resp = _ensure_gemini_client().models.generate_content(
                     model=MODEL_NAME,
                     contents=prompt,
                     config=types.GenerateContentConfig(response_mime_type="application/json"),
@@ -7269,7 +7299,7 @@ def run_portfolio_ai_with_timeout(prompt, timeout_seconds=6.5):
         return None
     max_attempts = len(API_KEYS)
     for attempt in range(max_attempts):
-        active_client = client
+        active_client = _ensure_gemini_client()
         active_idx = current_key_idx
         if not active_client:
             active_client, active_idx = get_and_rotate_client()
@@ -9090,7 +9120,7 @@ Rules: NEVER fabricate. If the headlines do not mention guidance or an order boo
     for _key_idx in try_order:
         try:
             _set_active_gemini_client(_key_idx)
-            resp = client.models.generate_content(
+            resp = _ensure_gemini_client().models.generate_content(
                 model=MODEL_NAME, contents=prompt,
                 config=types.GenerateContentConfig(response_mime_type="application/json"),
             )
@@ -10361,7 +10391,7 @@ Return ONLY valid JSON matching this shape:
                 result = ensemble.predict(
                     headline=_ai_input, ticker=ticker, direction=base_direction,
                     tech_data=tech_data, market_regime=market_regime, db_connect_fn=connect_news_db,
-                    api_client=client, model_name=MODEL_NAME, min_score=MIN_CONFIDENCE,
+                    api_client=_ensure_gemini_client(), model_name=MODEL_NAME, min_score=MIN_CONFIDENCE,
                     get_client_fn=get_and_rotate_client, precalculated_score=r.get("quality_score"),
                     catalyst_type=_catalyst, news_age_hours=None, force_precalculated=True)
                 if not result['approved']:
