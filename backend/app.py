@@ -106,7 +106,7 @@ from marketdata.market_calendar import (
     is_market_holiday, is_market_open, published_after_market_hours,
     has_market_traded_since,
 )
-from marketdata.price_resolver import select_fresh_close, atr_stop_target
+from marketdata.price_resolver import select_fresh_close, atr_stop_target, parse_timestamp
 
 
 _TICKER_CACHE = {}
@@ -4259,18 +4259,12 @@ def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is
 
 
 def _parse_created_at(created_at_str):
-    try:
-        if '+' in created_at_str or 'GMT' in created_at_str:
-            dt = parsedate_to_datetime(created_at_str)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt
-        return datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
-    except Exception:
-        try:
-            return datetime.fromisoformat(created_at_str)
-        except Exception:
-            return None
+    # ⚠️ Postgres TIMESTAMP columns return a **datetime object** (naive, UTC),
+    # while SQLite returns the stored RFC/ISO **string**. parse_timestamp handles
+    # BOTH — otherwise every created_at parse silently fails on production (the
+    # cause of signals never resolving via the multi-day catch-up, and recompute
+    # updating 0 rows). Pure + unit-tested in tests/test_price_resolver.py.
+    return parse_timestamp(created_at_str)
 
 
 def _published_during_nse_hours(created_dt_utc):
@@ -4651,10 +4645,12 @@ def yfinance_worker():
 
                 if status == 'Active View':
                     try:
-                        _pub_ist = parsedate_to_datetime(created_at_str).astimezone(_IST) \
-                            if ('+' in created_at_str or 'GMT' in created_at_str) else \
-                            datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(
-                                tzinfo=timezone.utc).astimezone(_IST)
+                        # _parse_created_at handles BOTH the SQLite string and the
+                        # Postgres datetime object (prod) — see its docstring.
+                        _pub_dt0 = _parse_created_at(created_at_str)
+                        if _pub_dt0 is None:
+                            raise ValueError("unparseable created_at")
+                        _pub_ist = _pub_dt0.astimezone(_IST)
 
                         _now_ist = datetime.now(_IST)
                         _last_close = _now_ist.replace(hour=15, minute=30, second=0, microsecond=0)
@@ -4715,7 +4711,12 @@ def yfinance_worker():
 
                     # ── 1. Multi-day catch-up (History from NEXT SESSION for after-hours signals) ──
                     try:
-                        created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                        # _parse_created_at handles the Postgres datetime object too;
+                        # the old strptime() silently failed on prod, so aged signals
+                        # never resolved via the historical OHLC pass (stuck Active).
+                        created_dt = _parse_created_at(created_at_str)
+                        if created_dt is None:
+                            raise ValueError("unparseable created_at")
                         age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
                         if age_hours >= 12:  # old enough to have "yesterday"
                             if ticker not in _ohlc_cache:
@@ -4779,8 +4780,8 @@ def yfinance_worker():
                     # Check expiry (always, regardless of market hours)
                     if new_status == 'Active View':
                         try:
-                            created_dt = datetime.strptime(created_at_str, '%Y-%m-%d %H:%M:%S')
-                            age_hours = (datetime.now(timezone.utc).replace(tzinfo=None) - created_dt).total_seconds() / 3600
+                            created_dt = _parse_created_at(created_at_str)  # tz-aware; PG-safe
+                            age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600
                             if age_hours >= SIGNAL_EXPIRY_HOURS:
                                 new_status = 'Expired'
                         except Exception:
@@ -9764,9 +9765,10 @@ def debug_worker_status():
             news_id, headline, created_at = row[0], row[1], row[2]
             minutes_ago = None
             try:
-                # created_at is "YYYY-MM-DD HH:MM:SS" UTC
-                ts = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-                minutes_ago = round((datetime.now(timezone.utc) - ts).total_seconds() / 60, 1)
+                # PG-safe: created_at is a string (SQLite) or datetime (Postgres)
+                ts = _parse_created_at(created_at)
+                if ts is not None:
+                    minutes_ago = round((datetime.now(timezone.utc) - ts).total_seconds() / 60, 1)
             except Exception:
                 pass
             latest_news = {

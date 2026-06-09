@@ -363,6 +363,17 @@ and the historical data was recomputed in place.
    (e.g. a −5.23% candle low booked against a 1% stop). The worker's live-intraday section
    was clamped to match.
 
+4. **⚠️ Postgres `created_at` datetime-vs-string bug (prod-only, was silent).** `stock_impact.created_at`
+   is `TIMESTAMP` → Postgres returns a **`datetime` object**, SQLite returns the stored **string**.
+   `_parse_created_at` and the yfinance worker's inline parsers assumed a string (`'GMT' in s` /
+   `strptime`), so on **production** every parse silently failed → the worker's multi-day historical
+   OHLC catch-up + expiry never ran (aged signals stuck "Active View"; you only ever saw the
+   live-intraday stops, never the multi-day **target** hits → "stops but no targets, 0 win rate"),
+   and `recompute_all_signals` updated **0 rows**. Fixed by the pure `price_resolver.parse_timestamp()`
+   (handles datetime *and* string → tz-aware UTC); `_parse_created_at` delegates to it and the worker's
+   three parse sites (after-hours start, §1 catch-up, expiry) route through it. Unit-tested. This is a
+   **local SQLite vs prod Postgres divergence** — it cannot reproduce locally, so it stayed hidden.
+
 **Recompute the whole Track Record in place** (after the fixes, or any future ATR-rule
 change) — re-derives each signal's stop/target (ATR recovered from the stored
 `technical_context.atr_pct`), re-resolves status from real OHLC, recomputes `current_price`

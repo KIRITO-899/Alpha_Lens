@@ -19,7 +19,41 @@ different prices across the UI.  ``select_fresh_close`` reconciles the two into 
 single, always-fresh answer.
 """
 
-from datetime import date as _date
+from datetime import date as _date, datetime as _datetime, timezone as _timezone
+from email.utils import parsedate_to_datetime as _parsedate
+
+
+def parse_timestamp(value):
+    """Normalize a stored ``created_at`` into a tz-aware UTC datetime.
+
+    Handles BOTH representations the app sees:
+      * a **datetime object** — Postgres ``TIMESTAMP`` columns come back as
+        (naive, UTC) datetimes via psycopg2;
+      * a **string** — SQLite stores the RFC-1123 form
+        ``'Mon, 08 Jun 2026 04:01:39 GMT'`` or an ISO / ``'YYYY-MM-DD HH:MM:SS'``.
+
+    Returns None if unparseable. This single helper is why signal resolution and
+    recompute behave identically on SQLite (local) and Postgres (prod) — the old
+    string-only parser silently returned None for every Postgres row, so aged
+    signals never resolved and recompute updated 0 rows.
+    """
+    if isinstance(value, _datetime):
+        return value if value.tzinfo else value.replace(tzinfo=_timezone.utc)
+    if value is None:
+        return None
+    try:
+        s = str(value)
+        if '+' in s or 'GMT' in s or ',' in s:
+            dt = _parsedate(s)
+            return dt if dt.tzinfo else dt.replace(tzinfo=_timezone.utc)
+        dt = _datetime.strptime(s, '%Y-%m-%d %H:%M:%S')
+        return dt.replace(tzinfo=_timezone.utc)
+    except Exception:
+        try:
+            dt = _datetime.fromisoformat(str(value))
+            return dt if dt.tzinfo else dt.replace(tzinfo=_timezone.utc)
+        except Exception:
+            return None
 
 
 def _round2(x):

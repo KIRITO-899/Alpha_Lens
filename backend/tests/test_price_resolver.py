@@ -8,7 +8,7 @@ These lock in the two fixes:
 import unittest
 from datetime import datetime, date, timezone, timedelta
 
-from marketdata.price_resolver import select_fresh_close, atr_stop_target
+from marketdata.price_resolver import select_fresh_close, atr_stop_target, parse_timestamp
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -102,6 +102,43 @@ class TestAtrStopTarget(unittest.TestCase):
 
     def test_non_numeric_atr_is_fallback(self):
         self.assertEqual(atr_stop_target("nope"), (1.0, 2.0, False))
+
+
+class TestParseTimestamp(unittest.TestCase):
+    """created_at is a STRING on SQLite but a DATETIME on Postgres. parse_timestamp
+    must handle both, or signal resolution + recompute silently break on prod."""
+
+    def test_naive_datetime_postgres_case(self):
+        # Postgres TIMESTAMP -> naive datetime, must be treated as UTC
+        dt = parse_timestamp(datetime(2026, 6, 8, 4, 1, 39))
+        self.assertEqual(dt, datetime(2026, 6, 8, 4, 1, 39, tzinfo=timezone.utc))
+        self.assertIsNotNone(dt.tzinfo)
+
+    def test_aware_datetime_preserved(self):
+        src = datetime(2026, 6, 8, 4, 1, 39, tzinfo=timezone.utc)
+        self.assertEqual(parse_timestamp(src), src)
+
+    def test_rfc_1123_string_sqlite_case(self):
+        dt = parse_timestamp('Mon, 08 Jun 2026 04:01:39 GMT')
+        self.assertEqual(dt, datetime(2026, 6, 8, 4, 1, 39, tzinfo=timezone.utc))
+
+    def test_space_separated_utc_string(self):
+        dt = parse_timestamp('2026-06-08 04:01:39')
+        self.assertEqual(dt, datetime(2026, 6, 8, 4, 1, 39, tzinfo=timezone.utc))
+
+    def test_iso_string(self):
+        dt = parse_timestamp('2026-06-08T04:01:39+00:00')
+        self.assertEqual(dt, datetime(2026, 6, 8, 4, 1, 39, tzinfo=timezone.utc))
+
+    def test_none_and_garbage(self):
+        self.assertIsNone(parse_timestamp(None))
+        self.assertIsNone(parse_timestamp('not a date'))
+
+    def test_both_representations_agree(self):
+        # the same instant, stored two ways, must parse identically
+        a = parse_timestamp('Mon, 08 Jun 2026 04:01:39 GMT')
+        b = parse_timestamp(datetime(2026, 6, 8, 4, 1, 39))
+        self.assertEqual(a, b)
 
 
 if __name__ == '__main__':
