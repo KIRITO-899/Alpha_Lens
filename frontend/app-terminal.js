@@ -361,9 +361,13 @@
 
         function renderBacktest() {
             if (!_backtestData) return;
-            // #7 — animated equity curve drawn from closed signals. Render first so it
-            // appears above the KPIs and the SVG draw-in plays as KPIs count up.
-            renderEquityCurveHero(_backtestData.recent_closed || []);
+            // #7 — animated equity curve. Prefer the server's RANGE-HONEST curve
+            // (cumulative realized P&L over every judged trade in the selected range)
+            // over the old 30-trade tail; fall back to recent_closed for old backends.
+            const _eq = (Array.isArray(_backtestData.equity_curve) && _backtestData.equity_curve.length)
+                ? _backtestData.equity_curve.map(p => ({ pnl_pct: p.pnl, created_at: p.t }))
+                : (_backtestData.recent_closed || []);
+            renderEquityCurveHero(_eq);
             renderBacktestKPIs();
             renderBacktestConfidence();
             renderBacktestDirection();
@@ -411,10 +415,21 @@
                 return;
             }
 
-            const hr = s.hit_rate;
-            const hrAccent = hr == null ? 'tr-kpi-accent' : (hr >= 60 ? 'tr-kpi-green' : (hr >= 50 ? 'tr-kpi-amber' : 'tr-kpi-red'));
-            const pnlAccent = (s.avg_pnl == null) ? 'tr-kpi-accent' : (s.avg_pnl >= 0 ? 'tr-kpi-green' : 'tr-kpi-red');
-            const winSign = (s.avg_win != null && s.avg_win < 0) ? '-' : '+';
+            // Win-rate is colored against the REAL breakeven (≈33% at 2:1, lower with
+            // partials) — NOT a flat 50% — so a profitable asymmetric strategy never
+            // renders "red" just for being below half.
+            const wr = s.win_rate;
+            const be = (s.breakeven_win_rate != null) ? s.breakeven_win_rate : 50;
+            const wrAccent = wr == null ? 'tr-kpi-accent'
+                : (wr >= be + 5 ? 'tr-kpi-green' : (wr >= be ? 'tr-kpi-amber' : 'tr-kpi-red'));
+            const exp = s.expectancy;
+            const expAccent = exp == null ? 'tr-kpi-accent' : (exp > 0 ? 'tr-kpi-green' : (exp < 0 ? 'tr-kpi-red' : 'tr-kpi-amber'));
+            const pf = s.profit_factor;
+            const pfAccent = pf == null ? 'tr-kpi-accent' : (pf >= 1 ? 'tr-kpi-green' : 'tr-kpi-red');
+            const beTxt = (s.breakeven_win_rate != null) ? `breakeven ≈ ${s.breakeven_win_rate.toFixed(0)}%` : '';
+            const awl = (s.avg_win != null && s.avg_loss != null)
+                ? `avg +${Math.abs(s.avg_win).toFixed(1)}% / −${Math.abs(s.avg_loss).toFixed(1)}%` : 'net of costs';
+            const scr = s.scratches ? ` · ${s.scratches} flat` : '';
 
             // Render with data-cu-* attrs the animator reads — keeps render and animation cleanly separated.
             row.innerHTML = `
@@ -423,20 +438,20 @@
                     <div class="tr-kpi-value" data-cu-to="${s.total_signals || 0}" data-cu-fmt="intLocale">0</div>
                     <div class="tr-kpi-sub">${s.closed_signals || 0} closed · ${s.active_or_pending || 0} live</div>
                 </div>
-                <div class="tr-kpi ${hrAccent}">
-                    <div class="tr-kpi-label">Hit Rate</div>
-                    <div class="tr-kpi-value lg" ${hr == null ? '' : `data-cu-to="${hr}" data-cu-fmt="pct1"`}>${hr == null ? '—' : '0%'}</div>
-                    <div class="tr-kpi-sub">${s.hits || 0} hits · ${s.stops || 0} stops${s.expired ? ' · ' + s.expired + ' expired' : ''}</div>
+                <div class="tr-kpi ${wrAccent}">
+                    <div class="tr-kpi-label">Win Rate</div>
+                    <div class="tr-kpi-value lg" ${wr == null ? '' : `data-cu-to="${wr}" data-cu-fmt="pct1"`}>${wr == null ? '—' : '0%'}</div>
+                    <div class="tr-kpi-sub">${s.wins || 0}W · ${s.losses || 0}L${scr}${beTxt ? ' · ' + beTxt : ''}</div>
                 </div>
-                <div class="tr-kpi tr-kpi-green">
-                    <div class="tr-kpi-label">Avg Win</div>
-                    <div class="tr-kpi-value" ${s.avg_win == null ? '' : `data-cu-to="${Math.abs(s.avg_win)}" data-cu-fmt="pct2" data-cu-prefix="${winSign}"`}>${s.avg_win == null ? '—' : '+0.00%'}</div>
-                    <div class="tr-kpi-sub">On winning trades only</div>
+                <div class="tr-kpi ${expAccent}">
+                    <div class="tr-kpi-label">Expectancy / Trade</div>
+                    <div class="tr-kpi-value lg" ${exp == null ? '' : `data-cu-to="${exp}" data-cu-fmt="pctSigned2"`}>${exp == null ? '—' : '0.00%'}</div>
+                    <div class="tr-kpi-sub">Net edge after costs · ${awl}</div>
                 </div>
-                <div class="tr-kpi ${pnlAccent}">
-                    <div class="tr-kpi-label">Avg P&L</div>
-                    <div class="tr-kpi-value" ${s.avg_pnl == null ? '' : `data-cu-to="${s.avg_pnl}" data-cu-fmt="pctSigned2"`}>${s.avg_pnl == null ? '—' : '0.00%'}</div>
-                    <div class="tr-kpi-sub">Per closed signal, all-in</div>
+                <div class="tr-kpi ${pfAccent}">
+                    <div class="tr-kpi-label">Profit Factor</div>
+                    <div class="tr-kpi-value" ${pf == null ? '' : `data-cu-to="${pf}" data-cu-fmt="num2"`}>${pf == null ? '—' : '0.00'}</div>
+                    <div class="tr-kpi-sub">Gross win ÷ loss · &gt;1 = profitable</div>
                 </div>`;
             _runCountUps(row);
         }
@@ -456,6 +471,7 @@
                     pct1:       (v) => prefix + v.toFixed(1) + '%',
                     pct2:       (v) => prefix + v.toFixed(2) + '%',
                     pctSigned2: (v) => (v >= 0 ? '+' : '') + v.toFixed(2) + '%',
+                    num2:       (v) => prefix + v.toFixed(2),
                 };
                 animateNumber(el, to, { formatFn: formatters[fmt] || formatters.int });
                 el.dataset.cuDone = '1';
@@ -558,6 +574,8 @@
                 let outcomeCls = 'expired', outcomeTxt = 'Expired';
                 if (r.status === 'Predicted Target Hit') { outcomeCls = 'hit'; outcomeTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M5 13l4 4L19 7"/></svg>Target'; }
                 else if (r.status === 'Stop Loss Hit') { outcomeCls = 'stop'; outcomeTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stop'; }
+                else if (r.status === 'Breakeven Exit') { outcomeCls = r.is_win ? 'hit' : 'stop'; outcomeTxt = 'Partial'; }
+                else if (r.status === 'Expired') { outcomeCls = r.is_win ? 'hit' : 'expired'; outcomeTxt = 'Timed out'; }
                 else if (r.status === 'Reacted Against Prediction') { outcomeCls = 'stop'; outcomeTxt = '↘ Reacted'; }
 
                 const staggerI = Math.min(idx, 12);

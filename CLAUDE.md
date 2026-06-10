@@ -242,6 +242,8 @@ all reversible:
 |------|---------|--------|
 | `MIN_SIGNAL_PRICE` / `MIN_TURNOVER_CR` | 20 / 1.0 | **Liquidity filter** — skip penny (<₹20) & illiquid (<₹1cr/day turnover) names before the ensemble. Uses `tech_data['avg_volume_20d']`. |
 | `ATR_STOP_MULT` / `ATR_TARGET_MULT` (+ `ATR_STOP_CAP_PCT` / `ATR_TARGET_CAP_PCT`) | 0.5 / 1.0 (10 / 20) | **Stop = ATR/2, Target = ATR** (2:1 R:R). No-ATR → flat **1%/2%** fallback (`REQUIRE_ATR=0` now — it no longer *skips*). Wide caps only guard a corrupt ATR. Math lives in the pure, unit-tested `marketdata/price_resolver.atr_stop_target()`. |
+| `PARTIAL_PROFIT_ENABLED` / `PARTIAL_PROFIT_R` / `PARTIAL_FRACTION` | 1 / 1.0 / 0.5 | **Partial-profit + breakeven exit** (see below) — book `PARTIAL_FRACTION` of the position at +`PARTIAL_PROFIT_R`·R, then move the stop to **breakeven**. Raises win-rate **without widening the stop**. `=0` reverts to first-barrier resolution. |
+| `COST_ROUNDTRIP_PCT` | 0.20 | Round-trip transaction cost (STT + brokerage + impact) subtracted from every closed trade so reported P&L/expectancy is honest, not gross. |
 | `REQUIRE_TECH_CONFIRM` / `TECH_CONFIRM_MIN` | 1 / 50 | Require the technical model (s3) to **actively confirm** the direction, not just "not veto". |
 | `W_AI` `W_TECHNICAL` `W_HISTORICAL` `W_SECTOR` `W_INDIAN` | 0.30 / 0.30 / 0.20 / 0.05 / 0.15 | Ensemble weights (AI **down-weighted** from 0.40; final score normalized by total weight). |
 | `REGIME_HARD_BLOCK` | 0 | Hard-reject counter-regime trades (vs the soft `REGIME_PENALTY`). |
@@ -250,6 +252,43 @@ all reversible:
 The selection funnel (`SELECTION_FUNNEL`: `liquidity_skip` / `atr_skip` / `ensemble_rejected`
 / `ensemble_approved`) is surfaced in **`/api/debug-worker-status`** so each filter's drop
 rate is visible.
+
+### The exit model: partial-profit + breakeven (raises win-rate, stop UNCHANGED)
+
+Because the raw ensemble edge is near-zero, the highest-leverage win-rate lever is the
+**exit management**, not the entry. A new pure simulator —
+**`marketdata/price_resolver.simulate_exit`** (+ `to_favorable_bars`) — replays a signal's
+OHLC path and: books `PARTIAL_FRACTION` (0.5) at **+1R**, moves the stop to **breakeven**,
+honors gap-through-open fills, breaks ambiguous "both-touched" bars on the **close**
+direction (not the old "benefit-of-the-doubt = win" bias), force-closes the runner at the
+time-stop, and subtracts `COST_ROUNDTRIP_PCT`. A trade that reaches +1R then fully reverses
+books **+0.5R — a WIN** — so the win-rate rises from ~P(reach +2R)≈33% to ~P(reach +1R)≈50%
+**honestly** (realized P&L, not a relabel) and **without touching `ATR_STOP_MULT`**.
+- **One source of truth.** `simulate_exit` is called identically by `check_historical_hits`
+  (the daily grader → recompute + the live worker's catch-up), the worker's same-day intraday
+  path, and the eval ledger's `_label_one` — so the Track Record, the live terminal, and the
+  shadow ledger can no longer disagree. Works in FAVORABLE %-space (positive = trade went
+  right), so long/short share one path; the caller flips the sign back for storage.
+- **New status `Breakeven Exit`** (partial booked, runner stopped at breakeven = a small win);
+  **`Expired` now carries a real exit P&L** (partial + time-stop fill), so it is judged, not
+  dropped. `tests/test_simulate_exit.py` (21 cases) pins the math.
+- ⚠️ **Run a `recompute_all_signals` after deploy** so the historical Track Record re-grades
+  under the new model (it re-derives every signal's outcome from OHLC + the new exit rules).
+
+### The honest scoreboard (`/api/backtest-stats`)
+
+The Track Record is now **expectancy-first** (a 2:1-R:R strategy is profitable well below a
+50% win-rate, so a raw hit-rate colored against 50% was misleading). The endpoint now
+computes, over **every** judged closed trade (incl. `Expired` + `Breakeven Exit`):
+**`win_rate`** (trades closing net-positive), **`expectancy`** (avg realized P&L %/trade, net
+of cost — the edge), **`profit_factor`** (gross win ÷ gross loss), **`avg_win`/`avg_loss`**, and
+**`breakeven_win_rate`** (the empirical bar the win-rate must clear). It also returns a
+**range-honest `equity_curve`** (chronological cumulative realized P&L over the selected range
+— not the old 30-trade tail that mixed in unresolved Expireds). The frontend Track Record
+leads with **Win Rate · Expectancy · Profit Factor** tiles, colors the win-rate against the
+**real breakeven (~33–45%), not 50%**, and the "Win Rate by Conviction" table + methodology
+were corrected (no more "higher conviction → higher hit rate" claim the data refutes). Legacy
+keys (`hit_rate`/`avg_pnl`/`hits`/`stops`) are kept as aliases so nothing downstream breaks.
 
 ### The eval loop (the scoreboard)
 
@@ -261,6 +300,16 @@ triple-barrier outcome for **all** of them once older than `EVAL_HORIZON_DAYS` (
 - **`GET /api/eval-report`** → approved vs **rejected** win rate (the counterfactual: are the
   filters dropping losers or winners?) + per-disposition breakdown.
 - **`POST /api/admin/label-eval`** (token: `X-Alpha-Lens-Token`) → trigger labelling on demand.
+
+> ⚠️ **Prod-measurement fix.** `eval_loop._parse_dt` now delegates to
+> `price_resolver.parse_timestamp` — the old string-only parser returned `None` for every
+> **Postgres datetime** row, so the labeler silently skipped everything on prod and
+> `/api/eval-report` returned empty (the *same* bug class as the `created_at` fix). The
+> labeler now also **anchors the forward scan on `news_time`** (when a real trade could have
+> entered), not `decided_at` (when a cold-started dyno processed it), and **resolves outcomes
+> via the shared `simulate_exit`** so the ledger's win = net-positive P&L matches the Track
+> Record. The headline `verdict` now compares **`rejected_ensemble` vs `approved`** (the clean
+> counterfactual) instead of `rejected_all` (which mixed in untradeable penny-stock rejects).
 
 > ⚠️ **`signal_eval_log` is APPEND-ONLY by design.** No prune/archival worker touches it and
 > the reset-all-news endpoint does **not** wipe it — only `INSERT` (log) and `UPDATE` (fill

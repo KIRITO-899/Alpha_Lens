@@ -41,6 +41,8 @@ _CONFIG_DEFAULTS = {
     "REGIME_HARD_BLOCK": "0", "CALIBRATION_GATE_ENABLED": "0",
     "MIN_CONFIDENCE": "50", "ENSEMBLE_MIN_AGREE": "3",
     "ENSEMBLE_AGREE_SCORE_THRESHOLD": "50",
+    "PARTIAL_PROFIT_ENABLED": "1", "PARTIAL_PROFIT_R": "1.0",
+    "PARTIAL_FRACTION": "0.5", "COST_ROUNDTRIP_PCT": "0.20",
 }
 
 
@@ -86,21 +88,12 @@ def log_decision(disposition, ticker, direction, news_id=None, headline=None,
 # OUTCOME LABELLING (background, after the horizon elapses)
 # ──────────────────────────────────────────────────────────────────────────
 def _parse_dt(s):
-    if not s:
-        return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
-        try:
-            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc)
-        except Exception:
-            pass
-    try:
-        from email.utils import parsedate_to_datetime
-        d = parsedate_to_datetime(s)
-        if d is not None and d.tzinfo is None:
-            d = d.replace(tzinfo=timezone.utc)
-        return d
-    except Exception:
-        return None
+    # ⚠️ Delegate to the shared parse_timestamp: on Postgres, decided_at/news_time
+    # come back as **datetime objects**, which the old string-only strptime here
+    # silently returned None for → the labeler skipped EVERY prod row and the whole
+    # counterfactual returned empty. (Same root cause as the created_at fix.)
+    from marketdata.price_resolver import parse_timestamp
+    return parse_timestamp(s)
 
 
 def _to_ist(df):
@@ -161,23 +154,28 @@ def _label_one(ticker, anchor_ist, direction):
         if scan.empty:
             return (atr_pct, stop_pct, target_pct, "NO_DATA", 0.0)
 
+        # Resolve via the SAME partial-profit + breakeven simulator the live engine
+        # uses, so the ledger's win-rate is defined identically to the Track Record
+        # (a win = net-positive realized P&L, incl. partial / breakeven / expiry).
+        from marketdata.price_resolver import simulate_exit, to_favorable_bars
         bull = (direction or "").upper().startswith("BULL")
-        tp = base_price * (1 + target_pct / 100) if bull else base_price * (1 - target_pct / 100)
-        sp = base_price * (1 - stop_pct / 100) if bull else base_price * (1 + stop_pct / 100)
-        for _idx, row in scan.iterrows():
-            hi, lo, cl = row["High"], row["Low"], row["Close"]
-            th = (hi >= tp) if bull else (lo <= tp)
-            sh = (lo <= sp) if bull else (hi >= sp)
-            ret = round((cl - base_price) / base_price * 100, 2)
-            if th and sh:  # ambiguous candle — decide by close
-                ok = (cl >= base_price) if bull else (cl <= base_price)
-                return (atr_pct, stop_pct, target_pct, "TARGET_HIT" if ok else "STOP_HIT", ret)
-            if th:
-                return (atr_pct, stop_pct, target_pct, "TARGET_HIT", ret)
-            if sh:
-                return (atr_pct, stop_pct, target_pct, "STOP_HIT", ret)
-        last = scan["Close"].iloc[-1]
-        return (atr_pct, stop_pct, target_pct, "EXPIRED", round((last - base_price) / base_price * 100, 2))
+        bars = [(row.get("Open"), row["High"], row["Low"], row["Close"])
+                for _idx, row in scan.iterrows()]
+        fav = to_favorable_bars(bars, base_price, bull)
+        last_close = scan["Close"].iloc[-1]
+        exp = (last_close - base_price) / base_price * 100.0
+        exp = exp if bull else -exp
+        res = simulate_exit(
+            fav, stop_pct, target_pct,
+            partial_enabled=os.environ.get("PARTIAL_PROFIT_ENABLED", "1").lower() in ("1", "true", "yes"),
+            partial_r=float(os.environ.get("PARTIAL_PROFIT_R", "1.0")),
+            partial_frac=float(os.environ.get("PARTIAL_FRACTION", "0.5")),
+            cost_pct=float(os.environ.get("COST_ROUNDTRIP_PCT", "0.20")),
+            expire_close_pct=exp,
+        )
+        outcome = {"Predicted Target Hit": "TARGET_HIT", "Stop Loss Hit": "STOP_HIT",
+                   "Breakeven Exit": "BREAKEVEN", "Expired": "EXPIRED"}.get(res.get("status"), "EXPIRED")
+        return (atr_pct, stop_pct, target_pct, outcome, res.get("pnl_pct"))
     except Exception:
         return None
 
@@ -203,7 +201,7 @@ def label_pending(limit=500, horizon_days=None):
     conn = connect_news_db()
     c = conn.cursor()
     c.execute(
-        """SELECT id, ticker, direction, decided_at FROM signal_eval_log
+        """SELECT id, ticker, direction, decided_at, news_time FROM signal_eval_log
            WHERE outcome IS NULL ORDER BY decided_at ASC LIMIT ?""",
         (limit,),
     )
@@ -211,11 +209,14 @@ def label_pending(limit=500, horizon_days=None):
     conn.close()
 
     labelled = 0
-    for sid, ticker, direction, decided_at in rows:
+    for sid, ticker, direction, decided_at, news_time in rows:
         dt = _parse_dt(decided_at)
         if dt is None or dt > cutoff:
             continue  # bad date, or horizon not elapsed yet
-        res = _label_one(ticker, dt.astimezone(IST), direction or "BULLISH")
+        # Anchor the forward scan on the NEWS time (when a real trade could have
+        # entered), not decided_at (when a possibly-cold-started dyno processed it).
+        anchor = _parse_dt(news_time) or dt
+        res = _label_one(ticker, anchor.astimezone(IST), direction or "BULLISH")
         if res is None:
             _update_outcome(sid, None, None, None, "NO_DATA", None)
             continue
@@ -229,11 +230,13 @@ def label_pending(limit=500, horizon_days=None):
 # REPORTING
 # ──────────────────────────────────────────────────────────────────────────
 def _stats(rows):
-    RESOLVED = ("TARGET_HIT", "STOP_HIT")
-    res = [r for r in rows if r[1] in RESOLVED]
-    wins = [r for r in res if r[1] == "TARGET_HIT"]
-    pnls = [r[3] for r in res if r[3] is not None]
-    n = len(res)
+    # A trade counts once it has a realized outcome with a P&L; a WIN is net-positive
+    # P&L (favorable terms), matching the Track Record's expectancy-first definition.
+    RESOLVED = ("TARGET_HIT", "STOP_HIT", "BREAKEVEN", "EXPIRED")
+    judged = [r for r in rows if r[1] in RESOLVED and r[3] is not None]
+    wins = [r for r in judged if r[3] > 0]
+    pnls = [r[3] for r in judged]
+    n = len(judged)
     return {
         "total": len(rows),
         "resolved": n,
@@ -260,20 +263,25 @@ def report():
 
     approved = _stats([r for r in rows if r[0] == "approved"])
     rejected = _stats([r for r in rows if (r[0] or "").startswith("rejected")])
+    # The CLEAN counterfactual: ensemble-rejected vs approved on the SAME liquid
+    # universe (liquidity-rejected names are penny/illiquid → their barrier outcomes
+    # are garbage and pollute a 'rejected_all' comparison). Judge the gate on this.
+    rejected_ensemble = _stats([r for r in rows if r[0] == "rejected_ensemble"])
 
     verdict = None
-    if approved["win_rate_pct"] is not None and rejected["win_rate_pct"] is not None:
-        # If the trades we REJECTED won more than the ones we KEPT, the filters
-        # are hurting; if they won less, the filters are helping.
-        verdict = ("filters HELPING (rejected trades won less than approved)"
-                   if rejected["win_rate_pct"] < approved["win_rate_pct"]
-                   else "filters HURTING (rejected trades won MORE than approved) — loosen them")
+    a_wr, e_wr = approved["win_rate_pct"], rejected_ensemble["win_rate_pct"]
+    if a_wr is not None and e_wr is not None:
+        verdict = ("ensemble gate HELPING (ensemble-rejected won less than approved)"
+                   if e_wr < a_wr
+                   else "ensemble gate HURTING (ensemble-rejected won MORE than approved) — loosen it")
 
     return {
-        "note": "Forward shadow-ledger. Append-only; nothing is ever deleted. "
-                "Breakeven for 2:1 R:R = 33.3%.",
+        "note": "Forward shadow-ledger. Append-only; nothing is ever deleted. Win = "
+                "net-positive realized P&L (partial+breakeven model). Judge selection on "
+                "'rejected_ensemble' vs 'approved' (the liquidity arm has untradeable names).",
         "logged_total": len(rows),
         "approved": approved,
+        "rejected_ensemble": rejected_ensemble,
         "rejected_all": rejected,
         "verdict": verdict,
         "by_disposition": by_disp,

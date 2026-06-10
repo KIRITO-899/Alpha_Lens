@@ -125,7 +125,10 @@ from marketdata.market_calendar import (
     is_market_holiday, is_market_open, published_after_market_hours,
     has_market_traded_since,
 )
-from marketdata.price_resolver import select_fresh_close, atr_stop_target, parse_timestamp
+from marketdata.price_resolver import (
+    select_fresh_close, atr_stop_target, parse_timestamp,
+    simulate_exit, to_favorable_bars,
+)
 
 
 _TICKER_CACHE = {}
@@ -327,6 +330,19 @@ TRADE_STOP_PCT = 1.0
 # A signal that hasn't hit target or stop within this window is marked Expired
 # and excluded from hit-rate stats. Tunable via env var for ops without redeploy.
 SIGNAL_EXPIRY_HOURS = int(os.environ.get("SIGNAL_EXPIRY_HOURS", "96"))
+
+# ── Exit model: partial-profit at +1R + breakeven stop (raises win-rate WITHOUT
+#    widening the stop). Book PARTIAL_FRACTION of the position at +PARTIAL_PROFIT_R
+#    R, then move the stop to breakeven so the runner can only scratch or win.
+#    Deterministic, simulated by marketdata.price_resolver.simulate_exit and used
+#    identically by the live worker, recompute, and the eval ledger. All reversible
+#    via env — set PARTIAL_PROFIT_ENABLED=0 to revert to first-barrier resolution. ──
+PARTIAL_PROFIT_ENABLED = os.environ.get("PARTIAL_PROFIT_ENABLED", "1").lower() in ("1", "true", "yes")
+PARTIAL_PROFIT_R = float(os.environ.get("PARTIAL_PROFIT_R", "1.0"))     # partial level in R (R = stop dist)
+PARTIAL_FRACTION = float(os.environ.get("PARTIAL_FRACTION", "0.5"))     # fraction booked at the partial
+# Round-trip transaction cost (STT + brokerage + impact) subtracted from every
+# closed trade so reported P&L/expectancy is honest, not gross.
+COST_ROUNDTRIP_PCT = float(os.environ.get("COST_ROUNDTRIP_PCT", "0.20"))
 
 # Signals (and the news they reference) are kept in the hot tables for at least
 # this many days so the track record + signal terminal show a full 90-day
@@ -4223,24 +4239,29 @@ def _fetch_ohlc_direct(ticker, days=14):
 
 
 def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is_bullish,
-                           ohlc_rows=None, start_date=None):
+                           ohlc_rows=None, start_date=None, expire_close=None):
     """
-    Checks chronological daily OHLC data starting from start_date (or since_dt if not given).
-    start_date allows after-hours signals to skip the signal day entirely and only
-    check from the NEXT trading session onward — preventing false Stop Loss Hits on
-    the opening gap of the next day.
-    Returns (hit_status, diff_percent) or (None, None).
+    Resolve a signal's outcome by replaying real daily OHLC through the SHARED
+    partial-profit + breakeven exit simulator (price_resolver.simulate_exit), so
+    the live worker, recompute, and the eval ledger all grade identically.
+
+    Windowing is unchanged: after-hours signals start from the NEXT trading
+    session (`start_date`) so the next-day opening gap can't trigger a false stop.
+
+    Returns (status, diff_percent) where diff is the BLENDED realized price-move %
+    NET of round-trip cost, or (None, None) when the runner is still open. status ∈
+    {'Predicted Target Hit','Stop Loss Hit','Breakeven Exit','Expired'}. Pass
+    `expire_close` (the latest price) to force-close the runner at the time-stop.
     """
     try:
         if ohlc_rows is None:
             ohlc_rows = _fetch_ohlc_direct(ticker)
-        if not ohlc_rows:
+        if not ohlc_rows or not base_price or base_price <= 0:
             return None, None
 
         IST = timezone(timedelta(hours=5, minutes=30))
         today_ist = datetime.now(IST).date()
 
-        # Use explicitly passed start_date for after-hours signals, otherwise use the exact signal timestamp.
         if start_date is not None:
             check_from_date = start_date
             check_from_dt = None
@@ -4249,41 +4270,38 @@ def check_historical_hits(ticker, since_dt, base_price, target_pct, stop_pct, is
             check_from_dt = since_utc.astimezone(IST)
             check_from_date = check_from_dt.date()
 
-        for (bar_dt, o, h, l, _c) in ohlc_rows:
+        windowed = []   # absolute (open, high, low, close) bars in the resolution window
+        for (bar_dt, o, h, l, c) in ohlc_rows:
             bar_dt_ist = bar_dt.astimezone(IST)
             bar_date_ist = bar_dt_ist.date()
             if bar_date_ist < check_from_date or bar_date_ist > today_ist:
                 continue
-
             if check_from_dt is not None and bar_dt_ist <= check_from_dt:
                 continue
+            windowed.append((o, h, l, c))
+        if not windowed:
+            return None, None
 
-            h_pct = ((h - base_price) / base_price) * 100
-            l_pct = ((l - base_price) / base_price) * 100
-            o_pct = ((o - base_price) / base_price) * 100  # open gap, for realistic fills
+        fav = to_favorable_bars(windowed, base_price, is_bullish)
+        exp = None
+        if expire_close is not None:
+            try:
+                last_pct = (float(expire_close) - base_price) / base_price * 100.0
+                exp = last_pct if is_bullish else -last_pct
+            except (TypeError, ValueError):
+                exp = None
 
-            # Record a REALISTIC bracket fill, not the candle extreme: you exit AT
-            # your target/stop level — unless the bar gapped THROUGH the level at
-            # the open, in which case you fill at the (worse/better) open. Recording
-            # the raw high/low overstates both wins and losses (e.g. a -5% candle
-            # low on a -1% stop) and corrupts the track record. _fill() clamps a
-            # touched level to the level, but honours a gap-through open.
-            def _fill_long_up(level):   # favourable side hit at +level (target for longs)
-                return o_pct if o_pct >= level else level
-            def _fill_long_down(level):  # adverse side hit at -level (stop for longs)
-                return o_pct if o_pct <= -level else -level
-
-            if is_bullish:
-                # Bug #18 fix: Check target before stop for bullish signals.
-                # If both levels are breached in the same candle (gap day), assume
-                # the target was hit first (benefit of the doubt for long positions).
-                if h_pct >= target_pct: return 'Predicted Target Hit', round(_fill_long_up(target_pct), 2)
-                if l_pct <= -stop_pct:  return 'Stop Loss Hit',        round(_fill_long_down(stop_pct), 2)
-            else:
-                # For bearish signals, check target first (downside).
-                if l_pct <= -target_pct: return 'Predicted Target Hit', round(_fill_long_down(target_pct), 2)
-                if h_pct >= stop_pct:    return 'Stop Loss Hit',        round(_fill_long_up(stop_pct), 2)
-        return None, None
+        res = simulate_exit(
+            fav, stop_pct, target_pct,
+            partial_enabled=PARTIAL_PROFIT_ENABLED, partial_r=PARTIAL_PROFIT_R,
+            partial_frac=PARTIAL_FRACTION, cost_pct=COST_ROUNDTRIP_PCT,
+            expire_close_pct=exp,
+        )
+        if not res.get('resolved'):
+            return None, None
+        fav_pnl = res.get('pnl_pct') or 0.0
+        raw_diff = fav_pnl if is_bullish else -fav_pnl   # favorable → price-move terms
+        return res['status'], round(raw_diff, 2)
     except Exception:
         return None, None
 
@@ -4528,9 +4546,20 @@ def recompute_all_signals(days=None, limit=None):
         if ticker not in ohlc_cache:
             ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=120)
 
+        # When the signal is past its time-stop, force-close the runner at the
+        # fresh close so any locked partial-profit is booked into the outcome.
+        age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600.0
+        expired_age = age_hours >= SIGNAL_EXPIRY_HOURS
+        expire_close = None
+        if expired_age:
+            if ticker not in close_cache:
+                close_cache[ticker] = (get_last_closed_session_quote(ticker)[0] or 0.0)
+            expire_close = close_cache[ticker] or base_price
+
         hist_status, hist_diff = check_historical_hits(
             ticker, created_dt, base_price, target_pct, stop_pct, is_bullish,
-            ohlc_rows=ohlc_cache.get(ticker), start_date=start_date
+            ohlc_rows=ohlc_cache.get(ticker), start_date=start_date,
+            expire_close=expire_close,
         )
 
         if hist_status:
@@ -4543,8 +4572,7 @@ def recompute_all_signals(days=None, limit=None):
                 close_cache[ticker] = (get_last_closed_session_quote(ticker)[0] or 0.0)
             current_price = close_cache[ticker] or base_price
             diff_percent = round(((current_price - base_price) / base_price) * 100, 2) if base_price > 0 else 0.0
-            age_hours = (datetime.now(timezone.utc) - created_dt).total_seconds() / 3600.0
-            new_status = 'Expired' if age_hours >= SIGNAL_EXPIRY_HOURS else 'Active View'
+            new_status = 'Expired' if expired_age else 'Active View'
 
         # 5. rewrite the ATR stop/target marker so live re-pricing parses new levels
         reason = (row['reason'] or '')
@@ -4751,10 +4779,14 @@ def yfinance_worker():
                         if age_hours >= 12:  # old enough to have "yesterday"
                             if ticker not in _ohlc_cache:
                                 _ohlc_cache[ticker] = _fetch_ohlc_direct(ticker, days=14)
+                            # Past the time-stop → force-close the runner at the current
+                            # price so any locked partial-profit is booked into the P&L.
+                            _exp_close = current_price if age_hours >= SIGNAL_EXPIRY_HOURS else None
                             hist_status, hist_diff = check_historical_hits(
                                 ticker, created_dt, base_price, target_pct, stop_pct, is_bullish,
                                 ohlc_rows=_ohlc_cache[ticker],
-                                start_date=_hist_start_date  # None for intraday; next session date for after-hours
+                                start_date=_hist_start_date,  # None for intraday; next session date for after-hours
+                                expire_close=_exp_close,
                             )
                             if hist_status:
                                 new_status = hist_status
@@ -4762,50 +4794,33 @@ def yfinance_worker():
                     except Exception:
                         pass
 
-                    # ── 2. Intraday high/low evaluation (Only during MARKET HOURS) ──
-                    if new_status == 'Active View' and market_currently_open:
-                        eval_high = today_high if today_high else current_price
-                        eval_low  = today_low  if today_low  else current_price
-
-                        high_pct = ((eval_high - base_price) / base_price) * 100
-                        low_pct  = ((eval_low  - base_price) / base_price) * 100
-
-                        # Record the realistic bracket fill (you exit AT your
-                        # stop/target during live monitoring), not the candle
-                        # extreme — keeps P&L honest and consistent with
-                        # check_historical_hits. A gap-through-open is caught by
-                        # the historical OHLC pass (section 1) on the next cycle.
-                        if is_bullish:
-                            if low_pct <= -stop_pct:
-                                new_status = 'Stop Loss Hit'
-                                diff_percent = -stop_pct
-                            elif high_pct >= target_pct:
-                                new_status = 'Predicted Target Hit'
-                                diff_percent = target_pct
-                        else:  # BEARISH
-                            if high_pct >= stop_pct:
-                                new_status = 'Stop Loss Hit'
-                                diff_percent = stop_pct
-                            elif low_pct <= -target_pct:
-                                new_status = 'Predicted Target Hit'
-                                diff_percent = -target_pct
-
-                    # ── 3. Current price evaluation (MARKET HOURS ONLY) ──
-                    # Only evaluate SL/TP from current price during trading hours.
-                    # After hours, diff_percent is 0 for same-day signals, so this
-                    # would never trigger anyway. For older signals, historical
-                    # OHLC catch-up (section 1) handles it.
+                    # ── 2. Same-day intraday resolution (MARKET HOURS) — partial-aware ──
+                    # Replay today's aggregate bar through the SAME exit simulator so the
+                    # live read matches the daily-bar grade (partial at +1R + breakeven
+                    # stop). Intraday we don't have today's open, so a bar that touched
+                    # BOTH the partial AND the stop is ambiguous — leave it Active for the
+                    # next-cycle daily pass (which has the real open + close to order them)
+                    # rather than prematurely booking a stop.
                     if new_status == 'Active View' and market_currently_open and base_price > 0:
-                        if is_bullish:
-                            if diff_percent >= target_pct:
-                                new_status = 'Predicted Target Hit'
-                            elif diff_percent <= -stop_pct:
-                                new_status = 'Stop Loss Hit'
-                        else:  # BEARISH
-                            if diff_percent <= -target_pct:
-                                new_status = 'Predicted Target Hit'
-                            elif diff_percent >= stop_pct:
-                                new_status = 'Stop Loss Hit'
+                        eval_high = max(today_high or current_price, current_price)
+                        eval_low  = min(today_low  or current_price, current_price)
+                        fav_today = to_favorable_bars(
+                            [(None, eval_high, eval_low, current_price)], base_price, is_bullish)
+                        _res = simulate_exit(
+                            fav_today, stop_pct, target_pct,
+                            partial_enabled=PARTIAL_PROFIT_ENABLED, partial_r=PARTIAL_PROFIT_R,
+                            partial_frac=PARTIAL_FRACTION, cost_pct=COST_ROUNDTRIP_PCT,
+                        )
+                        _partial_dist = stop_pct * PARTIAL_PROFIT_R
+                        _fav_high = (fav_today[0][1] if fav_today else None)
+                        _ambiguous = (_res.get('status') == 'Stop Loss Hit'
+                                      and _fav_high is not None and _fav_high >= _partial_dist)
+                        if (_res.get('resolved')
+                                and _res.get('status') in ('Predicted Target Hit', 'Stop Loss Hit')
+                                and not _ambiguous):
+                            new_status = _res['status']
+                            _fav_pnl = _res.get('pnl_pct') or 0.0
+                            diff_percent = round(_fav_pnl if is_bullish else -_fav_pnl, 2)
 
                     # Check expiry (always, regardless of market hours)
                     if new_status == 'Active View':
@@ -4825,7 +4840,7 @@ def yfinance_worker():
                 # ── CRITICAL: Split updates by signal type ──
                 # Resolved signals: Only update current_price, NEVER touch estimated_change_percent.
                 # Active signals: Full update: current_price + status + estimated_change_percent
-                if status in ('Stop Loss Hit', 'Predicted Target Hit', 'Reacted Against Prediction', 'Expired'):
+                if status in ('Stop Loss Hit', 'Predicted Target Hit', 'Breakeven Exit', 'Reacted Against Prediction', 'Expired'):
                     updates.append(('price_only', current_price, stock_id))
                 else:
                     updates.append(('full', current_price, new_status, round(diff_percent, 2), stock_id))
@@ -9522,16 +9537,23 @@ def get_backtest_stats():
       range = "7d" | "30d" | "90d" | "all" (default 30d)
 
     A signal is "closed" when status is one of:
-      Predicted Target Hit, Stop Loss Hit, Reacted Against Prediction, Expired
+      Predicted Target Hit, Stop Loss Hit, Breakeven Exit, Reacted Against
+      Prediction, Expired.
 
-    Hit rate counts (Predicted Target Hit) / (closed minus Expired). Expired
-    signals are excluded from the denominator because they never resolved — we
-    don't pretend they were misses.
+    Expectancy-first scoreboard: every closed trade with a computable realized P&L
+    is JUDGED (Expired now carries a real partial+time-stop P&L, so it is NOT
+    excluded). A WIN = a trade that closes net-positive (after cost). We surface
+    win_rate, expectancy (avg P&L %/trade), profit_factor, avg_win/avg_loss, and the
+    empirical breakeven_win_rate — because at an asymmetric R:R a sub-50% win rate
+    can be highly profitable. Legacy keys (hit_rate/avg_pnl/hits/stops/ruled_signals)
+    are kept as aliases of the new fields.
 
     Returns:
-      summary: total / closed / hits / stops / hit_rate / avg_win / avg_pnl
-      by_confidence: list of {band, signals, hits, stops, hit_rate, avg_pnl}
+      summary: total / closed / judged / wins / losses / scratches / win_rate /
+               expectancy / profit_factor / avg_win / avg_loss / breakeven_win_rate
+      by_confidence: list of {band, signals, wins, losses, win_rate, avg_pnl}
       by_direction: {bullish: {...}, bearish: {...}}
+      equity_curve: chronological cumulative realized P&L over the selected range
       recent_closed: last 30 closed signals with details
       range, generated_at
     """
@@ -9556,9 +9578,14 @@ def get_backtest_stats():
         rows = [dict(r) for r in c.fetchall()]
         conn.close()
 
-        CLOSED_STATUSES = {'Predicted Target Hit', 'Stop Loss Hit', 'Reacted Against Prediction', 'Expired'}
-        HIT_STATUSES = {'Predicted Target Hit'}
-        STOP_STATUSES = {'Stop Loss Hit', 'Reacted Against Prediction'}
+        # A trade is "closed" once it exits by ANY path. 'Breakeven Exit' (partial
+        # booked, runner stopped at breakeven) is a small WIN; 'Expired' now carries a
+        # real exit P&L (partial + time-stop fill) so it is JUDGED on its P&L sign, not
+        # dropped from the denominator. Win-rate = trades that closed net-positive.
+        CLOSED_STATUSES = {'Predicted Target Hit', 'Stop Loss Hit', 'Breakeven Exit',
+                           'Reacted Against Prediction', 'Expired'}
+        TARGET_STATUSES = {'Predicted Target Hit'}
+        _EPS = 1e-9
 
         def signed_pnl(row):
             """Return signed P&L % for a signal — positive when the AI was right.
@@ -9580,19 +9607,58 @@ def get_backtest_stats():
                 return None
             return raw if 'bull' in impact else -raw
 
-        # Hero summary
+        # ── Hero summary — judged on REALIZED P&L (the honest, expectancy-first view) ──
         total = len(rows)
         closed_rows = [r for r in rows if r['status'] in CLOSED_STATUSES]
-        ruled_rows = [r for r in closed_rows if r['status'] != 'Expired']  # judgement denominator
-        hits = [r for r in ruled_rows if r['status'] in HIT_STATUSES]
-        stops = [r for r in ruled_rows if r['status'] in STOP_STATUSES]
+        judged = [(r, p) for r in closed_rows if (p := signed_pnl(r)) is not None]
+        n_judged = len(judged)
 
-        hit_rate = round(100.0 * len(hits) / len(ruled_rows), 1) if ruled_rows else None
+        wins = [p for (_, p) in judged if p > _EPS]
+        losses = [p for (_, p) in judged if p < -_EPS]
+        scratches = [p for (_, p) in judged if -_EPS <= p <= _EPS]
+        target_hits = [r for (r, _) in judged if r['status'] in TARGET_STATUSES]
 
-        hit_pnls = [p for r in hits if (p := signed_pnl(r)) is not None]
-        all_pnls = [p for r in ruled_rows if (p := signed_pnl(r)) is not None]
-        avg_win = round(sum(hit_pnls) / len(hit_pnls), 2) if hit_pnls else None
-        avg_pnl = round(sum(all_pnls) / len(all_pnls), 2) if all_pnls else None
+        win_rate = round(100.0 * len(wins) / n_judged, 1) if n_judged else None
+        target_hit_rate = round(100.0 * len(target_hits) / n_judged, 1) if n_judged else None
+        expectancy = round(sum(p for (_, p) in judged) / n_judged, 2) if n_judged else None
+        avg_win = round(sum(wins) / len(wins), 2) if wins else None
+        avg_loss = round(sum(losses) / len(losses), 2) if losses else None   # negative
+        gross_win = sum(wins)
+        gross_loss = abs(sum(losses))
+        if gross_loss > _EPS:
+            profit_factor = round(gross_win / gross_loss, 2)
+        else:
+            profit_factor = (99.0 if gross_win > _EPS else None)
+        # Empirical breakeven win-rate implied by the realized win/loss magnitudes —
+        # the honest bar a win-rate must clear (≈33% at 2:1, lower with partials).
+        breakeven_win_rate = None
+        if avg_win and avg_loss:
+            _denom = avg_win + abs(avg_loss)
+            breakeven_win_rate = round(100.0 * abs(avg_loss) / _denom, 1) if _denom > 0 else None
+
+        # ── Range-honest equity curve: cumulative realized P&L over the SELECTED
+        #    range, chronological, judged trades only (no 30-trade tail, no Expired-null). ──
+        ordered = sorted(judged, key=lambda rp: (rp[0].get('created_at') or ''))
+        equity_curve = []
+        _cum = 0.0
+        for (r, p) in ordered:
+            _cum += p
+            equity_curve.append({'t': r.get('created_at'), 'pnl': round(p, 2), 'cum': round(_cum, 2)})
+
+        # P&L-classified subsets used by the band/direction blocks below.
+        def _pnl_block(subset_rows):
+            jr = [(r, p) for r in subset_rows if (p := signed_pnl(r)) is not None]
+            n = len(jr)
+            w = [p for (_, p) in jr if p > _EPS]
+            l = [p for (_, p) in jr if p < -_EPS]
+            return {
+                'signals': n,
+                'wins': len(w), 'losses': len(l),
+                'hits': len(w), 'stops': len(l),               # legacy aliases
+                'win_rate': round(100.0 * len(w) / n, 1) if n else None,
+                'hit_rate': round(100.0 * len(w) / n, 1) if n else None,   # legacy
+                'avg_pnl': round(sum(p for (_, p) in jr) / n, 2) if n else None,
+            }
 
         # Confidence bands
         bands_def = [
@@ -9604,36 +9670,18 @@ def get_backtest_stats():
         ]
         by_confidence = []
         for label, lo, hi in bands_def:
-            band_rows = [r for r in ruled_rows if lo <= (r.get('confidence_score') or 0) < hi]
-            band_hits = [r for r in band_rows if r['status'] in HIT_STATUSES]
-            band_pnls = [p for r in band_rows if (p := signed_pnl(r)) is not None]
-            by_confidence.append({
-                'band': label,
-                'signals': len(band_rows),
-                'hits': len(band_hits),
-                'stops': len([r for r in band_rows if r['status'] in STOP_STATUSES]),
-                'hit_rate': round(100.0 * len(band_hits) / len(band_rows), 1) if band_rows else None,
-                'avg_pnl': round(sum(band_pnls) / len(band_pnls), 2) if band_pnls else None,
-            })
+            band_rows = [r for r in closed_rows if lo <= (r.get('confidence_score') or 0) < hi]
+            blk = _pnl_block(band_rows)
+            blk['band'] = label
+            by_confidence.append(blk)
 
-        # Direction split
-        def dir_block(direction_keyword):
-            d_rows = [r for r in ruled_rows if direction_keyword in (r.get('impact') or '').lower()]
-            d_hits = [r for r in d_rows if r['status'] in HIT_STATUSES]
-            d_pnls = [p for r in d_rows if (p := signed_pnl(r)) is not None]
-            return {
-                'signals': len(d_rows),
-                'hits': len(d_hits),
-                'stops': len([r for r in d_rows if r['status'] in STOP_STATUSES]),
-                'hit_rate': round(100.0 * len(d_hits) / len(d_rows), 1) if d_rows else None,
-                'avg_pnl': round(sum(d_pnls) / len(d_pnls), 2) if d_pnls else None,
-            }
+        # Direction split (judged on realized P&L)
         by_direction = {
-            'bullish': dir_block('bull'),
-            'bearish': dir_block('bear'),
+            'bullish': _pnl_block([r for r in closed_rows if 'bull' in (r.get('impact') or '').lower()]),
+            'bearish': _pnl_block([r for r in closed_rows if 'bear' in (r.get('impact') or '').lower()]),
         }
 
-        # Recent closed (latest 30)
+        # Recent closed (latest 30) — flagged win/loss by realized P&L
         recent_closed = []
         for r in closed_rows[:30]:
             pnl = signed_pnl(r)
@@ -9647,6 +9695,7 @@ def get_backtest_stats():
                 'base_price': r.get('base_price'),
                 'current_price': r.get('current_price'),
                 'pnl_pct': round(pnl, 2) if pnl is not None else None,
+                'is_win': (pnl is not None and pnl > _EPS),
                 'status': r['status'],
                 'created_at': r['created_at'],
                 'headline': (r.get('headline') or '')[:140],
@@ -9658,17 +9707,30 @@ def get_backtest_stats():
             'summary': {
                 'total_signals': total,
                 'closed_signals': len(closed_rows),
-                'ruled_signals': len(ruled_rows),
-                'hits': len(hits),
-                'stops': len(stops),
-                'expired': len(closed_rows) - len(ruled_rows),
-                'active_or_pending': total - len(closed_rows),
-                'hit_rate': hit_rate,
+                'judged_signals': n_judged,
+                'wins': len(wins),
+                'losses': len(losses),
+                'scratches': len(scratches),
+                'win_rate': win_rate,
+                'target_hits': len(target_hits),
+                'target_hit_rate': target_hit_rate,
+                'expectancy': expectancy,            # avg realized P&L %/trade, net of cost — the edge
                 'avg_win': avg_win,
-                'avg_pnl': avg_pnl,
+                'avg_loss': avg_loss,
+                'profit_factor': profit_factor,
+                'breakeven_win_rate': breakeven_win_rate,
+                'active_or_pending': total - len(closed_rows),
+                # ── legacy aliases so the pre-update frontend keeps rendering ──
+                'ruled_signals': n_judged,
+                'hits': len(wins),
+                'stops': len(losses),
+                'expired': len([r for (r, _) in judged if r['status'] == 'Expired']),
+                'hit_rate': win_rate,
+                'avg_pnl': expectancy,
             },
             'by_confidence': by_confidence,
             'by_direction': by_direction,
+            'equity_curve': equity_curve,
             'recent_closed': recent_closed,
         })
     except Exception as e:
