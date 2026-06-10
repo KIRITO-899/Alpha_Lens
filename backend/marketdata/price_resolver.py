@@ -162,6 +162,40 @@ def atr_stop_target(atr_pct,
     return round(float(fallback_stop_pct), 2), round(float(fallback_target_pct), 2), False
 
 
+def captured_atr(base_price, current_price, atr_pct, is_bullish):
+    """How much of an ATR the stock has ALREADY moved IN THE SIGNAL'S FAVOUR
+    between the news reference price (`base_price`) and now (`current_price`).
+
+    Returns favourable ATRs captured:
+      * > 0  -> the move is already underway (alpha decaying) — e.g. crude spikes,
+               the OMC has already fallen, and we'd be shorting the exhaustion.
+      * <= 0 -> the stock has NOT yet moved our way (a fresh entry), or has moved
+               against the thesis (an even better entry).
+
+    Pure / deterministic. FAIL-OPEN: returns 0.0 on any missing/zero/garbage
+    input so a data hiccup can never *cause* a skip (the gate that consumes this
+    only skips on a positive reading). Used by the "unreacted-move" entry gate
+    (T1.2) and to tag the eval ledger (T0.4) so the threshold can be calibrated
+    to realised outcomes instead of guessed.
+    """
+    try:
+        bp = float(base_price) if base_price is not None else 0.0
+        cp = float(current_price) if current_price is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+    if bp <= 0 or cp <= 0:
+        return 0.0
+    move_pct = (cp - bp) / bp * 100.0          # signed % move base->now
+    fav_pct = move_pct if is_bullish else -move_pct
+    try:
+        a = float(atr_pct) if atr_pct is not None else 0.0
+    except (TypeError, ValueError):
+        a = 0.0
+    if a <= 0:
+        a = 0.5                                 # floor: avoid div-by-0 on no-ATR names
+    return round(fav_pct / a, 3)
+
+
 # ──────────────────────────────────────────────────────────────────────────
 # TRADE EXIT SIMULATION — partial-profit + breakeven stop (pure, deterministic)
 # ──────────────────────────────────────────────────────────────────────────

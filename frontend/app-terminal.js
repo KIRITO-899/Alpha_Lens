@@ -194,7 +194,7 @@
                 // (common during a free-tier cold start) — show a real error state.
                 const tbody = document.getElementById('terminal-body');
                 if (tbody && !_terminalData.length) {
-                    tbody.innerHTML = `<tr><td colspan="10"><div class="term-empty">
+                    tbody.innerHTML = `<tr><td colspan="11"><div class="term-empty">
                         <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
                         <div class="term-empty-title">Couldn't reach the signal engine</div>
                         <div class="term-empty-sub">Retrying automatically — this can take a moment on first load.</div>
@@ -238,12 +238,12 @@
             if (!filtered.length) {
                 const noData = _terminalData.length === 0;
                 tbody.innerHTML = noData
-                    ? `<tr><td colspan="10"><div class="term-empty">
+                    ? `<tr><td colspan="11"><div class="term-empty">
                         <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
                         <div class="term-empty-title">No active signals right now</div>
                         <div class="term-empty-sub">The engine is monitoring 68 news sources and live prices. New signals surface here during market hours (9:15-15:30 IST).</div>
                        </div></td></tr>`
-                    : `<tr><td colspan="10"><div class="term-empty">
+                    : `<tr><td colspan="11"><div class="term-empty">
                         <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
                         <div class="term-empty-title">No signals match this filter</div>
                         <div class="term-empty-sub">Try a different filter above.</div>
@@ -261,11 +261,29 @@
                 let stCls = 'status-active', stTxt = 'Active';
                 if (s.status === 'Predicted Target Hit') { stCls = 'status-hit'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M5 13l4 4L19 7"/></svg>Target'; }
                 else if (s.status === 'Stop Loss Hit') { stCls = 'status-stop'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stopped'; }
+                else if (s.status === 'Breakeven Exit') { stCls = 'status-hit'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M5 13l4 4L19 7"/></svg>Breakeven'; }
+                else if (s.status === 'Reacted Against Prediction') { stCls = 'status-stop'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="3" style="vertical-align:-1px;margin-right:3px"><path d="M6 6l12 12M18 6L6 18"/></svg>Stopped'; }
                 else if (s.status === 'Expired') { stCls = 'status-expired'; stTxt = '<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:3px"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>Expired'; }
                 const ticker = (s.ticker||'').replace('.NS','').replace('.BO','');
                 const isHigh = s.confidence >= 85;
                 const rowBg = isHigh ? 'background:rgba(245,158,11,0.03);' : '';
                 const staggerI = Math.min(idx, 12);
+                // Progress suffix: a Breakeven Exit reads "100% BE" (a protected
+                // win), not "Tgt"/"Stop".
+                const progLabel = s.status === 'Breakeven Exit' ? 'BE' : (s.progress_pct >= 0 ? 'Tgt' : 'Stop');
+                // Exit cell ("where it stopped"): a closed trade shows the price
+                // level it came to rest at + a label; an active trade shows the
+                // pending target / stop price levels it WOULD exit at.
+                let exitCell;
+                if (s.exit_price != null) {
+                    const elc = s.exit_label === 'Stop' ? 'dir-bear' : (s.exit_label === 'Timed out' ? '' : 'dir-bull');
+                    const elStyle = s.exit_label === 'Timed out' ? 'style="color:var(--amber)"' : '';
+                    exitCell = `<span class="${elc} font-mono font-bold" ${elStyle}>₹${s.exit_price.toLocaleString('en-IN')}</span><span class="block text-[9px] text-slate-500 uppercase" style="letter-spacing:.04em">${s.exit_label}</span>`;
+                } else {
+                    const tp = s.target_price ? '₹' + s.target_price.toLocaleString('en-IN') : '—';
+                    const sp = s.stop_price ? '₹' + s.stop_price.toLocaleString('en-IN') : '—';
+                    exitCell = `<span class="dir-bull">${tp}</span><span class="text-slate-600"> / </span><span class="dir-bear">${sp}</span><span class="block text-[9px] text-slate-500 uppercase" style="letter-spacing:.04em">pending</span>`;
+                }
                 return `<tr data-stagger-i="${idx}" style="${rowBg}--i:${staggerI};">
                     <td data-label="Asset"><span class="ticker-hover-target font-display font-bold text-white text-sm" data-ticker="${escapeHtml(s.ticker || ticker)}">${ticker}</span>${isHigh?'<span class="ml-1" title="High Conviction"><svg viewBox="0 0 24 24" width="11" height="11" fill="var(--amber)" style="vertical-align:-1px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg></span>':''}</td>
                     <td data-label="Direction"><span class="${dirCls} text-xs">${dirIcon} ${s.direction}</span></td>
@@ -277,6 +295,7 @@
                         <span class="text-slate-600">/</span>
                         <span class="dir-bear">-${(s.stop_pct ?? 0).toFixed(1)}%</span>
                     </td>
+                    <td data-label="Exit" class="font-mono text-xs whitespace-nowrap" title="Where the trade exited — or, while active, the pending target / stop price levels">${exitCell}</td>
                     <td data-label="Change" class="${pctCls} font-mono font-bold text-xs">${pctStr}</td>
                     <td data-label="Progress">
                         <div class="flex items-center gap-2">
@@ -284,7 +303,7 @@
                                 <div class="progress-fill" style="width:${progW}%;background:${progColor}"></div>
                             </div>
                             <span class="text-[10px] font-mono font-bold" style="color:${progColor}; min-width:65px;">
-                                ${progW.toFixed(0)}% ${s.progress_pct >= 0 ? 'Tgt' : 'Stop'}
+                                ${progW.toFixed(0)}% ${progLabel}
                             </span>
                         </div>
                     </td>

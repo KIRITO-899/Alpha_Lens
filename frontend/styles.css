@@ -118,6 +118,18 @@ html{scroll-behavior:smooth;scrollbar-gutter:stable}
   font-weight:700;color:var(--text-secondary);letter-spacing:-0.01em}
 .term-empty-sub{font-size:var(--text-xs);color:var(--text-tertiary);max-width:440px;line-height:1.6}
 
+/* Exit-model legend above the Signal Terminal — explains the partial-profit +
+   breakeven rule (book half at +1R, stop -> breakeven) in plain English. */
+.term-legend{display:flex;align-items:flex-start;gap:9px;margin:0 4px 14px;padding:11px 14px;
+  background:rgba(255,255,255,0.02);border:1px solid var(--border);
+  border-left:2px solid var(--green);border-radius:var(--radius-md);
+  font-size:var(--text-xs);line-height:1.65;color:var(--text-tertiary)}
+.term-legend svg{color:var(--green)}
+.term-legend strong{color:var(--text-secondary);font-weight:700}
+.term-be-chip{display:inline-block;padding:0 6px;border-radius:var(--radius-pill);
+  background:rgba(16,185,129,0.14);color:var(--green);font-weight:800;
+  font-variant-numeric:tabular-nums;font-size:0.92em}
+
 /* Tabular figures so numeric columns/prices don't jitter or misalign — a
    baseline expectation for a finance UI. */
 .terminal-table td,.terminal-table th{font-variant-numeric:tabular-nums}

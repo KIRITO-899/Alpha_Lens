@@ -43,6 +43,9 @@ _CONFIG_DEFAULTS = {
     "ENSEMBLE_AGREE_SCORE_THRESHOLD": "50",
     "PARTIAL_PROFIT_ENABLED": "1", "PARTIAL_PROFIT_R": "1.0",
     "PARTIAL_FRACTION": "0.5", "COST_ROUNDTRIP_PCT": "0.20",
+    # Entry-edge levers (so a knob flip is recorded in the config snapshot).
+    "UNREACTED_GATE_ENABLED": "0", "UNREACTED_MAX_R": "0.5",
+    "MACRO_TIER_CONF_PENALTY": "0",
 }
 
 
@@ -56,10 +59,15 @@ def current_config():
 def log_decision(disposition, ticker, direction, news_id=None, headline=None,
                  final_score=None, calibrated_p_win=None, base_price=None,
                  atr_pct=None, stop_pct=None, target_pct=None, news_time=None,
-                 config=None):
+                 config=None, catalyst_tier=None, captured_r=None, news_age_h=None):
     """Append one decision row. NEVER raises — a logging failure must not break
     signal generation. `disposition` is e.g. 'approved', 'rejected_liquidity',
-    'rejected_atr', 'rejected_ensemble'."""
+    'rejected_atr', 'rejected_ensemble', 'rejected_unreacted'.
+
+    catalyst_tier/captured_r/news_age_h (T0.4) are the entry-edge measurement
+    fields — the HARD/MACRO/SOFT tier, ATRs already moved our way at decision
+    time, and news age in hours — so each lever can be tuned to realised
+    outcomes instead of guessed."""
     if os.environ.get("EVAL_LOG_DISABLED", "").lower() in ("1", "true", "yes"):
         return
     try:
@@ -70,11 +78,13 @@ def log_decision(disposition, ticker, direction, news_id=None, headline=None,
                 """INSERT INTO signal_eval_log
                    (news_id, headline, ticker, direction, disposition,
                     final_score, calibrated_p_win, base_price, atr_pct,
-                    stop_pct, target_pct, news_time, config)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    stop_pct, target_pct, catalyst_tier, captured_r, news_age_h,
+                    news_time, config)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (news_id, (headline or "")[:300], ticker, direction, disposition,
                  final_score, calibrated_p_win, base_price, atr_pct,
-                 stop_pct, target_pct, news_time, cfg),
+                 stop_pct, target_pct, catalyst_tier, captured_r, news_age_h,
+                 news_time, cfg),
             )
         db_write(_w)
     except Exception as e:
@@ -253,13 +263,35 @@ def report():
     tells you if a filter is dropping losers or winners), plus per-disposition."""
     conn = connect_news_db()
     c = conn.cursor()
-    c.execute("SELECT disposition, outcome, final_score, outcome_pct FROM signal_eval_log")
-    rows = c.fetchall()
+    try:
+        c.execute("SELECT disposition, outcome, final_score, outcome_pct, catalyst_tier FROM signal_eval_log")
+        rows = c.fetchall()
+    except Exception:
+        # Pre-migration DB without the catalyst_tier column — degrade gracefully.
+        # Reconnect FIRST: on Postgres the failed execute aborts the transaction,
+        # so the fallback SELECT must run on a fresh connection, not the poisoned one.
+        try:
+            conn.close()
+        except Exception:
+            pass
+        conn = connect_news_db()
+        c = conn.cursor()
+        c.execute("SELECT disposition, outcome, final_score, outcome_pct FROM signal_eval_log")
+        rows = [tuple(r) + (None,) for r in c.fetchall()]
     conn.close()
 
     by_disp = {}
     for d in sorted({(r[0] or "unknown") for r in rows}):
         by_disp[d] = _stats([r for r in rows if (r[0] or "unknown") == d])
+
+    # ── Catalyst-tier counterfactual (T0.3) over the APPROVED book ──
+    # The strategy question: do idiosyncratic HARD catalysts out-win priced-in
+    # MACRO reactions? Populates as new tagged rows resolve (old rows = NULL tier,
+    # excluded). win_rate_pct stays null per tier until that tier has resolved
+    # trades — honest, not zero.
+    appr = [r for r in rows if r[0] == "approved"]
+    by_catalyst_tier = {t: _stats([r for r in appr if (r[4] or "") == t])
+                        for t in ("HARD", "MACRO", "SOFT")}
 
     approved = _stats([r for r in rows if r[0] == "approved"])
     rejected = _stats([r for r in rows if (r[0] or "").startswith("rejected")])
@@ -285,4 +317,5 @@ def report():
         "rejected_all": rejected,
         "verdict": verdict,
         "by_disposition": by_disp,
+        "by_catalyst_tier": by_catalyst_tier,
     }

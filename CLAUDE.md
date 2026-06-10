@@ -248,10 +248,24 @@ all reversible:
 | `W_AI` `W_TECHNICAL` `W_HISTORICAL` `W_SECTOR` `W_INDIAN` | 0.30 / 0.30 / 0.20 / 0.05 / 0.15 | Ensemble weights (AI **down-weighted** from 0.40; final score normalized by total weight). |
 | `REGIME_HARD_BLOCK` | 0 | Hard-reject counter-regime trades (vs the soft `REGIME_PENALTY`). |
 | `CALIBRATION_GATE_ENABLED` (+ `RR_BREAKEVEN`) | 0 | Meta-label gate: reject signals whose calibrated `p_win` < breakeven. Needs a trustworthy `signals/calibration_map.json` first. |
+| `UNREACTED_GATE_ENABLED` / `UNREACTED_MAX_R` | 0 / 0.5 | **Unreacted-move / alpha-decay gate (T1.2)** — skip when the stock has already moved ≥ `UNREACTED_MAX_R` ATRs in the signal's favour since the news reference price (the move is already priced — e.g. shorting an OMC *after* crude already dropped). Ships **DARK**: always counts a `unreacted_would_skip` (so the leak is measurable) but only drops the candidate when enabled. Pure, unit-tested `marketdata/price_resolver.captured_atr()`; FAIL-OPEN (a data glitch never causes a skip). |
+| `MACRO_TIER_CONF_PENALTY` | 0 | **Soft macro de-rate (T1.3)** — MACRO-tier signals (oil / Fed / RBI / geopolitics — priced in within minutes) must clear `MIN_CONFIDENCE + penalty`; HARD idiosyncratic catalysts (the nine filing types) pass at the normal bar. A *penalty*, never a hard gate (the hard-catalyst feed is too dry to gate). Tier from pure `newsproc/filing_classifier.catalyst_tier()` (HARD/MACRO/SOFT). |
 
-The selection funnel (`SELECTION_FUNNEL`: `liquidity_skip` / `atr_skip` / `ensemble_rejected`
-/ `ensemble_approved`) is surfaced in **`/api/debug-worker-status`** so each filter's drop
-rate is visible.
+The selection funnel (`SELECTION_FUNNEL`: `liquidity_skip` / `atr_skip` /
+`unreacted_would_skip` / `unreacted_skip` / `ensemble_rejected` / `ensemble_approved`) is
+surfaced in **`/api/debug-worker-status`** so each filter's drop rate is visible.
+
+> **Entry-edge levers + measurement (the roadmap's Tier-0/Tier-1).** The above two gates
+> attack the real leak — the book is ~90% bearish reactions to *already-priced* macro news, so
+> no exit trick can make a near-zero entry edge profitable (win-rate ≠ P&L). Both ship default-OFF
+> and are tuned to **realised** outcomes, not guessed: every decision now also logs **`catalyst_tier`
+> (HARD/MACRO/SOFT)**, **`captured_r`** (ATRs already moved our way at decision time) and **`news_age_h`**
+> into the append-only `signal_eval_log` (new columns; idempotent migration). `/api/eval-report` adds a
+> **`by_catalyst_tier`** block (the HARD-vs-MACRO win gap over the approved book) — it populates as the
+> labeler resolves outcomes. ⚠️ **Measure before tuning:** the eval ledger had 1202 logged / 0 resolved
+> (free-tier sleep starves the labeler), so flipping these knobs on the 39-trade sample would be
+> overfitting — broaden the keep-alive + run `POST /api/admin/label-eval` first, then calibrate the
+> thresholds to the resolved counterfactual.
 
 ### The exit model: partial-profit + breakeven (raises win-rate, stop UNCHANGED)
 
@@ -568,11 +582,31 @@ mirroring the dashboard's Command Center ("lead with value").
 
 ### Signal Terminal — mobile card view
 
-The 10-column Signal Terminal table is unreadable on phones. Each `<td>` in
+The 11-column Signal Terminal table is unreadable on phones. Each `<td>` in
 `renderTerminal()` now carries a `data-label`, and a `@media (max-width:767px)` rule in
 `styles.css` transforms rows into **stacked cards** (thead hidden, each cell a
 label→value flex line, headline wraps full-width). The empty/error `colspan` row is
 excepted so it stays centered. Desktop is untouched (the transform is mobile-only).
+
+### Signal Terminal — exit level + breakeven 100% + partial-rule note
+
+The terminal now shows **where each trade exited**. A new **`Exit`** column (between
+`Tgt / Stop` and `P&L`; table is now 11-col, empty-state `colspan` bumped 10→11) shows the
+**price level** a closed trade came to rest at + a label — **Target / Stop / Breakeven /
+Timed out** — and, while a trade is **Active**, the *pending* target / stop price levels it
+would exit at (`… / … pending`). The levels are computed **server-side** in
+`/api/signal-terminal` (`stop_price` / `target_price` / `exit_price` / `exit_label`, derived
+from `entry` + the ATR stop/target % oriented by direction), so the frontend just renders.
+- **Breakeven Exit → green `100%`.** The route sets `progress_pct = 100` for `Breakeven
+  Exit` and `renderTerminal()` maps it to a green **`100% BE`** progress label + a green
+  "Breakeven" status (a *protected win* — partial booked at +1R, runner stopped at
+  breakeven). `Reacted Against Prediction` now also maps to a red "Stopped" (was unstyled).
+- **Plain-English exit note.** A `.term-legend` strip above the table explains the rule a
+  normal investor needs: *"when price reaches 50% of the target (the +1R mark), half the
+  quantity is booked and the stop moves to breakeven; a reversal then exits at breakeven —
+  shown as 100%, a protected win, never a loss."* (`.term-legend` / `.term-be-chip` in
+  `styles.css`.) ⚠️ This matches the live model exactly: target = ATR (2R), partial at
+  `PARTIAL_PROFIT_R`=1R = **50% of the target distance**, `PARTIAL_FRACTION`=0.5 = half the qty.
 
 ### Mobile navigation (critical fix)
 
@@ -1174,7 +1208,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **51 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **227 tests**.
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **51 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **290 tests**.
 
 ## Context7 MCP — Library Documentation
 

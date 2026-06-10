@@ -127,7 +127,7 @@ from marketdata.market_calendar import (
 )
 from marketdata.price_resolver import (
     select_fresh_close, atr_stop_target, parse_timestamp,
-    simulate_exit, to_favorable_bars,
+    simulate_exit, to_favorable_bars, captured_atr,
 )
 
 
@@ -1035,6 +1035,12 @@ RECENT_SIGNALS: dict = {}
 SELECTION_FUNNEL: dict = {
     "liquidity_skip": 0,
     "atr_skip": 0,
+    # T1.2 "unreacted-move" gate. `unreacted_would_skip` is ALWAYS incremented
+    # when a candidate has already moved >= UNREACTED_MAX_R ATRs our way (so the
+    # leak is measurable even with the gate OFF); `unreacted_skip` counts the
+    # ones actually dropped (only when UNREACTED_GATE_ENABLED=1).
+    "unreacted_would_skip": 0,
+    "unreacted_skip": 0,
     "ensemble_rejected": 0,
     "ensemble_approved": 0,
 }
@@ -2286,6 +2292,7 @@ from newsproc.news_rules import (
 # Powers the "Exchange Filing Alerts" feed (/api/filings).
 from newsproc.filing_classifier import (
     classify_filing, FILING_TYPE_LABELS, explain_filing, FILING_DISCLAIMER,
+    catalyst_tier,
 )
 
 # Static news-engine data tables (macro impact map, materiality / noise keyword
@@ -3853,6 +3860,56 @@ Return ONLY valid JSON matching this shape:
             except Exception:
                 _news_age_h = None
 
+            # ── Catalyst tier + freshness (entry-edge levers) ──
+            # HARD (idiosyncratic corporate catalyst) vs MACRO (broad, priced-in
+            # market/economy news) vs SOFT. Pure, no LLM. Used by the soft macro
+            # de-rate (T1.3) and tagged onto the eval ledger so the HARD-vs-MACRO
+            # win gap can be measured (T0.3/T0.4).
+            _catalyst_tier = "SOFT"
+            try:
+                # subcategory intentionally omitted — the news path has no BSE subcat hint.
+                _catalyst_tier = catalyst_tier(headline, _signal_catalyst)
+            except Exception:
+                _catalyst_tier = "SOFT"
+
+            # ── T1.2 "UNREACTED-MOVE" GATE (alpha-decay) ──
+            # The dominant losing entry is shorting a macro move that's ALREADY
+            # mostly priced (crude spikes -> the OMC has already fallen -> we'd be
+            # shorting the exhaustion). captured_atr() = how many ATRs the stock
+            # has already moved IN OUR FAVOUR since the news reference price.
+            # We ALWAYS count a "would-skip" so the leak is measurable, but only
+            # actually drop the candidate when UNREACTED_GATE_ENABLED=1 — so the
+            # gate ships DARK (default OFF) and the 0.5 threshold can be calibrated
+            # to realised outcomes before it ever changes behaviour. FAIL-OPEN:
+            # captured_atr returns 0 on bad data, so a glitch never causes a skip.
+            _is_bullish_sig = (base_direction == 'BULLISH')
+            _captured_atr = captured_atr(base_price, current_price_now, _atr_pct, _is_bullish_sig)
+            _unreacted_max = float(os.environ.get('UNREACTED_MAX_R', '0.5'))
+            _unreacted_on = os.environ.get('UNREACTED_GATE_ENABLED', '0').lower() in ('1', 'true', 'yes')
+            if _captured_atr >= _unreacted_max:
+                SELECTION_FUNNEL['unreacted_would_skip'] += 1
+                if _unreacted_on:
+                    SELECTION_FUNNEL['unreacted_skip'] += 1
+                    print(f"   [UNREACTED] {ticker} {base_direction}: already moved {_captured_atr:.2f} ATR our way (>= {_unreacted_max}) -> alpha priced in, SKIP")
+                    eval_loop.log_decision(
+                        'rejected_unreacted', ticker, base_direction,
+                        news_id=news_id, headline=headline,
+                        base_price=base_price, atr_pct=_atr_pct,
+                        stop_pct=_dynamic_stop, target_pct=_dynamic_target,
+                        news_time=_pub_dt_utc_str, catalyst_tier=_catalyst_tier,
+                        captured_r=_captured_atr, news_age_h=_news_age_h)
+                    continue
+
+            # ── T1.3 SOFT MACRO-TIER CONFIDENCE PENALTY ──
+            # Macro reactions (the bulk of the losing book) must clear a HIGHER
+            # bar; HARD/idiosyncratic catalysts pass at the normal MIN_CONFIDENCE.
+            # A penalty, NOT a hard gate (the hard-catalyst feed is too dry to
+            # gate). Default 0 = identical behaviour; gate on the T0.3 HARD-vs-
+            # MACRO gap before raising it. Clamped to 0-30 so a fat-fingered env
+            # value can't over-gate the entire macro book to zero approvals.
+            _macro_penalty = max(0.0, min(float(os.environ.get('MACRO_TIER_CONF_PENALTY', '0')), 30.0))
+            _eff_min_conf = MIN_CONFIDENCE + (_macro_penalty if _catalyst_tier == 'MACRO' else 0)
+
             # Predict using Ensemble.
             # ── Adaptive quota saver ──
             # The ensemble's AI model normally makes a fresh per-ticker Gemini
@@ -3875,7 +3932,7 @@ Return ONLY valid JSON matching this shape:
                 db_connect_fn=connect_news_db,
                 api_client=_ensure_gemini_client(),
                 model_name=MODEL_NAME,
-                min_score=MIN_CONFIDENCE,
+                min_score=_eff_min_conf,
                 get_client_fn=get_and_rotate_client,
                 precalculated_score=signal.get("quality_score"),
                 catalyst_type=_signal_catalyst,
@@ -3891,7 +3948,8 @@ Return ONLY valid JSON matching this shape:
                 calibrated_p_win=result.get('calibrated_p_win'),
                 base_price=base_price, atr_pct=_atr_pct,
                 stop_pct=_dynamic_stop, target_pct=_dynamic_target,
-                news_time=_pub_dt_utc_str)
+                news_time=_pub_dt_utc_str, catalyst_tier=_catalyst_tier,
+                captured_r=_captured_atr, news_age_h=_news_age_h)
             if result['approved']:
                 # ── Directional bias circuit-breaker ──
                 # If recent approved signals are dominated by one direction, demand
@@ -9461,6 +9519,8 @@ def get_signal_terminal():
 
                 if status == 'Predicted Target Hit':
                     progress_pct = 100.0
+                elif status == 'Breakeven Exit':
+                    progress_pct = 100.0
                 elif status in ('Stop Loss Hit', 'Reacted Against Prediction'):
                     progress_pct = -100.0
                 elif bp > 0 and cp > 0:
@@ -9474,6 +9534,31 @@ def get_signal_terminal():
                 else:
                     progress_pct = 0.0
 
+            # ── Exit-level resolution ("where it stopped") ──
+            # Price levels from entry + the ATR stop/target %, oriented by
+            # direction. exit_price/exit_label = where a CLOSED trade actually
+            # came to rest (None while Active). A Breakeven Exit rests at entry
+            # (partial booked at +1R, runner stopped at breakeven = a protected
+            # win) and is surfaced as 100% in the UI.
+            if bp > 0:
+                if is_bullish:
+                    stop_price = bp * (1 - stop_pct / 100.0)
+                    target_price = bp * (1 + target_pct / 100.0)
+                else:
+                    stop_price = bp * (1 + stop_pct / 100.0)
+                    target_price = bp * (1 - target_pct / 100.0)
+            else:
+                stop_price = target_price = 0.0
+            exit_price, exit_label = None, None
+            if status == 'Predicted Target Hit':
+                exit_price, exit_label = round(target_price, 2), 'Target'
+            elif status == 'Breakeven Exit':
+                exit_price, exit_label = round(bp, 2), 'Breakeven'
+            elif status in ('Stop Loss Hit', 'Reacted Against Prediction'):
+                exit_price, exit_label = round(stop_price, 2), 'Stop'
+            elif status == 'Expired':
+                exit_price, exit_label = round(cp, 2), 'Timed out'
+
             signals.append({
                 'id': d['id'],
                 'ticker': d['ticker'],
@@ -9483,6 +9568,10 @@ def get_signal_terminal():
                 'current': round(cp, 2),
                 'target_pct': target_pct,
                 'stop_pct': stop_pct,
+                'stop_price': round(stop_price, 2),
+                'target_price': round(target_price, 2),
+                'exit_price': exit_price,
+                'exit_label': exit_label,
                 'diff_pct': round(diff, 2) if diff else 0,
                 'progress_pct': progress_pct,
                 'status': status,
