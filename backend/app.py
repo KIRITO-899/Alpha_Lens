@@ -426,6 +426,19 @@ def migrate_local_sqlite_to_postgres():
         sqlite_cur = sqlite_conn.cursor()
 
         pg_conn = connect_news_db()
+        # ⚠️ connect_news_db() SILENTLY falls back to SQLite when Postgres is
+        # unreachable. If that happens here we would "migrate" SQLite→SQLite, declare
+        # SUCCESS, and rename news_cache.db→.done (below) — destroying the only working
+        # DB file and taking the whole site down with "no such table: stock_impact".
+        # So ABORT (and do NOT rename) unless we got a GENUINE Postgres connection.
+        if not getattr(pg_conn, 'is_postgres', False):
+            print("   [MIGRATION] Postgres unreachable (fell back to SQLite). "
+                  "Aborting migration; local DB left intact (NOT renamed).", flush=True)
+            try: pg_conn.close()
+            except Exception: pass
+            try: sqlite_conn.close()
+            except Exception: pass
+            return
         pg_cur = pg_conn.cursor()
 
         # 1. Migrate stock_universe
