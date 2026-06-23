@@ -584,6 +584,27 @@ init_db()
 print("[DEBUG] init_db() completed", flush=True)
 init_news_db()
 print("[DEBUG] init_news_db() completed", flush=True)
+
+# ── Resilience: always make the SQLite FALLBACK schema-ready ──
+# In production DATABASE_URL points at Postgres, so the init_*() calls above build
+# the schema in Postgres. But connect_*_db() SILENTLY falls back to a local SQLite
+# file when Postgres becomes unreachable mid-session — and that fallback file had
+# NO tables, so every request 500'd with "no such table: stock_impact" and the whole
+# site went nil. Re-run init with DATABASE_URL temporarily unset so the fallback
+# SQLite is also schema-ready: a Postgres outage then degrades to an empty-BUT-WORKING
+# site instead of a broken one. Idempotent (CREATE TABLE IF NOT EXISTS); runs once at
+# boot before any worker/request thread starts. Never fatal.
+if os.environ.get("DATABASE_URL"):
+    _saved_db_url = os.environ.pop("DATABASE_URL")
+    try:
+        init_db()
+        init_news_db()
+        print("[DEBUG] SQLite fallback schema ensured", flush=True)
+    except Exception as _e:
+        print(f"[DB] SQLite fallback init failed (non-fatal): {_e}", flush=True)
+    finally:
+        os.environ["DATABASE_URL"] = _saved_db_url
+
 import threading
 migration_thread = threading.Thread(
     target=migrate_local_sqlite_to_postgres,
