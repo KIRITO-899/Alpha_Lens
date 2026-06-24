@@ -223,7 +223,7 @@ Alpha_Lens/
 | `signals/technical_analysis.py` | RSI, SMA, Bollinger Bands, volume analysis, market regime detection. Now also returns `avg_volume_20d` (for the liquidity filter) |
 | `signals/calibration.py` | Maps ensemble score → empirical P(target before stop); meta-label gate (levers #1/#4). Loads `calibration_map.json`; gate OFF by default (`CALIBRATION_GATE_ENABLED`) |
 | `signals/ripple_engine.py` | **Ripple 2.0** — pure, deterministic 5-dimension macro cascade (direct/second-order/sector/portfolio/action-window) via signed betas. No LLM. `compute_ripple()`; served by `/api/macro/events/<id>/ripple2` |
-| `signals/fno_engine.py` | **F&O Smart-Money** — pure board builder. `build_smart_money_board()`: OI×price buildup quadrants + conviction (directional), unusual-OI, PCR/max-pain/ranked-walls + **per-strike IV/Greeks/skew** (`option_chain_view`), index matrix, futures **basis** + **rollover**, **FII/DII participant positioning**, sector clustering, market bias, deterministic **setups** + narrative. No LLM. Served by `/api/fno/*` |
+| `signals/fno_engine.py` | **F&O Smart-Money** — pure board builder. `build_smart_money_board()`: OI×price buildup quadrants + conviction (directional), unusual-OI, PCR/max-pain/ranked-walls + **per-strike IV/Greeks/skew** (`option_chain_view`), index matrix, futures **basis** + **rollover**, **FII/DII participant positioning**, sector clustering, market bias, deterministic **setups** + narrative, and **`build_tomorrow_outlook()`** — a plain-English next-session synthesis (stance + conviction + expected range + per-factor layman cards). No LLM. Served by `/api/fno/*` |
 | `signals/options_math.py` | **Black-76 IV + Greeks** — pure. `implied_vol_black76` (Newton+bisection, intrinsic-floor), `black76_greeks` (Δ/Γ/Θ-day/Vega-1%), `iv_and_greeks`, `years_to_expiry`. Priced off the futures forward → no dividend-yield guess. Env `IV_RISK_FREE_RATE` (0.065) |
 | `signals/nifty_outlook.py` | **Nifty Next-Session Outlook** — pure pre-open bias model. `compute_nifty_outlook(snapshot, during_nse_hours)`: aggregates the live macro board (US VIX, DXY, US10Y, Brent, USD/INR, Gold, Copper, India VIX) via signed NIFTY betas → expected next-session move + vol-band range + honest (capped) confidence + transparent per-driver breakdown. No LLM. Served by `/api/macro/nifty-outlook` |
 | `eval_loop.py` | Forward shadow-ledger — logs EVERY signal decision (approved + rejected, with config) into the append-only `signal_eval_log` table, then labels ATR outcomes for all so each filter is measurable. Surfaced by `/api/eval-report` |
@@ -242,14 +242,67 @@ all reversible:
 |------|---------|--------|
 | `MIN_SIGNAL_PRICE` / `MIN_TURNOVER_CR` | 20 / 1.0 | **Liquidity filter** — skip penny (<₹20) & illiquid (<₹1cr/day turnover) names before the ensemble. Uses `tech_data['avg_volume_20d']`. |
 | `ATR_STOP_MULT` / `ATR_TARGET_MULT` (+ `ATR_STOP_CAP_PCT` / `ATR_TARGET_CAP_PCT`) | 0.5 / 1.0 (10 / 20) | **Stop = ATR/2, Target = ATR** (2:1 R:R). No-ATR → flat **1%/2%** fallback (`REQUIRE_ATR=0` now — it no longer *skips*). Wide caps only guard a corrupt ATR. Math lives in the pure, unit-tested `marketdata/price_resolver.atr_stop_target()`. |
+| `PARTIAL_PROFIT_ENABLED` / `PARTIAL_PROFIT_R` / `PARTIAL_FRACTION` | 1 / 1.0 / 0.5 | **Partial-profit + breakeven exit** (see below) — book `PARTIAL_FRACTION` of the position at +`PARTIAL_PROFIT_R`·R, then move the stop to **breakeven**. Raises win-rate **without widening the stop**. `=0` reverts to first-barrier resolution. |
+| `COST_ROUNDTRIP_PCT` | 0.20 | Round-trip transaction cost (STT + brokerage + impact) subtracted from every closed trade so reported P&L/expectancy is honest, not gross. |
 | `REQUIRE_TECH_CONFIRM` / `TECH_CONFIRM_MIN` | 1 / 50 | Require the technical model (s3) to **actively confirm** the direction, not just "not veto". |
 | `W_AI` `W_TECHNICAL` `W_HISTORICAL` `W_SECTOR` `W_INDIAN` | 0.30 / 0.30 / 0.20 / 0.05 / 0.15 | Ensemble weights (AI **down-weighted** from 0.40; final score normalized by total weight). |
 | `REGIME_HARD_BLOCK` | 0 | Hard-reject counter-regime trades (vs the soft `REGIME_PENALTY`). |
 | `CALIBRATION_GATE_ENABLED` (+ `RR_BREAKEVEN`) | 0 | Meta-label gate: reject signals whose calibrated `p_win` < breakeven. Needs a trustworthy `signals/calibration_map.json` first. |
+| `UNREACTED_GATE_ENABLED` / `UNREACTED_MAX_R` | 0 / 0.5 | **Unreacted-move / alpha-decay gate (T1.2)** — skip when the stock has already moved ≥ `UNREACTED_MAX_R` ATRs in the signal's favour since the news reference price (the move is already priced — e.g. shorting an OMC *after* crude already dropped). Ships **DARK**: always counts a `unreacted_would_skip` (so the leak is measurable) but only drops the candidate when enabled. Pure, unit-tested `marketdata/price_resolver.captured_atr()`; FAIL-OPEN (a data glitch never causes a skip). |
+| `MACRO_TIER_CONF_PENALTY` | 0 | **Soft macro de-rate (T1.3)** — MACRO-tier signals (oil / Fed / RBI / geopolitics — priced in within minutes) must clear `MIN_CONFIDENCE + penalty`; HARD idiosyncratic catalysts (the nine filing types) pass at the normal bar. A *penalty*, never a hard gate (the hard-catalyst feed is too dry to gate). Tier from pure `newsproc/filing_classifier.catalyst_tier()` (HARD/MACRO/SOFT). |
 
-The selection funnel (`SELECTION_FUNNEL`: `liquidity_skip` / `atr_skip` / `ensemble_rejected`
-/ `ensemble_approved`) is surfaced in **`/api/debug-worker-status`** so each filter's drop
-rate is visible.
+The selection funnel (`SELECTION_FUNNEL`: `liquidity_skip` / `atr_skip` /
+`unreacted_would_skip` / `unreacted_skip` / `ensemble_rejected` / `ensemble_approved`) is
+surfaced in **`/api/debug-worker-status`** so each filter's drop rate is visible.
+
+> **Entry-edge levers + measurement (the roadmap's Tier-0/Tier-1).** The above two gates
+> attack the real leak — the book is ~90% bearish reactions to *already-priced* macro news, so
+> no exit trick can make a near-zero entry edge profitable (win-rate ≠ P&L). Both ship default-OFF
+> and are tuned to **realised** outcomes, not guessed: every decision now also logs **`catalyst_tier`
+> (HARD/MACRO/SOFT)**, **`captured_r`** (ATRs already moved our way at decision time) and **`news_age_h`**
+> into the append-only `signal_eval_log` (new columns; idempotent migration). `/api/eval-report` adds a
+> **`by_catalyst_tier`** block (the HARD-vs-MACRO win gap over the approved book) — it populates as the
+> labeler resolves outcomes. ⚠️ **Measure before tuning:** the eval ledger had 1202 logged / 0 resolved
+> (free-tier sleep starves the labeler), so flipping these knobs on the 39-trade sample would be
+> overfitting — broaden the keep-alive + run `POST /api/admin/label-eval` first, then calibrate the
+> thresholds to the resolved counterfactual.
+
+### The exit model: partial-profit + breakeven (raises win-rate, stop UNCHANGED)
+
+Because the raw ensemble edge is near-zero, the highest-leverage win-rate lever is the
+**exit management**, not the entry. A new pure simulator —
+**`marketdata/price_resolver.simulate_exit`** (+ `to_favorable_bars`) — replays a signal's
+OHLC path and: books `PARTIAL_FRACTION` (0.5) at **+1R**, moves the stop to **breakeven**,
+honors gap-through-open fills, breaks ambiguous "both-touched" bars on the **close**
+direction (not the old "benefit-of-the-doubt = win" bias), force-closes the runner at the
+time-stop, and subtracts `COST_ROUNDTRIP_PCT`. A trade that reaches +1R then fully reverses
+books **+0.5R — a WIN** — so the win-rate rises from ~P(reach +2R)≈33% to ~P(reach +1R)≈50%
+**honestly** (realized P&L, not a relabel) and **without touching `ATR_STOP_MULT`**.
+- **One source of truth.** `simulate_exit` is called identically by `check_historical_hits`
+  (the daily grader → recompute + the live worker's catch-up), the worker's same-day intraday
+  path, and the eval ledger's `_label_one` — so the Track Record, the live terminal, and the
+  shadow ledger can no longer disagree. Works in FAVORABLE %-space (positive = trade went
+  right), so long/short share one path; the caller flips the sign back for storage.
+- **New status `Breakeven Exit`** (partial booked, runner stopped at breakeven = a small win);
+  **`Expired` now carries a real exit P&L** (partial + time-stop fill), so it is judged, not
+  dropped. `tests/test_simulate_exit.py` (21 cases) pins the math.
+- ⚠️ **Run a `recompute_all_signals` after deploy** so the historical Track Record re-grades
+  under the new model (it re-derives every signal's outcome from OHLC + the new exit rules).
+
+### The honest scoreboard (`/api/backtest-stats`)
+
+The Track Record is now **expectancy-first** (a 2:1-R:R strategy is profitable well below a
+50% win-rate, so a raw hit-rate colored against 50% was misleading). The endpoint now
+computes, over **every** judged closed trade (incl. `Expired` + `Breakeven Exit`):
+**`win_rate`** (trades closing net-positive), **`expectancy`** (avg realized P&L %/trade, net
+of cost — the edge), **`profit_factor`** (gross win ÷ gross loss), **`avg_win`/`avg_loss`**, and
+**`breakeven_win_rate`** (the empirical bar the win-rate must clear). It also returns a
+**range-honest `equity_curve`** (chronological cumulative realized P&L over the selected range
+— not the old 30-trade tail that mixed in unresolved Expireds). The frontend Track Record
+leads with **Win Rate · Expectancy · Profit Factor** tiles, colors the win-rate against the
+**real breakeven (~33–45%), not 50%**, and the "Win Rate by Conviction" table + methodology
+were corrected (no more "higher conviction → higher hit rate" claim the data refutes). Legacy
+keys (`hit_rate`/`avg_pnl`/`hits`/`stops`) are kept as aliases so nothing downstream breaks.
 
 ### The eval loop (the scoreboard)
 
@@ -261,6 +314,16 @@ triple-barrier outcome for **all** of them once older than `EVAL_HORIZON_DAYS` (
 - **`GET /api/eval-report`** → approved vs **rejected** win rate (the counterfactual: are the
   filters dropping losers or winners?) + per-disposition breakdown.
 - **`POST /api/admin/label-eval`** (token: `X-Alpha-Lens-Token`) → trigger labelling on demand.
+
+> ⚠️ **Prod-measurement fix.** `eval_loop._parse_dt` now delegates to
+> `price_resolver.parse_timestamp` — the old string-only parser returned `None` for every
+> **Postgres datetime** row, so the labeler silently skipped everything on prod and
+> `/api/eval-report` returned empty (the *same* bug class as the `created_at` fix). The
+> labeler now also **anchors the forward scan on `news_time`** (when a real trade could have
+> entered), not `decided_at` (when a cold-started dyno processed it), and **resolves outcomes
+> via the shared `simulate_exit`** so the ledger's win = net-positive P&L matches the Track
+> Record. The headline `verdict` now compares **`rejected_ensemble` vs `approved`** (the clean
+> counterfactual) instead of `rejected_all` (which mixed in untradeable penny-stock rejects).
 
 > ⚠️ **`signal_eval_log` is APPEND-ONLY by design.** No prune/archival worker touches it and
 > the reset-all-news endpoint does **not** wipe it — only `INSERT` (log) and `UPDATE` (fill
@@ -519,11 +582,31 @@ mirroring the dashboard's Command Center ("lead with value").
 
 ### Signal Terminal — mobile card view
 
-The 10-column Signal Terminal table is unreadable on phones. Each `<td>` in
+The 11-column Signal Terminal table is unreadable on phones. Each `<td>` in
 `renderTerminal()` now carries a `data-label`, and a `@media (max-width:767px)` rule in
 `styles.css` transforms rows into **stacked cards** (thead hidden, each cell a
 label→value flex line, headline wraps full-width). The empty/error `colspan` row is
 excepted so it stays centered. Desktop is untouched (the transform is mobile-only).
+
+### Signal Terminal — exit level + breakeven 100% + partial-rule note
+
+The terminal now shows **where each trade exited**. A new **`Exit`** column (between
+`Tgt / Stop` and `P&L`; table is now 11-col, empty-state `colspan` bumped 10→11) shows the
+**price level** a closed trade came to rest at + a label — **Target / Stop / Breakeven /
+Timed out** — and, while a trade is **Active**, the *pending* target / stop price levels it
+would exit at (`… / … pending`). The levels are computed **server-side** in
+`/api/signal-terminal` (`stop_price` / `target_price` / `exit_price` / `exit_label`, derived
+from `entry` + the ATR stop/target % oriented by direction), so the frontend just renders.
+- **Breakeven Exit → green `100%`.** The route sets `progress_pct = 100` for `Breakeven
+  Exit` and `renderTerminal()` maps it to a green **`100% BE`** progress label + a green
+  "Breakeven" status (a *protected win* — partial booked at +1R, runner stopped at
+  breakeven). `Reacted Against Prediction` now also maps to a red "Stopped" (was unstyled).
+- **Plain-English exit note.** A `.term-legend` strip above the table explains the rule a
+  normal investor needs: *"when price reaches 50% of the target (the +1R mark), half the
+  quantity is booked and the stop moves to breakeven; a reversal then exits at breakeven —
+  shown as 100%, a protected win, never a loss."* (`.term-legend` / `.term-be-chip` in
+  `styles.css`.) ⚠️ This matches the live model exactly: target = ATR (2R), partial at
+  `PARTIAL_PROFIT_R`=1R = **50% of the target distance**, `PARTIAL_FRACTION`=0.5 = half the qty.
 
 ### Mobile navigation (critical fix)
 
@@ -911,6 +994,48 @@ a major upgrade — all still **deterministic, EOD, zero keys**:
   `tests/test_fno_advanced.py` (directional conviction, max-pain tie, basis/rollover, IV
   attach, FII net, setups, ranked walls).
 
+### Tomorrow's Outlook — the common-man F&O overview
+
+The F&O tab now **leads** with a plain-English **"What tomorrow could look like"** tile —
+a deterministic next-session synthesis that reads every institutional factor the board
+already computes and explains it so a *normal investor* understands what the derivatives
+data implies. Like the rest of the board it is **pure / zero-LLM** and rides the existing
+`/api/fno/smart-money` route (no new endpoint; route count stays **48**).
+
+- **Engine:** `build_tomorrow_outlook(bias, index_matrix, participant_view, counts, sectors,
+  india_vix, unusual)` in `signals/fno_engine.py` (called inside `build_smart_money_board`,
+  attached as `board['outlook']`; guarded so it can never break the board). Each factor maps
+  to a **signed lean (−1 bearish … +1 bullish)**; a weighted blend (`OUTLOOK_WEIGHTS`:
+  breadth .30 / FII .26 / PCR .18 / max-pain magnet .10 / option-flow .06 / IV-skew .09,
+  **renormalized** over whichever factors are present) is the headline **stance**
+  (Bullish / Cautiously Bullish / Range-bound / Cautiously Bearish / Bearish). **Confidence**
+  = magnitude + factor *agreement* − an India-VIX penalty, floored/ceiled **25–80** (honest).
+  The **expected next-session range** is spot ± 1σ where σ = (India VIX, else ATM IV, else a
+  0.8 %/day default) ÷ √252 × a **variance-risk-premium haircut** (`VOL_RP_HAIRCUT` 0.85, since
+  IV overstates realized); **key levels** = put-wall (floor) / max-pain (magnet) / call-wall
+  (ceiling). Returns per-factor **plain-English cards** (`name` / `reading` / `plain` / `lean`),
+  base/bull/bear **scenarios**, a common-man **summary** (with a sector-rotation clause), and an
+  honest **disclaimer**.
+  - **Analyst-grade refinements** (from an adversarial quant review): FII lean is **size-scaled**
+    (`net/FII_SCALE × 0.6`) not binary, and a near-flat book (`|net| < FII_NET_FLAT` 8 000) reads
+    "roughly flat" instead of "a key tell"; PCR adds a **crowded/contrarian** caveat at extremes
+    (≥`PCR_BULL_STRONG`); IV skew is read **vs the index's structural put-skew** (`SKEW_BASE` 1.0),
+    so a normal positive skew is NOT flagged as fresh fear; `option-flow` is down-weighted (it
+    partly overlaps PCR). ⚠️ Max-pain sign: `max_pain_gap_pct = (spot − maxpain)/maxpain` → spot
+    **above** max pain leans **down** (magnet pulls toward pain), gently (effect strengthens into
+    weekly expiry).
+- **Frontend:** `_fnoRenderOutlook(d.outlook)` in `app-fno.js` paints the `#fno-outlook` tile
+  at the **top of `#view-fno`** (above the desk narrative): big stance + a conviction meter,
+  an expected-range strip (spot marker on a green→red track with floor/magnet/ceiling), a
+  responsive factor-card grid (1→2→3 col, lean-colored dots), base/strengthens/weakens
+  scenario cards, the summary paragraph and disclaimer. `.fno-out-*` CSS (token-based,
+  mobile-stacked). Hides itself when `outlook.applicable === false`. Verified via the
+  static-harness + Claude Preview workflow.
+- **Tests:** `tests/test_fno_outlook.py` (14 cases — stance direction per input set, range
+  brackets spot, VIX widens range + lowers confidence, confidence bounds, no-participant /
+  no-NIFTY safety, small-vs-large FII net wording, sector-rotation clause, board includes
+  outlook). Cache bumped to `al-v28-2026-06-08-fnoout`.
+
 ## The Exchange Filing Alerts (corporate-actions radar)
 
 A dedicated **Filings** tab — sitting in the nav **between Signal Terminal and Track
@@ -1083,7 +1208,7 @@ git commit -m "Add feature X and document in CLAUDE.md"
   cd backend && ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1 \
     "../.alpha-venv/Scripts/python.exe" -c "import app; print(len(list(app.app.url_map.iter_rules())), 'routes')"
   ```
-  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **51 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **227 tests**.
+  This catches circular imports / `NameError`s / bad subpackage paths that `py_compile` misses. `ALPHA_LENS_SKIP_AUTO_BOOTSTRAP=1` skips `_bootstrap_workers()` (the import-time thread launcher). Expect **51 routes**. Then run the test suite (`python -m unittest discover -s tests`) — **290 tests**.
 
 ## Context7 MCP — Library Documentation
 

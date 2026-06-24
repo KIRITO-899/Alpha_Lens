@@ -179,11 +179,11 @@
     <!-- Extracted to styles.css for separate caching + parallel download.
          Version query mirrors sw.js CACHE_VERSION so browser HTTP cache
          + service-worker cache both invalidate on deploy. -->
-    <link rel="stylesheet" href="/styles.css?v=al-v37-2026-06-09-perf">
+    <link rel="stylesheet" href="/styles.css?v=al-v40-2026-06-10-entryedge">
     <!-- Precompiled Tailwind utilities (replaces the Play-CDN script above).
          AFTER styles.css to preserve the original cascade (Tailwind sits after
          styles.css; styles.css !important rules still override it). -->
-    <link rel="stylesheet" href="/tailwind.built.css?v=al-v37-2026-06-09-perf">
+    <link rel="stylesheet" href="/tailwind.built.css?v=al-v40-2026-06-10-entryedge">
 </head>
 
 <body class="antialiased">
@@ -887,6 +887,9 @@
                     </div>
                 </div>
 
+                <!-- ── TOMORROW'S OUTLOOK — plain-English next-session synthesis ── -->
+                <div class="fno-outlook glass-panel rounded-2xl" id="fno-outlook" hidden></div>
+
                 <!-- ── INSTITUTIONAL READ (deterministic narrative) ── -->
                 <div class="fno-narrative glass-panel rounded-2xl" id="fno-narrative">
                     <div class="fno-skel-line"></div>
@@ -1185,7 +1188,7 @@
                                 Track Record
                             </h1>
                             <p class="text-sm text-[color:var(--text-secondary)] mt-3 max-w-xl">
-                                Every AI signal we publish is graded against an adaptive <span class="text-[color:var(--accent-bright)] font-semibold">1:2 risk-to-reward</span> — stop and target sized to each stock's ATR. Below is the honest scoreboard — hits, misses, and the edge at each confidence band.
+                                Every AI signal is graded against an adaptive ATR target/stop with a <span class="text-[color:var(--accent-bright)] font-semibold">partial-profit at +1R then a breakeven stop</span>, net of transaction costs. We lead with <span class="text-[color:var(--accent-bright)] font-semibold">expectancy &amp; profit factor</span> — the honest measures of edge — not just a raw win rate. Below is the full scoreboard.
                             </p>
                         </div>
                         <div class="flex items-center gap-2 self-start md:self-end" id="tr-range-tabs">
@@ -1213,9 +1216,9 @@
                 <div class="glass-panel p-6 md:p-8 rounded-2xl relative overflow-hidden mb-6">
                     <div class="flex items-baseline justify-between mb-5">
                         <div>
-                            <h2 class="font-display text-xl md:text-2xl font-black text-white tracking-tight">Edge by Confidence</h2>
+                            <h2 class="font-display text-xl md:text-2xl font-black text-white tracking-tight">Win Rate by Conviction</h2>
                             <p class="text-[11px] font-mono text-[color:var(--text-tertiary)] uppercase tracking-[0.16em] mt-1">
-                                Higher AI conviction → higher hit rate
+                                Win rate &amp; P&amp;L across AI conviction bands
                             </p>
                         </div>
                         <span class="text-[10px] font-mono text-[color:var(--text-muted)] uppercase tracking-wider hidden md:inline">Proof of edge</span>
@@ -1226,9 +1229,9 @@
                                 <tr>
                                     <th class="text-left">Confidence Band</th>
                                     <th class="text-right">Signals</th>
-                                    <th class="text-right">Hits</th>
-                                    <th class="text-right">Stops</th>
-                                    <th class="text-right">Hit Rate</th>
+                                    <th class="text-right">Wins</th>
+                                    <th class="text-right">Losses</th>
+                                    <th class="text-right">Win Rate</th>
                                     <th class="text-right">Avg P&L</th>
                                     <th class="w-[30%]"></th>
                                 </tr>
@@ -1291,7 +1294,7 @@
                         <svg class="w-4 h-4 mt-0.5 shrink-0" style="color:var(--accent)" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         <div class="text-[12px] text-[color:var(--text-secondary)] leading-relaxed">
                             <span class="font-bold text-[color:var(--accent-bright)]">Methodology.</span>
-                            Every signal runs an adaptive <span class="text-[color:var(--text-primary)] font-semibold">1:2 risk-to-reward</span> — stop sized to the stock's recent <span class="text-[color:var(--text-primary)] font-semibold">ATR (Average True Range)</span> × 1, target sized to ATR × 2. Volatile names get wider levels, quieter names tighter. Stop floor 1.0%, ceiling 2.5%; target floor 2.0%, ceiling 5.0%. Outcome is the first level the live tape touches. <span class="text-[color:var(--text-primary)] font-semibold">Expired</span> signals (unresolved within 4 trading days) are excluded from hit-rate. No survivorship bias — every signal we publish appears here.
+                            Levels are sized to each stock's <span class="text-[color:var(--text-primary)] font-semibold">ATR (Average True Range)</span> — volatile names wider, quieter names tighter. We then manage the trade like a desk: book a <span class="text-[color:var(--text-primary)] font-semibold">partial profit at +1R</span> and move the stop to <span class="text-[color:var(--text-primary)] font-semibold">breakeven</span>, so a trade that runs in our favour then reverses still closes green instead of a full loss. Every outcome is netted of a <span class="text-[color:var(--text-primary)] font-semibold">round-trip transaction cost</span>. A <span class="text-[color:var(--text-primary)] font-semibold">win</span> = any trade that closes net-positive; we lead with <span class="text-[color:var(--text-primary)] font-semibold">expectancy &amp; profit factor</span> because at an asymmetric reward:risk a sub-50% win rate can still be highly profitable. No survivorship bias — every signal we publish, including time-stopped ones, is counted here.
                         </div>
                     </div>
                 </div>
@@ -1339,6 +1342,12 @@
                         class="sector-pill" style="border-color:var(--amber-border);color:var(--amber);"><svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px;margin-right:5px"><path d="M12 2l2.9 6.3 6.9.7-5.1 4.7 1.4 6.8L12 17.8 5.9 21.2l1.4-6.8L2.2 9.7l6.9-.7z"/></svg>High Conviction</button>
                 </div>
 
+                <!-- Exit-model legend: explains the partial-profit + breakeven rule -->
+                <div class="term-legend">
+                    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" style="flex-shrink:0;margin-top:1px"><circle cx="12" cy="12" r="9"/><path d="M12 8v4l2.5 2.5"/></svg>
+                    <span><strong>How exits work:</strong> when price reaches <strong>50% of the target</strong> (the +1R mark), <strong>half the quantity is booked</strong> and the stop moves to <strong>breakeven</strong>. A reversal after that exits the rest at breakeven — shown as <span class="term-be-chip">100%</span>, a protected win, never a loss. Full target = the remaining half is booked; a stop hit = full exit. The <strong>Exit</strong> column shows the price level where each trade came to rest.</span>
+                </div>
+
                 <div class="terminal-wrap">
                     <div class="terminal-header">
                         <span class="w-3 h-3 rounded-full bg-red-500"></span>
@@ -1357,6 +1366,7 @@
                                     <th>Entry</th>
                                     <th>Current</th>
                                     <th onclick="sortTerminal('target_pct')">Tgt / Stop ↕</th>
+                                    <th>Exit</th>
                                     <th onclick="sortTerminal('diff_pct')">P&L ↕</th>
                                     <th>Progress</th>
                                     <th onclick="sortTerminal('status')">Status ↕</th>
@@ -1365,10 +1375,10 @@
                             </thead>
                             <tbody id="terminal-body">
                                 <tr>
-                                    <td colspan="10" style="padding:0">
-                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 80px 60px 100px 80px 1fr;gap:12px;align-items:center;border-bottom:1px solid var(--border-subtle)"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:70px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:80%"></span></div>
-                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 80px 60px 100px 80px 1fr;gap:12px;align-items:center;border-bottom:1px solid var(--border-subtle)"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:70px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:65%"></span></div>
-                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 80px 60px 100px 80px 1fr;gap:12px;align-items:center"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:70px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50%"></span></div>
+                                    <td colspan="11" style="padding:0">
+                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 80px 70px 60px 100px 80px 1fr;gap:12px;align-items:center;border-bottom:1px solid var(--border-subtle)"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:70px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:80%"></span></div>
+                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 80px 70px 60px 100px 80px 1fr;gap:12px;align-items:center;border-bottom:1px solid var(--border-subtle)"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:70px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:65%"></span></div>
+                                        <div style="padding:14px 16px;display:grid;grid-template-columns:60px 60px 60px 70px 70px 80px 70px 60px 100px 80px 1fr;gap:12px;align-items:center"><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:40px;height:24px;border-radius:99px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:70px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50px"></span><span class="skel skel-cell" style="width:80px;height:6px"></span><span class="skel skel-cell" style="width:60px"></span><span class="skel skel-cell" style="width:50%"></span></div>
                                     </td>
                                 </tr>
                             </tbody>
@@ -1548,19 +1558,19 @@
          functions declared in any chunk, but module-level state must load in the
          original sequence. Version query mirrors sw.js CACHE_VERSION so browsers
          HTTP-cache only within a deploy and fetch fresh on every version bump. -->
-    <script src="/app-core.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-news.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-stocks.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-market.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-premium.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-terminal.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-earnings.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-ripple.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-macro.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-fno.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-calendar.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-filings.js?v=al-v37-2026-06-09-perf" defer></script>
-    <script src="/app-glossary.js?v=al-v37-2026-06-09-perf" defer></script>
+    <script src="/app-core.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-news.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-stocks.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-market.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-premium.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-terminal.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-earnings.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-ripple.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-macro.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-fno.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-calendar.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-filings.js?v=al-v40-2026-06-10-entryedge" defer></script>
+    <script src="/app-glossary.js?v=al-v40-2026-06-10-entryedge" defer></script>
 </body>
 
 </html>

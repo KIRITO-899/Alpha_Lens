@@ -206,6 +206,9 @@ def init_news_db():
             atr_pct REAL,
             stop_pct REAL,
             target_pct REAL,
+            catalyst_tier TEXT,
+            captured_r REAL,
+            news_age_h REAL,
             news_time TEXT,
             config TEXT,
             outcome TEXT,
@@ -213,6 +216,13 @@ def init_news_db():
             resolved_at TIMESTAMP
         )
     ''')
+    # ── Entry-edge measurement columns (T0.4) — additive, idempotent ──
+    # catalyst_tier (HARD/MACRO/SOFT), captured_r (ATRs already moved our way at
+    # decision time), news_age_h. Lets the eval report later GROUP BY tier and
+    # correlate freshness with realised outcomes. Existing prod rows get NULL.
+    run_query_safe("ALTER TABLE signal_eval_log ADD COLUMN catalyst_tier TEXT")
+    run_query_safe("ALTER TABLE signal_eval_log ADD COLUMN captured_r REAL")
+    run_query_safe("ALTER TABLE signal_eval_log ADD COLUMN news_age_h REAL")
 
     run_query_safe("CREATE UNIQUE INDEX IF NOT EXISTS idx_news_headline ON news(headline)")
     run_query_safe("CREATE UNIQUE INDEX IF NOT EXISTS idx_stockimpact_news_ticker ON stock_impact(news_id, ticker)")

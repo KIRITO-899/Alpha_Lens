@@ -570,3 +570,51 @@ def classify_filing(text, category=None, subcategory=None):
                 "headline": raw,
             }
     return None
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# CATALYST TIER — HARD (idiosyncratic corporate catalyst) vs MACRO (broad
+# market / economy) vs SOFT (everything else). PURE; reuses classify_filing.
+# ──────────────────────────────────────────────────────────────────────────
+# WHY: the signal book is dominated by reactions to BROAD MACRO news (oil, Fed,
+# RBI, geopolitics) that is priced within minutes — near-zero tradeable edge —
+# while idiosyncratic HARD catalysts (the nine filing types + earnings) carry
+# documented post-event DRIFT. This tier lets the engine DE-RATE macro reactions
+# (a soft, env-gated confidence penalty — T1.3) and lets the eval ledger be
+# tagged so the HARD-vs-MACRO win gap becomes measurable (T0.3 / T0.4). It is a
+# LABEL of the catalyst KIND, never advice or a price prediction.
+_MACRO_TERMS = (
+    "crude", "brent", "wti", " opec", "oil price", "oil prices",
+    "fed ", "fomc", "federal reserve", "rate hike", "rate cut", "rate decision",
+    " rbi", " mpc", "repo rate", "inflation", " cpi", " wpi", " gdp", " iip",
+    "rupee", "dollar", "usd/inr", " dxy", "treasury", "bond yield", "10-year",
+    "geopolit", " war ", "sanction", "tariff", "trade war", "tensions",
+    "monsoon", " imf", " china", "us jobs", "payroll", "nonfarm", " ecb",
+    "gold price", "silver price", "bullion", " fii", " fpi", "nifty", "sensex",
+)
+
+
+def catalyst_tier(text, category=None, subcategory=None):
+    """Bucket a headline into HARD / MACRO / SOFT (pure, deterministic).
+
+      HARD  — matches one of the nine idiosyncratic corporate event types
+              (promoter pledge, insider trade, rating change, M&A, resignation,
+              order win, bonus, split, dividend) -> documented post-event drift.
+      MACRO — broad market / economy news (oil, Fed, RBI, geopolitics, FX) that
+              is typically priced within minutes -> near-zero tradeable edge.
+      SOFT  — everything else.
+
+    HARD takes priority over MACRO (an idiosyncratic catalyst is the more
+    tradeable read even when a macro word also appears). Never raises.
+    """
+    try:
+        if classify_filing(text, category, subcategory):
+            return "HARD"
+        blob = f" {_clean(text).lower()} {str(category or '').lower()} {str(subcategory or '').lower()} "
+        if not blob.strip():
+            return "SOFT"
+        if _has(blob, *_MACRO_TERMS):
+            return "MACRO"
+    except Exception:
+        return "SOFT"
+    return "SOFT"
