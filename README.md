@@ -11,6 +11,12 @@
 [![Gemini](https://img.shields.io/badge/Google%20Gemini-2.5%20Flash-orange?logo=google)](https://ai.google.dev)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
+### 🔗 [**Live demo → alpha-lens-qvxw.onrender.com**](https://alpha-lens-qvxw.onrender.com)
+
+<sub>Hosted on a free tier — the first visit after the app has been idle can take ~30–50s to wake, then it loads instantly.</sub>
+
+<sub>⚠️ Educational project — **not financial advice.** See the [disclaimer](#disclaimer).</sub>
+
 </div>
 
 ---
@@ -29,6 +35,7 @@
 - [API Reference](#api-reference)
 - [Backtesting Engine](#backtesting-engine)
 - [Performance Reporting](#performance-reporting)
+- [Disclaimer](#disclaimer)
 - [Security Notice](#security-notice)
 - [Notes & Limitations](#notes--limitations)
 - [Contributing](#contributing)
@@ -327,6 +334,20 @@ The `performance_report.py` module connects to `news_cache.db` and generates rea
 - Win rate calculated on resolved trades only (excluding active and expired)
 - Average confidence comparison: winning trades vs. losing trades
 - Color-coded terminal output for quick visual assessment
+
+---
+
+## Disclaimer
+
+> **Alpha Lens is an educational and informational project — it is _not_ financial advice.**
+>
+> Alpha Lens is **not** a registered investment adviser. Nothing it produces — trade signals,
+> conviction scores, F&O/macro analysis, earnings or filing summaries — is investment advice, a
+> recommendation, or an offer or solicitation to buy or sell any security. All signals are
+> **AI-generated, can be wrong, and are not a guarantee of future results.** Trading and investing
+> in securities carry risk, including the possible loss of capital. **Do your own research and
+> consult a SEBI-registered investment adviser before making any financial decision.** The authors
+> accept no liability for any loss arising from use of this software or its outputs.
 
 ---
 
